@@ -9,52 +9,14 @@ jobs:
   snapshot:
     if: github.repository_id == '1341460159'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24.13.1'
-      - name: Probe pinned public CLIs without credentials or model calls
-        shell: bash
-        env:
-          GIT_TERMINAL_PROMPT: '0'
+      - name: Read exact source transfer
         run: |
-          set -euo pipefail
-          mkdir -p snapshots runtimes
-          npm install --prefix runtimes @minimax-ai/code@0.4.7 @deepseek-ai/dsh@0.1.5-rc.1 > snapshots/install.log 2>&1
-          runtimes/node_modules/.bin/mcode --version > snapshots/mcode-version.txt
-          runtimes/node_modules/.bin/mcode acp --help > snapshots/mcode-acp-help.txt
-          runtimes/node_modules/.bin/dsh --help > snapshots/dsh-help.txt
-          export MINIMAX_DATA_DIR="$RUNNER_TEMP/isolated-mcode"
-          export DSH_HOME="$RUNNER_TEMP/isolated-dsh"
-          python3 <<'PY'
-          import subprocess,json,pathlib,selectors,time
-          for name,args in [('mcode',['runtimes/node_modules/.bin/mcode','acp']),('dsh',['runtimes/node_modules/.bin/dsh','--profile','acp'])]:
-              errfile=open('snapshots/'+name+'-initialize.stderr','w')
-              p=subprocess.Popen(args,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=errfile,text=True)
-              msg=json.dumps({'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':1,'clientCapabilities':{},'clientInfo':{'name':'opent3code-probe','version':'0.1.0-alpha.1'}}})+'\n'
-              p.stdin.write(msg); p.stdin.flush()
-              selector=selectors.DefaultSelector(); selector.register(p.stdout,selectors.EVENT_READ)
-              out=[]; deadline=time.monotonic()+45
-              while time.monotonic()<deadline:
-                  if not selector.select(timeout=1): continue
-                  line=p.stdout.readline()
-                  if not line: break
-                  out.append(line)
-                  try:
-                      if json.loads(line).get('id')==1: break
-                  except ValueError: pass
-              p.terminate()
-              try: p.wait(timeout=5)
-              except subprocess.TimeoutExpired: p.kill(); p.wait()
-              errfile.close()
-              pathlib.Path('snapshots/'+name+'-initialize.stdout').write_text(''.join(out))
-          PY
-          tar -czf snapshots/dsh-cli-package.tar.gz -C runtimes/node_modules @deepseek-ai/dsh @deepseek-ai/dsh-acp @deepseek-ai/dsh-base
+          mkdir -p snapshot
+          curl --fail --silent --show-error "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/.github/integration-feature.patch.gz.b64" -o snapshot/input.b64
       - uses: actions/upload-artifact@v7
-        if: always()
         with:
-          name: integration-cli-probes
-          path: snapshots/
-          if-no-files-found: error
+          name: integration-transfer-verification
+          path: snapshot/
           retention-days: 3
