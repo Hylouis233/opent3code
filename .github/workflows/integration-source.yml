@@ -1,0 +1,34 @@
+name: Integration source snapshot
+on:
+  push:
+    branches: [ops/integration-source-20260915]
+    paths: [.github/workflows/integration-source.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    if: github.repository_id == '1341460159'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Capture public source and package metadata without credentials
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          mkdir -p snapshots
+          git clone --depth=1 --no-recurse-submodules https://github.com/Hylouis233/opent3code.git fork
+          git -C fork rev-parse HEAD > snapshots/opent3code.sha
+          git -C fork archive --format=tar.gz --output="$PWD/snapshots/opent3code.tar.gz" HEAD
+          git clone --depth=1 --no-recurse-submodules https://github.com/deepseek-ai/deepseek-harness.git dsh
+          git -C dsh rev-parse HEAD > snapshots/dsh.sha
+          git -C dsh archive --format=tar.gz --output="$PWD/snapshots/deepseek-harness.tar.gz" HEAD
+          npm view @minimax-ai/code version dist --json > snapshots/mcode-registry.json
+          npm view @deepseek-ai/dsh version dist --json > snapshots/dsh-registry.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: integration-public-sources
+          path: snapshots/
+          if-no-files-found: error
+          retention-days: 3
