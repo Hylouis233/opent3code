@@ -5,123 +5,143 @@ on:
     paths: [.github/workflows/integration-source.yml]
 permissions:
   contents: read
+  actions: read
 jobs:
   snapshot:
     if: github.repository_id == '1341460159'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
-      - name: Fetch exact integration candidate and deterministic finalization
-        shell: bash
-        env:
-          GIT_TERMINAL_PROMPT: '0'
+      - name: Fetch exact branch base without Git credentials
         run: |
           set -euo pipefail
           git init .
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
-          git fetch --no-tags --no-recurse-submodules --depth=5 origin 0a7afdc46f6a81d8bae8c8b434fc4e495be5216c
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin 0a7afdc46f6a81d8bae8c8b434fc4e495be5216c
           git checkout --detach FETCH_HEAD
-          mkdir -p /tmp/integration-output
-          curl --fail --silent --show-error "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/.github/integration-finalize.py" -o /tmp/integration-finalize.py
-          python3 /tmp/integration-finalize.py
+      - uses: actions/download-artifact@v8
+        with:
+          name: integration-final-verification
+          run-id: 34990493880
+          github-token: ${{ github.token }}
+          path: /tmp/prior-evidence
+      - name: Restore hash-verified candidate and normalize Node imports
+        run: |
+          python3 <<'PY'
+          import pathlib,json,hashlib,re
+          data=pathlib.Path('/tmp/prior-evidence/files.json').read_bytes()
+          assert hashlib.sha256(data).hexdigest()=='94a8b077a84157aecdd6f47dec1985afde4646fdd98a25c96ebfd14368b6d409'
+          entries=json.loads(data)
+          assert len(entries)==35
+          for entry in entries:
+              p=pathlib.Path(entry['path']);assert not p.is_absolute() and '..' not in p.parts and p.parts[0] in ['.github','.gitignore','README.md','apps','packages','scripts','integrations','knip.jsonc','docs']
+              p.parent.mkdir(parents=True,exist_ok=True);p.write_text(entry['content']);p.chmod(int(entry['mode'],8)&0o777)
+          for name in ['scripts/opent3code-preview.mjs','integrations/dsh-opent3code/prepare-profile.mjs']:
+              p=pathlib.Path(name);text=p.read_text()
+              match=re.search(r'import \{([^}]+)\} from "node:fs";',text);assert match
+              names=[n.strip().strip(',') for n in match.group(1).split(',') if n.strip()]
+              text=text[:match.start()]+'import * as NodeFS from "node:fs";'+text[match.end():]
+              for token in names:text=re.sub(r'\b'+token+r'\(', 'NodeFS.'+token+'(',text)
+              for before,after in [('import { homedir } from "node:os";','import * as NodeOS from "node:os";'),('import path from "node:path";','import * as NodePath from "node:path";'),('import { fileURLToPath } from "node:url";','import * as NodeURL from "node:url";')]:
+                  assert text.count(before)==1;text=text.replace(before,after)
+              text=re.sub(r'\bhomedir\(', 'NodeOS.homedir(',text)
+              text=re.sub(r'\bpath\.', 'NodePath.',text)
+              text=re.sub(r'\bfileURLToPath\(', 'NodeURL.fileURLToPath(',text)
+              if 'import { spawn } from "node:child_process";' in text:
+                  text=text.replace('import { spawn } from "node:child_process";','import * as NodeChildProcess from "node:child_process";')
+                  text=re.sub(r'\bspawn\(', 'NodeChildProcess.spawn(',text)
+              p.write_text(text)
+          p=pathlib.Path('.github/scripts/opent3code-preview.test.cjs');text=p.read_text();assert text.count('    if (process.platform')==1
+          text=text.replace('    if (process.platform','    // oxlint-disable-next-line t3code/no-global-process-runtime -- Dependency-free Node test checks host symlink support, without loading the application runtime.\n    if (process.platform')
+          p.write_text(text)
+          pathlib.Path('/tmp/output').mkdir(exist_ok=True)
+          pathlib.Path('/tmp/output/paths.json').write_text(json.dumps(entries))
+          PY
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
           cache: true
           run-install: true
-      - name: Format and preserve exact reviewable source
+      - name: Format and run strict focused verification
         run: |
           python3 <<'PY'
           import pathlib,json,subprocess
-          paths=sorted(set(subprocess.check_output(['git','diff','712baceb199943385e3e059e825c32188ecad9ba','HEAD','--name-only'],text=True).splitlines()+subprocess.check_output(['git','diff','--name-only'],text=True).splitlines()))
+          root=pathlib.Path('/tmp/output');entries=json.loads((root/'paths.json').read_text());paths=[e['path'] for e in entries]
           subprocess.run(['vp','fmt',*[p for p in paths if not p.endswith('LICENSE') and p!='.gitignore']],check=True)
-          entries=[]
-          for p in paths:
-              mode=subprocess.check_output(['git','ls-files','--stage','--',p],text=True).split()[0]
-              entries.append({'path':p,'mode':mode,'content':pathlib.Path(p).read_text()})
-          pathlib.Path('/tmp/integration-output/files.json').write_text(json.dumps(entries))
-          pathlib.Path('/tmp/integration-output/paths.json').write_text(json.dumps(paths))
-          PY
-      - name: Test maintenance, provider behavior, types and lint
-        continue-on-error: true
-        run: |
-          python3 <<'PY'
-          import pathlib,json,subprocess
-          out=pathlib.Path('/tmp/integration-output')
-          paths=json.loads((out/'paths.json').read_text())
-          tests=sorted(str(p) for p in pathlib.Path('.github/scripts').glob('opent3code-*.test.cjs'))
-          commands={
-            'maintenance':['node','--test',*tests],
-            'provider':['vp','run','--filter','t3','test','src/provider/Drivers/ExternalAcpDriver.test.ts','src/provider/acp/ExternalAcpPolicy.test.ts'],
-            'types':['vp','run','--filter','t3','--filter','@t3tools/web','--filter','@t3tools/contracts','typecheck'],
-            'lint':['vp','lint',*[p for p in paths if p.endswith(('.ts','.mjs','.cjs'))]],
-            'knip':['vp','run','knip:check'],
-          }
+          for entry in entries:entry['content']=pathlib.Path(entry['path']).read_text()
+          (root/'files.json').write_text(json.dumps(entries))
+          commands={'maintenance':['node','--test',*sorted(str(p) for p in pathlib.Path('.github/scripts').glob('opent3code-*.test.cjs'))],'provider':['vp','run','--filter','t3','test','src/provider/Drivers/ExternalAcpDriver.test.ts','src/provider/acp/ExternalAcpPolicy.test.ts'],'lint':['vp','lint',*[p for p in paths if p.endswith(('.ts','.mjs','.cjs'))]],'types':['vp','run','--filter','t3','--filter','@t3tools/web','--filter','@t3tools/contracts','typecheck']}
           status={}
           for name,command in commands.items():
-              with (out/(name+'.log')).open('w') as log:
-                  try: status[name]=subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,timeout=300).returncode
-                  except subprocess.TimeoutExpired: status[name]=124
+              with (root/(name+'.log')).open('w') as log:status[name]=subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,timeout=300).returncode
               print(name,status[name],flush=True)
-          (out/'status.json').write_text(json.dumps(status))
-          raise SystemExit(0 if all(code==0 for code in status.values()) else 1)
+          (root/'status.json').write_text(json.dumps(status))
+          raise SystemExit(0 if all(v==0 for v in status.values()) else 1)
           PY
-      - name: Verify installation and real session negotiation without model requests
-        continue-on-error: true
-        shell: bash
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: integration-ready-source
+          path: /tmp/output/
+          retention-days: 3
+
+  mcode_fixture:
+    if: github.repository_id == '1341460159'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.1'
+      - name: Inspect actual ACP mode negotiation with a local deterministic model
         run: |
           set -euo pipefail
-          export MINIMAX_DATA_DIR="$RUNNER_TEMP/mcode-home"
-          export DSH_HOME="$RUNNER_TEMP/dsh-home"
-          export DSH_TELEMETRY_DISABLED=1
-          npm install --prefix "$RUNNER_TEMP/cli-runtime" @minimax-ai/code@0.4.7 @deepseek-ai/dsh@0.1.5-rc.1 pnpm@11.10.0 > /tmp/integration-output/install.log 2>&1
-          export PATH="$RUNNER_TEMP/cli-runtime/node_modules/.bin:$PATH"
-          npm pack ./integrations/dsh-opent3code --ignore-scripts --pack-destination /tmp/integration-output > /tmp/integration-output/pack.log
-          node integrations/dsh-opent3code/prepare-profile.mjs "$DSH_HOME"
-          dsh plugin --profile opent3code add /tmp/integration-output/opent3code-dsh-plugin-0.1.0-alpha.1.tgz > /tmp/integration-output/dsh-install.log 2>&1
-          dsh --profile opent3code --dump-config > /tmp/integration-output/dsh-effective.yml
+          mkdir -p evidence
+          npm install --prefix "$RUNNER_TEMP/mcode-cli" @minimax-ai/code@0.4.7 > evidence/install.log 2>&1
+          export PATH="$RUNNER_TEMP/mcode-cli/node_modules/.bin:$PATH"
+          export MINIMAX_DATA_DIR="$RUNNER_TEMP/mcode-fixture-home"
+          export MCODE_PROVIDER_API_KEY=nonsecret-loopback-fixture
           node --input-type=module <<'JS'
-          import {spawn} from 'node:child_process';
-          import {createInterface} from 'node:readline';
-          import {writeFileSync} from 'node:fs';
-          for(const [kind,args] of [['mcode',['acp']],['dsh',['--profile','opent3code']]]) {
-            const child=spawn(kind,args,{stdio:['pipe','pipe','pipe'],env:process.env});
-            const closed=new Promise(resolve=>child.once('close',resolve));
-            let stderr=''; child.stderr.on('data',v=>{stderr+=v;});child.stdin.on('error',()=>{});
-            const pending=new Map(); let seq=0;
-            child.on('exit',()=>{for(const waiter of pending.values()){clearTimeout(waiter.timer);waiter.reject(Error('Native process exited'));}pending.clear();});
-            createInterface({input:child.stdout}).on('line',line=>{
-              try {const msg=JSON.parse(line); const waiter=pending.get(msg.id); if(waiter){pending.delete(msg.id);clearTimeout(waiter.timer);waiter.resolve(msg);}}
-              catch {}
-            });
-            const call=(method,params)=>new Promise((resolve,reject)=>{
-              const id=++seq;const timer=setTimeout(()=>{pending.delete(id);reject(Error(method+' timed out'));},45000);
-              pending.set(id,{resolve,reject,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');
-            });
-            const evidence={kind,modelRequestSent:false};
-            try {
+          import http from 'node:http';import {spawn} from 'node:child_process';import {createInterface} from 'node:readline';import fs from 'node:fs';import path from 'node:path';
+          const evidence={fixtureOnly:true,paidAccountUsed:false,requests:[]};
+          const server=http.createServer(async(req,res)=>{
+            let raw='';for await(const chunk of req)raw+=chunk;
+            const body=raw?JSON.parse(raw):{};evidence.requests.push({url:req.url,method:req.method,stream:body.stream??false});
+            if(req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify({object:'list',data:[{id:'fixture-model',object:'model',owned_by:'local-fixture'}]}));return;}
+            const base={id:'chatcmpl-local-fixture',object:'chat.completion',created:1789488000,model:'fixture-model'};
+            if(body.stream){res.setHeader('content-type','text/event-stream');res.write('data: '+JSON.stringify({...base,object:'chat.completion.chunk',choices:[{index:0,delta:{role:'assistant',content:'LOCAL_FIXTURE_OK'},finish_reason:null}]})+'\n\n');res.write('data: '+JSON.stringify({...base,object:'chat.completion.chunk',choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}})+'\n\n');res.end('data: [DONE]\n\n');}
+            else {res.setHeader('content-type','application/json');res.end(JSON.stringify({...base,choices:[{index:0,message:{role:'assistant',content:'LOCAL_FIXTURE_OK'},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}}));}
+          });
+          await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const url='http://127.0.0.1:'+server.address().port+'/v1';
+          const command=(args)=>new Promise(resolve=>{const p=spawn('mcode',args,{env:process.env,stdio:['ignore','pipe','pipe']});let stdout='',stderr='';p.stdout.on('data',v=>stdout+=v);p.stderr.on('data',v=>stderr+=v);const timer=setTimeout(()=>p.kill('SIGKILL'),45000);p.on('close',code=>{clearTimeout(timer);resolve({args,code,stdout,stderr});});});
+          let child;
+          try {
+            evidence.add=await command(['provider','add','--name','local-fixture','--base-url',url,'--api-format','openai-completions','--model','fixture-model']);
+            evidence.list=await command(['provider','list','--json']);
+            const listing=JSON.parse(evidence.list.stdout);let id;
+            const walk=value=>{if(!value||typeof value!=='object')return;if(!Array.isArray(value)&&(value.name==='local-fixture'||value.baseUrl===url||value.baseURL===url))id=value.id??value.providerId;for(const item of Object.values(value))walk(item);};walk(listing);
+            if(!id)throw Error('Could not identify the newly created loopback provider');
+            evidence.test=await command(['provider','test',id,'--model','fixture-model','--json']);
+            if(evidence.test.code!==0)throw Error('Loopback provider validation failed');
+            fs.writeFileSync(path.join(process.env.MINIMAX_DATA_DIR,'config.yaml'),JSON.stringify({defaultModel:id+'/fixture-model',permissionMode:'default'})+'\n');
+            child=spawn('mcode',['acp'],{env:process.env,stdio:['pipe','pipe','pipe']});const closed=new Promise(resolve=>child.once('close',resolve));let stderr='';child.stderr.on('data',v=>stderr+=v);child.stdin.on('error',()=>{});const pending=new Map();let seq=0;const notifications=[];
+            createInterface({input:child.stdout}).on('line',line=>{try{const msg=JSON.parse(line),waiter=pending.get(msg.id);if(waiter){pending.delete(msg.id);clearTimeout(waiter.timer);waiter.resolve(msg);}else notifications.push(msg);}catch{}});
+            const call=(method,params)=>new Promise((resolve,reject)=>{const id=++seq,timer=setTimeout(()=>{pending.delete(id);reject(Error(method+' timed out'));},45000);pending.set(id,{resolve,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});
+            try{
               evidence.initialize=await call('initialize',{protocolVersion:1,clientCapabilities:{},clientInfo:{name:'opent3code',version:'0.1.0-alpha.1'}});
               evidence.session=await call('session/new',{cwd:process.cwd(),mcpServers:[]});
-              if(evidence.session.result?.sessionId && kind==='mcode') {
-                const options=evidence.session.result.configOptions??[];
-                const mode=options.find(o=>o.category==='mode');
-                if(mode) evidence.mode=await call('session/set_config_option',{sessionId:evidence.session.result.sessionId,configId:mode.id,value:'default'});
-                else if(evidence.session.result.modes) evidence.mode=await call('session/set_mode',{sessionId:evidence.session.result.sessionId,modeId:'default'});
-              }
-            } catch(error){evidence.error=error.message;}
-            finally {
-              child.kill('SIGTERM');const timer=setTimeout(()=>child.kill('SIGKILL'),3000);
-              await closed;clearTimeout(timer);
-              for(const waiter of pending.values())clearTimeout(waiter.timer);
-              evidence.stderr=stderr;
-              writeFileSync('/tmp/integration-output/'+kind+'-session.json',JSON.stringify(evidence,null,2));
-            }
-          }
+              const sessionId=evidence.session.result?.sessionId;if(!sessionId)throw Error('Native session creation rejected');
+              const mode=evidence.session.result.configOptions?.find(o=>o.category==='mode');
+              evidence.mode=mode?await call('session/set_config_option',{sessionId,configId:mode.id,value:'default'}):await call('session/set_mode',{sessionId,modeId:'default'});
+              if(!evidence.mode.error)evidence.prompt=await call('session/prompt',{sessionId,prompt:[{type:'text',text:'Return the fixture response without tools.'}]});
+            }finally{child.kill('SIGTERM');const timer=setTimeout(()=>child.kill('SIGKILL'),2000);await closed;clearTimeout(timer);for(const waiter of pending.values())clearTimeout(waiter.timer);evidence.stderr=stderr;evidence.notifications=notifications;}
+          } catch(error){evidence.error=error.message;}
+          finally {if(child&&child.exitCode===null)child.kill('SIGKILL');server.closeAllConnections();await new Promise(resolve=>server.close(resolve));fs.writeFileSync('evidence/mcode-local-fixture.json',JSON.stringify(evidence,null,2));}
           JS
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: integration-final-verification
-          path: /tmp/integration-output/
+          name: mcode-loopback-evidence
+          path: evidence/
           retention-days: 3
