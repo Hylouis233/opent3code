@@ -20,7 +20,7 @@ jobs:
           git init .
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
-          git fetch --no-tags --no-recurse-submodules --depth=3 origin 59d6886bccbd0bb04a5e2b08ea77a37554d4c01e
+          git fetch --no-tags --no-recurse-submodules --depth=4 origin 5cedac7289be2a25c8f118c9e574375e179b9c8a
           git checkout --detach FETCH_HEAD
           mkdir -p /tmp/integration-output
       - uses: voidzero-dev/setup-vp@v1
@@ -38,7 +38,7 @@ jobs:
           pathlib.Path('/tmp/integration-output/files.json').write_text(json.dumps([{'path':p,'content':pathlib.Path(p).read_text()} for p in paths]))
           PY
       - name: Test isolated source launcher
-        run: node --test scripts/opent3code-preview.test.mjs
+        run: node --test .github/scripts/opent3code-preview.test.cjs
       - name: Install pinned official CLIs and companion bundle in temporary homes
         shell: bash
         run: |
@@ -50,8 +50,11 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/cli-runtime" @minimax-ai/code@0.4.7 @deepseek-ai/dsh@0.1.5-rc.1 pnpm@11.10.0 > /tmp/integration-output/install.log 2>&1
           export PATH="$RUNNER_TEMP/cli-runtime/node_modules/.bin:$PATH"
           npm pack ./integrations/dsh-opent3code --ignore-scripts --pack-destination /tmp/integration-output > /tmp/integration-output/pack.log
-          dsh plugin --profile opent3code add /tmp/integration-output/opent3code-dsh-plugin-0.1.0-alpha.1.tgz > /tmp/integration-output/dsh-install.log 2>&1
-          dsh --profile opent3code --dump-config > /tmp/integration-output/dsh-effective.yml
+          node integrations/dsh-opent3code/prepare-profile.mjs "$DSH_HOME"
+          dsh_install=0
+          dsh plugin --profile opent3code add /tmp/integration-output/opent3code-dsh-plugin-0.1.0-alpha.1.tgz > /tmp/integration-output/dsh-install.log 2>&1 || dsh_install=$?
+          echo "$dsh_install" > /tmp/integration-output/dsh-install.exit
+          dsh --profile opent3code --dump-config > /tmp/integration-output/dsh-effective.yml 2> /tmp/integration-output/dsh-config.stderr || true
           mcode provider add --name local-fixture --base-url http://127.0.0.1:9/v1 --api-format openai-completions --model fixture-model --use > /tmp/integration-output/mcode-provider.log 2>&1
           node --input-type=module <<'JS'
           import {spawn} from 'node:child_process';
@@ -59,15 +62,17 @@ jobs:
           import {writeFileSync} from 'node:fs';
           for(const [kind,args] of [['mcode',['acp']],['dsh',['--profile','opent3code']]]) {
             const child=spawn(kind,args,{stdio:['pipe','pipe','pipe'],env:process.env});
-            let stderr=''; child.stderr.on('data',v=>{stderr+=v;});
+            const closed=new Promise(resolve=>child.once('close',resolve));
+            let stderr=''; child.stderr.on('data',v=>{stderr+=v;});child.stdin.on('error',()=>{});
             const pending=new Map(); let seq=0;
+            child.on('exit',()=>{for(const waiter of pending.values()){clearTimeout(waiter.timer);waiter.reject(Error('Native process exited'));}pending.clear();});
             createInterface({input:child.stdout}).on('line',line=>{
               try {const msg=JSON.parse(line); const waiter=pending.get(msg.id); if(waiter){pending.delete(msg.id);clearTimeout(waiter.timer);waiter.resolve(msg);}}
               catch {}
             });
             const call=(method,params)=>new Promise((resolve,reject)=>{
               const id=++seq;const timer=setTimeout(()=>{pending.delete(id);reject(Error(method+' timed out'));},45000);
-              pending.set(id,{resolve,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');
+              pending.set(id,{resolve,reject,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');
             });
             const evidence={kind,modelRequestSent:false};
             try {
@@ -77,18 +82,20 @@ jobs:
                 const options=evidence.session.result.configOptions??[];
                 const mode=options.find(o=>o.category==='mode');
                 if(mode) evidence.mode=await call('session/set_config_option',{sessionId:evidence.session.result.sessionId,configId:mode.id,value:'default'});
+                else if(evidence.session.result.modes) evidence.mode=await call('session/set_mode',{sessionId:evidence.session.result.sessionId,modeId:'default'});
               }
             } catch(error){evidence.error=error.message;}
             finally {
               child.kill('SIGTERM');
               const timer=setTimeout(()=>child.kill('SIGKILL'),3000);
-              await new Promise(resolve=>child.once('close',resolve));clearTimeout(timer);
+              await closed;clearTimeout(timer);
               for(const waiter of pending.values())clearTimeout(waiter.timer);
               evidence.stderr=stderr;
               writeFileSync('/tmp/integration-output/'+kind+'-session.json',JSON.stringify(evidence,null,2));
             }
           }
           JS
+          test "$dsh_install" = 0
       - uses: actions/upload-artifact@v7
         if: always()
         with:
