@@ -33,19 +33,28 @@ jobs:
       merge: ${{ steps.prepare.outputs.merge }}
       auto_merge: ${{ steps.prepare.outputs.auto_merge }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-      - name: Test trusted maintenance policy
-        run: node --test .github/scripts/opent3code-sync.test.cjs
-      - name: Prepare an immutable upstream snapshot PR
+      - name: Load trusted policy through the API and prepare a snapshot PR
         id: prepare
         uses: actions/github-script@v8
         with:
           script: |
-            const sync = require('./.github/scripts/opent3code-sync.cjs');
-            await sync.prepare({ github, context, core });
+            const { data: repo } = await github.rest.repos.get(context.repo);
+            if (repo.id !== 1341460159 || repo.owner.login !== 'Hylouis233') {
+              throw new Error('Unexpected repository.');
+            }
+            const { data: base } = await github.rest.repos.getBranch({
+              ...context.repo, branch: repo.default_branch,
+            });
+            const { data: file } = await github.rest.repos.getContent({
+              ...context.repo, path: '.github/scripts/opent3code-sync.cjs', ref: base.commit.sha,
+            });
+            if (file.type !== 'file' || file.encoding !== 'base64') {
+              throw new Error('Trusted policy file is unavailable.');
+            }
+            const { Module } = require('node:module');
+            const policy = new Module('opent3code-sync.cjs');
+            policy._compile(Buffer.from(file.content, 'base64').toString('utf8'), 'opent3code-sync.cjs');
+            await policy.exports.prepare({ github, context, core });
 
   validate:
     needs: prepare
@@ -55,21 +64,20 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout the exact candidate without persisted credentials
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.prepare.outputs.merge }}
-          fetch-depth: 2
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-      - name: Verify the tested merge parents
+      - name: Fetch the public candidate without Git credentials or submodule traversal
         env:
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+          EXPECTED_MERGE: ${{ needs.prepare.outputs.merge }}
           EXPECTED_BASE: ${{ needs.prepare.outputs.base }}
           EXPECTED_HEAD: ${{ needs.prepare.outputs.head }}
         run: |
+          git init .
+          git remote add origin "$REPOSITORY_URL"
+          git -c protocol.version=2 fetch --no-tags --no-recurse-submodules --depth=2 origin "$EXPECTED_MERGE"
+          git sparse-checkout init --no-cone
+          printf '/*\n!/.repos/\n' > .git/info/sparse-checkout
+          git -c submodule.recurse=false checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MERGE"
           test "$(git rev-parse HEAD^1)" = "$EXPECTED_BASE"
           test "$(git rev-parse HEAD^2)" = "$EXPECTED_HEAD"
       - uses: voidzero-dev/setup-vp@v1
@@ -112,12 +120,7 @@ jobs:
       checks: read
       statuses: read
     steps:
-      - name: Checkout the trusted base, never the candidate
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.prepare.outputs.base }}
-          persist-credentials: false
-      - name: Recheck provenance, reviews, checks, base and head before merging
+      - name: Recheck using only the policy from the trusted base
         uses: actions/github-script@v8
         env:
           SYNC_PR: ${{ needs.prepare.outputs.pr }}
@@ -126,8 +129,16 @@ jobs:
           SYNC_MERGE: ${{ needs.prepare.outputs.merge }}
         with:
           script: |
-            const sync = require('./.github/scripts/opent3code-sync.cjs');
-            await sync.merge({ github, context, core, expected: {
+            const { data: file } = await github.rest.repos.getContent({
+              ...context.repo, path: '.github/scripts/opent3code-sync.cjs', ref: process.env.SYNC_BASE,
+            });
+            if (file.type !== 'file' || file.encoding !== 'base64') {
+              throw new Error('Trusted policy file is unavailable.');
+            }
+            const { Module } = require('node:module');
+            const policy = new Module('opent3code-sync.cjs');
+            policy._compile(Buffer.from(file.content, 'base64').toString('utf8'), 'opent3code-sync.cjs');
+            await policy.exports.merge({ github, context, core, expected: {
               pr: process.env.SYNC_PR,
               head: process.env.SYNC_HEAD,
               base: process.env.SYNC_BASE,

@@ -24,13 +24,13 @@ OpenT3Code is an independently maintained fork of [T3 Code](https://github.com/p
 
 ## What makes this fork different?
 
-| | T3 Code foundation | OpenT3Code direction |
-| --- | --- | --- |
-| Agent execution | Provider-specific adapters and orchestration | Keep those adapters; welcome additional runtimes and protocols |
-| Interfaces | Web, Electron desktop, and mobile clients | Preserve them; make terminal-first and other client contributions welcome |
-| Contributions | Governed by the upstream contribution policy | Accept focused provider, CLI, TUI, desktop, accessibility, and interoperability proposals |
-| Maintenance | Upstream development and releases | Traceable upstream merges, independent review, and preservation of fork-specific changes |
-| Distribution | Upstream packages, applications, and hosted services | Source-first fork; do not represent upstream binaries or services as our own |
+|                 | T3 Code foundation                                   | OpenT3Code direction                                                                      |
+| --------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Agent execution | Provider-specific adapters and orchestration         | Keep those adapters; welcome additional runtimes and protocols                            |
+| Interfaces      | Web, Electron desktop, and mobile clients            | Preserve them; make terminal-first and other client contributions welcome                 |
+| Contributions   | Governed by the upstream contribution policy         | Accept focused provider, CLI, TUI, desktop, accessibility, and interoperability proposals |
+| Maintenance     | Upstream development and releases                    | Traceable upstream merges, independent review, and preservation of fork-specific changes  |
+| Distribution    | Upstream packages, applications, and hosted services | Source-first fork; do not represent upstream binaries or services as our own              |
 
 This is a difference in **project scope and maintenance policy**, not a claim that the new integrations already exist. We credit the upstream project and do not imply its endorsement.
 
@@ -38,28 +38,28 @@ This is a difference in **project scope and maintenance policy**, not a claim th
 
 ### Agent integrations inherited from upstream
 
-| Agent | Integration available in the current source | Getting connected |
-| --- | --- | --- |
-| Codex | Provider adapter | Install and authenticate its CLI |
-| Claude Code | Provider adapter | Install and authenticate its CLI |
-| Cursor | Provider adapter | Install and authenticate Cursor CLI |
-| Grok Build | Provider adapter | Install and authenticate its CLI |
-| OpenCode | Provider adapter | Install and authenticate OpenCode |
-| Google Antigravity | Provider adapter | Enable it in Settings, then use its installation and Google sign-in flow |
+| Agent              | Integration available in the current source | Getting connected                                                        |
+| ------------------ | ------------------------------------------- | ------------------------------------------------------------------------ |
+| Codex              | Provider adapter                            | Install and authenticate its CLI                                         |
+| Claude Code        | Provider adapter                            | Install and authenticate its CLI                                         |
+| Cursor             | Provider adapter                            | Install and authenticate Cursor CLI                                      |
+| Grok Build         | Provider adapter                            | Install and authenticate its CLI                                         |
+| OpenCode           | Provider adapter                            | Install and authenticate OpenCode                                        |
+| Google Antigravity | Provider adapter                            | Enable it in Settings, then use its installation and Google sign-in flow |
 
 Availability depends on your operating system, installed provider version, account, and the individual adapter's capabilities. This table describes code present in the inherited implementation; it is not a fresh end-to-end certification of every provider.
 
 ### Interfaces and integration boundaries
 
-| Surface or tool | Status | What this means |
-| --- | --- | --- |
-| Local web interface | Available in source | Run the server and browser client from this checkout |
-| Desktop application | Available in source | Electron client; use the source development/build commands below |
-| Server CLI | Available in source | Start and manage the inherited server; not a standalone conversational TUI |
-| Mobile clients | Available in source | Inherited React Native clients; branded store releases are not provided by this fork |
-| Terminal / TUI-based agents | Adapter-dependent | A tool needs a compatible protocol or an implemented adapter for managed sessions |
-| Standalone OpenT3Code TUI | Planned | Contributions welcome; no standalone terminal client is shipped yet |
-| Arbitrary CLI / third-party desktop app | Planned | Requires an integration contract or bridge; not universal GUI automation |
+| Surface or tool                         | Status              | What this means                                                                      |
+| --------------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| Local web interface                     | Available in source | Run the server and browser client from this checkout                                 |
+| Desktop application                     | Available in source | Electron client; use the source development/build commands below                     |
+| Server CLI                              | Available in source | Start and manage the inherited server; not a standalone conversational TUI           |
+| Mobile clients                          | Available in source | Inherited React Native clients; branded store releases are not provided by this fork |
+| Terminal / TUI-based agents             | Adapter-dependent   | A tool needs a compatible protocol or an implemented adapter for managed sessions    |
+| Standalone OpenT3Code TUI               | Planned             | Contributions welcome; no standalone terminal client is shipped yet                  |
+| Arbitrary CLI / third-party desktop app | Planned             | Requires an integration contract or bridge; not universal GUI automation             |
 
 <img src="./docs/assets/opent3code-architecture.svg" alt="OpenT3Code architecture: existing provider adapters and web, desktop, and mobile clients; proposed CLI, TUI, and desktop bridges are shown separately" width="100%" />
 
