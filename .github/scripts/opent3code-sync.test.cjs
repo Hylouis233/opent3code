@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   alreadyContainsUpstream,
+  isUpstreamPr,
   reviewRequired,
   outstandingChangeRequest,
   assertMergeable,
@@ -150,4 +151,73 @@ test("prepare refuses a different repository even with the same name", async () 
     prepare({ github, context: { repo: { owner: "Hylouis233", repo: "opent3code" } }, core: {} }),
     /authorized fork/,
   );
+});
+
+test("upstream PR identity requires the exact repository and branch", () => {
+  const pr = {
+    head: { repo: { id: 1153130349, full_name: "pingdotgg/t3code" }, ref: "main" },
+  };
+  assert.equal(isUpstreamPr(pr), true);
+  pr.head.repo.id = 1;
+  assert.equal(isUpstreamPr(pr), false);
+  pr.head.repo.id = 1153130349;
+  pr.head.ref = "unreviewed-feature";
+  assert.equal(isUpstreamPr(pr), false);
+});
+
+test("prepare creates a cross-repository PR without writing Git refs", async () => {
+  const outputs = {};
+  const summary = {
+    addRaw() {
+      return this;
+    },
+    async write() {},
+  };
+  const pr = {
+    ...candidate(),
+    number: 1,
+    html_url: "https://github.com/Hylouis233/opent3code/pull/1",
+    head: { sha: head, ref: "main", repo: { id: 1153130349, full_name: "pingdotgg/t3code" } },
+    base: { sha: base, ref: "main" },
+  };
+  const github = {
+    paginate: async () => [],
+    rest: {
+      repos: {
+        get: async () => ({
+          data: { id: 1341460159, owner: { login: "Hylouis233" }, default_branch: "main" },
+        }),
+        getBranch: async (args) => ({
+          data: { commit: { sha: args.owner === "pingdotgg" ? head : base } },
+        }),
+        compareCommits: async (args) => ({
+          data: args.base === head ? { status: "diverged" } : { files: [{ filename: "apps/a.ts" }] },
+        }),
+      },
+      pulls: {
+        list() {},
+        create: async (args) => {
+          assert.equal(args.head, "pingdotgg:main");
+          assert.equal(args.base, "main");
+          assert.equal(args.maintainer_can_modify, false);
+          return { data: pr };
+        },
+        get: async () => ({ data: pr }),
+      },
+    },
+  };
+  await prepare({
+    github,
+    context: { repo: { owner: "Hylouis233", repo: "opent3code" } },
+    core: {
+      summary,
+      setOutput(name, value) {
+        outputs[name] = value;
+      },
+    },
+  });
+  assert.equal(outputs.head, head);
+  assert.equal(outputs.base, base);
+  assert.equal(outputs.merge, merge);
+  assert.equal(outputs.auto_merge, "true");
 });

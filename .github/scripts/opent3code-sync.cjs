@@ -1,11 +1,20 @@
 "use strict";
 
 const REPOSITORY_ID = 1341460159;
+const UPSTREAM_REPOSITORY_ID = 1153130349;
 const UPSTREAM = { owner: "pingdotgg", repo: "t3code", branch: "main" };
 const SHA = /^[a-f0-9]{40}$/;
 
 function alreadyContainsUpstream(status) {
   return status === "ahead" || status === "identical";
+}
+
+function isUpstreamPr(pr) {
+  return (
+    pr.head.repo?.id === UPSTREAM_REPOSITORY_ID &&
+    pr.head.repo?.full_name === `${UPSTREAM.owner}/${UPSTREAM.repo}` &&
+    pr.head.ref === UPSTREAM.branch
+  );
 }
 
 function protectedPath(path) {
@@ -83,7 +92,6 @@ async function prepare({ github, context, core }) {
     await core.summary.addRaw(`Upstream ${head} is already contained in ${repo.branch}.`).write();
     return;
   }
-  const branch = `sync/upstream-${head.slice(0, 12)}`;
   const open = await github.paginate(github.rest.pulls.list, {
     ...context.repo,
     state: "open",
@@ -91,35 +99,28 @@ async function prepare({ github, context, core }) {
     per_page: 100,
   });
   const pending = open.find(
-    (pr) =>
-      pr.head.repo?.id === REPOSITORY_ID &&
-      pr.head.ref.startsWith("sync/upstream-") &&
-      pr.head.ref !== branch,
+    (pr) => pr.head.repo?.id === REPOSITORY_ID && pr.head.ref.startsWith("sync/upstream-"),
   );
   if (pending) {
-    core.warning(`Resolve existing sync PR #${pending.number} before importing a newer snapshot.`);
+    core.warning(`Resolve legacy sync PR #${pending.number} before opening another sync PR.`);
     await core.summary.addRaw(`Existing sync PR needs attention: ${pending.html_url}`).write();
     return;
   }
-  const prs = await github.paginate(github.rest.pulls.list, {
-    ...context.repo,
-    state: "all",
-    head: `${context.repo.owner}:${branch}`,
-    per_page: 100,
-  });
-  const existing = prs.find((pr) => pr.head.ref === branch && pr.head.repo?.id === REPOSITORY_ID);
-  if (existing && existing.state !== "open") {
-    core.warning(`Sync PR #${existing.number} was closed; it will not be reopened automatically.`);
-    await core.summary.addRaw(`Previously closed sync PR: ${existing.html_url}`).write();
-    return;
-  }
-  try {
-    const { data: ref } = await github.rest.git.getRef({ ...context.repo, ref: `heads/${branch}` });
-    if (ref.object.sha !== head)
-      throw new Error("Snapshot branch moved; refusing to overwrite it.");
-  } catch (error) {
-    if (error.status !== 404) throw error;
-    await github.rest.git.createRef({ ...context.repo, ref: `refs/heads/${branch}`, sha: head });
+  const existing = open.find(isUpstreamPr);
+  if (!existing) {
+    const closed = await github.paginate(github.rest.pulls.list, {
+      ...context.repo,
+      state: "closed",
+      head: `${UPSTREAM.owner}:${UPSTREAM.branch}`,
+      base: repo.branch,
+      per_page: 100,
+    });
+    const rejected = closed.find((pr) => isUpstreamPr(pr) && pr.head.sha === head && !pr.merged_at);
+    if (rejected) {
+      core.warning(`Sync PR #${rejected.number} was closed without merging this snapshot.`);
+      await core.summary.addRaw(`Previously closed sync PR: ${rejected.html_url}`).write();
+      return;
+    }
   }
   const pr =
     existing ||
@@ -127,9 +128,10 @@ async function prepare({ github, context, core }) {
       await github.rest.pulls.create({
         ...context.repo,
         base: repo.branch,
-        head: branch,
-        title: `chore: sync upstream ${head.slice(0, 12)}`,
-        body: `Import pingdotgg/t3code:main at ${head}.\n\nThis snapshot includes upstream commits and PRs already merged there, not arbitrary open PRs. Fork history is preserved through a merge commit. Conflicts, maintenance-file changes, failed validation, review objections, or repository protection rules block automatic merging.\n\nPrepared by the OpenT3Code upstream sync workflow.`,
+        head: `${UPSTREAM.owner}:${UPSTREAM.branch}`,
+        maintainer_can_modify: false,
+        title: "chore: sync upstream main",
+        body: `Import pingdotgg/t3code:main at ${head}.\n\nThis PR tracks upstream main, including PRs already merged there, not arbitrary open PRs. Its source branch can move; every run validates an exact head, base, and merge SHA again. Fork history is preserved through a merge commit. Conflicts, maintenance-file changes, failed validation, review objections, or repository protection rules block automatic merging.\n\nPrepared by the OpenT3Code upstream sync workflow.`,
       })
     ).data;
   let candidate;
@@ -139,6 +141,7 @@ async function prepare({ github, context, core }) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   if (
+    !isUpstreamPr(candidate) ||
     candidate.mergeable !== true ||
     !SHA.test(candidate.merge_commit_sha || "") ||
     candidate.head.sha !== head ||
@@ -177,11 +180,7 @@ async function merge({ github, context, core, expected }) {
   const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number });
   const { data: branch } = await github.rest.repos.getBranch(repo);
   assertMergeable(expected, pr, branch.commit.sha, expected.validationSucceeded === true);
-  if (
-    pr.head.repo?.id !== REPOSITORY_ID ||
-    pr.base.ref !== repo.branch ||
-    pr.head.ref !== `sync/upstream-${expected.head.slice(0, 12)}`
-  ) {
+  if (!isUpstreamPr(pr) || pr.base.ref !== repo.branch) {
     throw new Error("Unexpected sync PR origin or target.");
   }
   const { data: diff } = await github.rest.repos.compareCommits({
@@ -234,6 +233,7 @@ async function merge({ github, context, core, expected }) {
 
 module.exports = {
   alreadyContainsUpstream,
+  isUpstreamPr,
   protectedPath,
   reviewRequired,
   outstandingChangeRequest,

@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
     outputs:
       pr: ${{ steps.prepare.outputs.pr }}
@@ -33,7 +33,7 @@ jobs:
       merge: ${{ steps.prepare.outputs.merge }}
       auto_merge: ${{ steps.prepare.outputs.auto_merge }}
     steps:
-      - name: Load trusted policy through the API and prepare a snapshot PR
+      - name: Load trusted policy through the API and prepare a cross-repository PR
         id: prepare
         uses: actions/github-script@v8
         with:

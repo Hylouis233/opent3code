@@ -26,7 +26,7 @@ Repository branding is separate from runtime and release identity. The inherited
 
 The workflow imports only `pingdotgg/t3code:main`, including pull requests already merged into that branch. It does not import every open upstream PR. Open PRs need a separate, explicitly selected review; do not automatically reopen closed upstream proposals.
 
-The preparation job creates an immutable `sync/upstream-<sha>` snapshot branch and a PR against the fork's default branch. It never resets `main`, force-pushes a snapshot, or pushes to upstream. An existing unresolved sync PR blocks creation of a newer one, and a previously closed snapshot PR is not automatically reopened.
+The preparation job opens or reuses a cross-repository PR from `pingdotgg:main` to the fork's default branch. It never writes an upstream branch, resets `main`, or creates local snapshots of upstream workflow files. The source branch can advance: every run captures and validates the exact head, base, and candidate merge SHAs, and any movement blocks merging until a fresh validation. Existing legacy `sync/upstream-*` PRs must be resolved first. A previously closed, unmerged PR for the same upstream SHA is not recreated automatically.
 
 GitHub creates a candidate merge commit. Validation checks out its exact SHA without persisted Git credentials and verifies both parents. The validation job has read-only repository permissions, receives no deployment or provider credentials, and runs maintenance tests, lint/format checks, typechecking, workspace tests, the desktop build/preload check, and Rust crate tests. This is not a claim of live provider authentication testing, a signed release, mobile-device testing, or a complete cross-platform end-to-end certification.
 
@@ -49,7 +49,9 @@ Inspect the workflow summary and PR when a gate stops the run. Resolve actual co
 
 Actions must be enabled for this fork. Its policy must allow the workflow's declared `contents: write` and `pull-requests: write` permissions and allow GitHub Actions to create pull requests. These are repository/organization settings, not permissions that a workflow can grant itself. No personal access token is required by the checked-in implementation.
 
-If GitHub rejects PR creation, inspect **Settings > Actions > General > Workflow permissions** and the organization policy. Keep the failed run visible; do not imply that synchronization completed. GitHub-token-created PR workflows can require approval. The dedicated validation job is included so a merely missing PR-triggered run is never treated as a green build; observed unfinished checks still block automatic merging.
+If GitHub rejects PR creation, inspect **Settings > Actions > General > Workflow permissions**, enable **Allow GitHub Actions to create and approve pull requests** when permitted, and check the organization policy. Keep the failed run visible; do not imply that synchronization completed. GitHub-token-created PR workflows can require approval. The dedicated validation job is included so a merely missing PR-triggered run is never treated as a green build; observed unfinished checks still block automatic merging.
+
+The initial local-snapshot design was rejected with HTTP 403 by the default Actions token when creating a reference containing different workflow files. The current cross-repository PR design avoids that reference write; it does not bypass PR-creation settings or branch protection.
 
 The general CI uses GitHub-hosted runners in this fork instead of requiring upstream's Blacksmith runner pool. The upstream production-relay deployment job is restricted to `pingdotgg/t3code`; the fork must not deploy upstream infrastructure. Other inherited packaging/release configuration is not an independently configured OpenT3Code release service.
 
