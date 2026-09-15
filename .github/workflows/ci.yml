@@ -2,6 +2,9 @@ name: CI
 
 on:
   pull_request:
+  workflow_dispatch:
+  merge_group:
+    types: [checks_requested]
   push:
     branches:
       - main
@@ -20,7 +23,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
-      - run: node --test .github/scripts/opent3code-sync.test.cjs
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Test fork maintenance and PR automation
+        run: node --test .github/scripts/opent3code-sync.test.cjs .github/scripts/opent3code-pr.test.cjs .github/scripts/opent3code-pr-report.test.cjs
 
   check:
     name: Check
@@ -30,6 +37,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
@@ -51,7 +59,7 @@ jobs:
         run: vp run --filter @t3tools/desktop ensure:electron
       - name: Verify maintained-file formatting with an actionable diff
         run: |
-          vp fmt README.md CONTRIBUTING.md docs/operations/opent3code.md .github/scripts/opent3code-sync.cjs .github/scripts/opent3code-sync.test.cjs .github/workflows/ci.yml .github/workflows/deploy-relay.yml .github/workflows/opent3code-sync.yml
+          vp fmt README.md CONTRIBUTING.md docs/operations/opent3code.md docs/operations/pr-actions.md .github/opent3code-vouched.json .github/scripts/opent3code-*.cjs .github/workflows/ci.yml .github/workflows/deploy-relay.yml .github/workflows/opent3code-sync.yml .github/workflows/pr-size.yml .github/workflows/pr-vouch.yml .github/workflows/windows-tests.yml .github/workflows/mobile-fingerprint-check.yml .github/workflows/desktop-macos-preview.yml .github/workflows/desktop-macos-preview-publish.yml
           git diff --exit-code
       - name: Check unused code
         run: vp run knip:check
@@ -75,6 +83,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
@@ -109,6 +118,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
@@ -158,6 +168,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
@@ -242,6 +253,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
@@ -267,6 +279,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
@@ -281,3 +294,38 @@ jobs:
               - --filter=@t3tools/scripts...
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
+
+  pr_gate:
+    name: PR Gate
+    if: always()
+    needs:
+      - maintenance
+      - check
+      - test
+      - test_server
+      - rust
+      - mobile_native_changes
+      - mobile_native_static_analysis
+      - release_smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every applicable check to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const results = JSON.parse(process.env.RESULTS);
+          const required = ['maintenance', 'check', 'test', 'test_server', 'rust', 'mobile_native_changes', 'release_smoke'];
+          const failed = required.filter(name => results[name]?.result !== 'success');
+          const native = results.mobile_native_static_analysis?.result;
+          const notNeeded = results.mobile_native_changes?.outputs.changed === 'false';
+          if (!(native === 'success' || (notNeeded && native === 'skipped'))) failed.push('mobile_native_static_analysis');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '## PR Gate\n\n' + Object.entries(results).map(([name, job]) => `- ${name}: ${job.result}`).join('\n') + '\n');
+          if (failed.length) {
+            console.error(`Required checks did not succeed: ${failed.join(', ')}`);
+            process.exit(1);
+          }
+          NODE

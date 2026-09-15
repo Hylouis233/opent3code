@@ -1,19 +1,8 @@
 name: Desktop macOS Preview
 
-# Untrusted half of the macOS preview. This runs PR code (including fork PRs)
-# with a read-only token and no secrets, and only produces the JS bundle. The
-# trusted half, desktop-macos-preview-publish.yml, runs on workflow_run from
-# main, verifies the PR author is vouched, then packages, signs, notarizes, and
-# publishes the bundle without ever executing it.
-#
-# The label is a one-shot request for the commit it was applied to, not a
-# standing subscription: the trusted half removes it once this run completes,
-# and later pushes do not build until a maintainer applies it again. Each
-# signed preview is therefore an explicit per-commit decision.
-#
-# Closing the PR is handled by the publish workflow too, since deleting the
-# download needs a write token.
-
+# Keep upstream's workflow name and preview:mac label for compatibility.
+# OpenT3Code produces an unsigned JS bundle, not a signed/notarized .app or DMG.
+# Requests are one-shot: later commits need a newly applied preview label.
 on:
   pull_request:
     types: [labeled]
@@ -23,20 +12,17 @@ permissions:
 
 concurrency:
   group: desktop-macos-preview-${{ github.event.pull_request.number }}
-  # Adding an unrelated label skips the job and must not cancel a build.
-  cancel-in-progress: ${{ github.event.label.name == 'preview:mac' }}
+  cancel-in-progress: ${{ contains(fromJSON('["preview:mac", "preview:bundle"]'), github.event.label.name) }}
 
 jobs:
   build:
     name: Build preview JS bundle
-    if: github.event.label.name == 'preview:mac'
-    runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 30
+    if: contains(fromJSON('["preview:mac", "preview:bundle"]'), github.event.label.name)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      # This repository is public, so Git needs no credentials. checkout's
-      # credential cleanup runs submodule foreach even with submodules disabled,
-      # which fails on the orphaned gitlinks in our vendored .repos tree.
-      - name: Checkout
+      # Public, credential-free checkout also avoids cleanup of vendored gitlinks.
+      - name: Checkout exact PR head
         shell: bash
         env:
           CHECKOUT_REF: ${{ github.event.pull_request.head.sha }}
@@ -48,47 +34,35 @@ jobs:
           git fetch --no-tags --depth=1 origin "$CHECKOUT_REF"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git checkout --detach FETCH_HEAD
-
+          test "$(git rev-parse HEAD)" = "$CHECKOUT_REF"
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
           node-version-file: package.json
           cache: true
           run-install: false
-
       - name: Install bundle dependencies
         run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
-
-      # The publish workflow derives the same version from this run's number,
-      # so the version baked into the bundle matches the packaged app.
-      - name: Set preview version and public configuration
-        shell: bash
+      - name: Set preview version
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-
           base_version="$(node -p "require('./apps/desktop/package.json').version")"
           node scripts/update-release-package-versions.ts "${base_version}-pr.${PR_NUMBER}.${GITHUB_RUN_NUMBER}"
-          # Public T3 Connect identifiers (Clerk publishable key, relay URL).
-          cp .env.example .env
-
       - uses: ./.github/actions/setup-apt-mirrors
-
       - name: Install browser secret helper build libraries
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
-
       - name: Build JS bundle
         run: vp run build:desktop
-
-      # Same layout as release.yml's js-bundle so release-desktop.yml can
-      # package it unchanged.
-      - name: Upload JS bundle
+      - name: Verify preload bundle
+        run: node apps/desktop/scripts/verify-preload-bundle.mjs
+      - name: Upload unsigned bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: js-bundle
+          name: opent3code-preview-bundle
           path: |
             apps/server/dist
             apps/desktop/dist-electron
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
