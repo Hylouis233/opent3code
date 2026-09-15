@@ -13,13 +13,19 @@ const LABELS = [
   ["vouch:unvouched", "fbca04", "New or unvouched contributor; contributions are welcome."],
   ["vouch:denounced", "d1242f", "Author is listed for maintainer review; no automatic closure."],
   ["preview:bundle", "5319e7", "Request an unsigned desktop JS bundle for this PR commit."],
-  ["preview:mac", "5319e7", "Upstream-compatible alias for an unsigned JS bundle, not a signed macOS app."],
+  [
+    "preview:mac",
+    "5319e7",
+    "Upstream-compatible alias for an unsigned JS bundle, not a signed macOS app.",
+  ],
 ].map(([name, color, description]) => ({ name, color, description }));
 
 function isTestPath(path) {
-  return /(^|\/)(__tests__|test|tests)\//.test(path) ||
+  return (
+    /(^|\/)(__tests__|test|tests)\//.test(path) ||
     /^apps\/server\/integration\//.test(path) ||
-    /\.(test|spec|browser|integration)\./.test(path);
+    /\.(test|spec|browser|integration)\./.test(path)
+  );
 }
 
 function classifySize(files) {
@@ -30,8 +36,8 @@ function classifySize(files) {
       if (!Number.isSafeInteger(count) || count < 0) throw new Error("Invalid diff statistics.");
     }
     const lines = file.additions + file.deletions;
-    const testOnly = isTestPath(file.filename) &&
-      (!file.previous_filename || isTestPath(file.previous_filename));
+    const testOnly =
+      isTestPath(file.filename) && (!file.previous_filename || isTestPath(file.previous_filename));
     if (testOnly) test += lines;
     else nonTest += lines;
   }
@@ -42,8 +48,13 @@ function classifySize(files) {
 
 function validatePolicy(policy) {
   for (const key of ["trusted", "denounced"]) {
-    if (!Array.isArray(policy?.[key]) || policy[key].length > 1000 ||
-      policy[key].some((login) => typeof login !== "string" || !/^[a-z0-9-]+(?:\[bot\])?$/i.test(login))) {
+    if (
+      !Array.isArray(policy?.[key]) ||
+      policy[key].length > 1000 ||
+      policy[key].some(
+        (login) => typeof login !== "string" || !/^[a-z0-9-]+(?:\[bot\])?$/i.test(login),
+      )
+    ) {
       throw new Error(`Invalid ${key} list in OpenT3Code vouch policy.`);
     }
   }
@@ -53,7 +64,8 @@ function validatePolicy(policy) {
 function classifyTrust(login, permission, policy) {
   const matches = (names) => names.some((name) => name.toLowerCase() === login.toLowerCase());
   if (matches(policy.denounced)) return "vouch:denounced";
-  if (matches(policy.trusted) || ["admin", "maintain", "write"].includes(permission)) return "vouch:trusted";
+  if (matches(policy.trusted) || ["admin", "maintain", "write"].includes(permission))
+    return "vouch:trusted";
   return "vouch:unvouched";
 }
 
@@ -86,7 +98,11 @@ async function syncLabel({ github, repo, pull, label, managed, core }) {
   for (const existing of current.labels) {
     if (!managed.includes(existing.name) || existing.name === label) continue;
     try {
-      await github.rest.issues.removeLabel({ ...repo, issue_number: pull.number, name: existing.name });
+      await github.rest.issues.removeLabel({
+        ...repo,
+        issue_number: pull.number,
+        name: existing.name,
+      });
     } catch (error) {
       if (error.status !== 404) throw error;
     }
@@ -114,33 +130,44 @@ async function labelPullRequests({ github, context, core, kind }) {
     }
     policy = validatePolicy(JSON.parse(Buffer.from(data.content, "base64").toString("utf8")));
   }
-  const pulls = context.eventName === "pull_request_target"
-    ? [context.payload.pull_request]
-    : await github.paginate(github.rest.pulls.list, { ...repo, state: "open", per_page: 100 });
+  const pulls =
+    context.eventName === "pull_request_target"
+      ? [context.payload.pull_request]
+      : await github.paginate(github.rest.pulls.list, { ...repo, state: "open", per_page: 100 });
   for (const candidate of pulls) {
     const { data: pull } = await github.rest.pulls.get({ ...repo, pull_number: candidate.number });
     if (pull.state !== "open") continue;
     if (kind === "size") {
       const files = await github.paginate(github.rest.pulls.listFiles, {
-        ...repo, pull_number: pull.number, per_page: 100,
+        ...repo,
+        pull_number: pull.number,
+        per_page: 100,
       });
       if (files.length !== pull.changed_files) {
-        throw new Error(`PR #${pull.number}: incomplete file list (${files.length}/${pull.changed_files}); refusing to guess size.`);
+        throw new Error(
+          `PR #${pull.number}: incomplete file list (${files.length}/${pull.changed_files}); refusing to guess size.`,
+        );
       }
       const result = classifySize(files);
       await syncLabel({ github, repo, pull, label: result.label, managed: SIZE_NAMES, core });
-      core.info(`${result.nonTest} non-test + ${result.test} test lines; ${result.effective} effective.`);
+      core.info(
+        `${result.nonTest} non-test + ${result.test} test lines; ${result.effective} effective.`,
+      );
     } else {
-      let permission = pull.user.login.toLowerCase() === repo.owner.toLowerCase() ? "admin" : "none";
+      let permission =
+        pull.user.login.toLowerCase() === repo.owner.toLowerCase() ? "admin" : "none";
       if (permission === "none") {
         try {
           const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-            ...repo, username: pull.user.login,
+            ...repo,
+            username: pull.user.login,
           });
           permission = data.permission;
         } catch (error) {
           if (![403, 404].includes(error.status)) throw error;
-          core.info(`No collaborator permission available for ${pull.user.login}; using local policy only.`);
+          core.info(
+            `No collaborator permission available for ${pull.user.login}; using local policy only.`,
+          );
         }
       }
       const label = classifyTrust(pull.user.login, permission, policy);
