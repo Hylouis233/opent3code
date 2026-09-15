@@ -6,8 +6,10 @@ const {
   isUpstreamPr,
   reviewRequired,
   outstandingChangeRequest,
+  candidateFromMerge,
   assertMergeable,
   prepare,
+  merge: mergeUpstream,
 } = require("./opent3code-sync.cjs");
 const head = "a".repeat(40),
   base = "b".repeat(40),
@@ -195,6 +197,12 @@ test("prepare creates a cross-repository PR without writing Git refs", async () 
             args.base === head ? { status: "diverged" } : { files: [{ filename: "apps/a.ts" }] },
         }),
       },
+      git: {
+        getCommit: async (args) => {
+          assert.equal(args.commit_sha, merge);
+          return { data: { sha: merge, parents: [{ sha: base }, { sha: head }] } };
+        },
+      },
       pulls: {
         list() {},
         create: async (args) => {
@@ -221,4 +229,161 @@ test("prepare creates a cross-repository PR without writing Git refs", async () 
   assert.equal(outputs.base, base);
   assert.equal(outputs.merge, merge);
   assert.equal(outputs.auto_merge, "true");
+});
+
+const mergeCommit = () => ({ sha: merge, parents: [{ sha: base }, { sha: head }] });
+
+test("stale PR metadata uses verified merge parents without mutating the API response", () => {
+  const snapshot = candidate();
+  snapshot.base = { sha: "d".repeat(40), ref: "main" };
+  const verified = candidateFromMerge(snapshot, mergeCommit());
+  assert.equal(verified.base.sha, base);
+  assert.equal(verified.base.ref, "main");
+  assert.equal(snapshot.base.sha, "d".repeat(40));
+  assert.doesNotThrow(() => assertMergeable(expected, verified, base, true));
+  assert.throws(() => assertMergeable(expected, verified, "e".repeat(40), true), /moved/);
+  assert.throws(() => assertMergeable(expected, verified, base, false), /validation/);
+});
+
+test("missing, mismatched, reversed and malformed candidate parent evidence fails closed", () => {
+  for (const commit of [
+    undefined,
+    { ...mergeCommit(), sha: "d".repeat(40) },
+    { ...mergeCommit(), parents: [] },
+    { ...mergeCommit(), parents: [{ sha: base }] },
+    { ...mergeCommit(), parents: [{ sha: base }, { sha: head }, { sha: base }] },
+    { ...mergeCommit(), parents: [{ sha: head }, { sha: base }] },
+    { ...mergeCommit(), parents: [{ sha: "invalid" }, { sha: head }] },
+    { ...mergeCommit(), parents: [{ sha: base }, { sha: "d".repeat(40) }] },
+  ]) {
+    assert.throws(() => candidateFromMerge(candidate(), commit), /identity or parent/);
+  }
+});
+
+test("valid but outdated merge parents cannot satisfy a current-base validation", () => {
+  const oldCommit = { sha: merge, parents: [{ sha: "d".repeat(40) }, { sha: head }] };
+  const verified = candidateFromMerge(candidate(), oldCommit);
+  assert.throws(() => assertMergeable(expected, verified, base, true), /moved/);
+});
+
+function syncFixture({ protectedFiles = false, parentBase = base, moveBeforeMerge = false } = {}) {
+  const outputs = {};
+  const warnings = [];
+  const merges = [];
+  let pullReads = 0;
+  const pr = {
+    ...candidate(),
+    number: 1,
+    html_url: "https://github.com/Hylouis233/opent3code/pull/1",
+    head: { sha: head, ref: "main", repo: { id: 1153130349, full_name: "pingdotgg/t3code" } },
+    base: { sha: "d".repeat(40), ref: "main" },
+  };
+  const pulls = {
+    list() {},
+    listReviews() {},
+    get: async () => {
+      pullReads++;
+      const moved = moveBeforeMerge && pullReads > 1;
+      return { data: moved ? { ...pr, merge_commit_sha: "e".repeat(40) } : pr };
+    },
+    merge: async (args) => {
+      merges.push(args);
+      return { data: { merged: true, sha: "f".repeat(40) } };
+    },
+  };
+  const github = {
+    paginate: async (method) => (method === pulls.list ? [pr] : []),
+    rest: {
+      repos: {
+        get: async () => ({
+          data: { id: 1341460159, owner: { login: "Hylouis233" }, default_branch: "main" },
+        }),
+        getBranch: async (args) => ({
+          data: { commit: { sha: args.owner === "pingdotgg" ? head : base } },
+        }),
+        compareCommits: async (args) => ({
+          data:
+            args.base === head
+              ? { status: "diverged" }
+              : { files: [{ filename: protectedFiles ? "AGENTS.md" : "apps/a.ts" }] },
+        }),
+        getCombinedStatusForRef: async () => ({ data: { total_count: 0 } }),
+      },
+      git: {
+        getCommit: async () => ({
+          data: { sha: merge, parents: [{ sha: parentBase }, { sha: head }] },
+        }),
+      },
+      pulls,
+      checks: { listForRef() {} },
+    },
+  };
+  const core = {
+    summary: {
+      addRaw() {
+        return this;
+      },
+      async write() {},
+    },
+    warning(message) {
+      warnings.push(message);
+    },
+    setOutput(name, value) {
+      outputs[name] = value;
+    },
+  };
+  const context = { repo: { owner: "Hylouis233", repo: "opent3code" } };
+  return { github, context, core, outputs, warnings, merges };
+}
+
+test("prepare reuses a PR with stale metadata when immutable parents match current branches", async () => {
+  const fixture = syncFixture();
+  await prepare(fixture);
+  assert.equal(fixture.outputs.merge, merge);
+  assert.equal(fixture.outputs.base, base);
+  assert.equal(fixture.outputs.auto_merge, "true");
+  assert.deepEqual(fixture.warnings, []);
+});
+
+test("prepare rejects outdated parent evidence without emitting a validation target", async () => {
+  const fixture = syncFixture({ parentBase: "e".repeat(40) });
+  await prepare(fixture);
+  assert.deepEqual(fixture.outputs, {});
+  assert.equal(fixture.warnings.length, 1);
+});
+
+test("correcting stale metadata does not auto-approve protected policy changes", async () => {
+  const fixture = syncFixture({ protectedFiles: true });
+  await prepare(fixture);
+  assert.equal(fixture.outputs.merge, merge);
+  assert.equal(fixture.outputs.auto_merge, "false");
+});
+
+test("merge still delegates the exact head to GitHub after verifying immutable parents", async () => {
+  const fixture = syncFixture();
+  await mergeUpstream({
+    ...fixture,
+    expected: { ...expected, pr: 1, validationSucceeded: true },
+  });
+  assert.equal(fixture.merges.length, 1);
+  assert.equal(fixture.merges[0].sha, head);
+  assert.equal(fixture.merges[0].merge_method, "merge");
+});
+
+test("merge stops when the PR candidate changes during the final API recheck", async () => {
+  const fixture = syncFixture({ moveBeforeMerge: true });
+  await assert.rejects(
+    mergeUpstream({ ...fixture, expected: { ...expected, pr: 1, validationSucceeded: true } }),
+    /identity or parent/,
+  );
+  assert.deepEqual(fixture.merges, []);
+});
+
+test("merge still refuses protected changes after stale-base metadata is corrected", async () => {
+  const fixture = syncFixture({ protectedFiles: true });
+  await assert.rejects(
+    mergeUpstream({ ...fixture, expected: { ...expected, pr: 1, validationSucceeded: true } }),
+    /Protected files/,
+  );
+  assert.deepEqual(fixture.merges, []);
 });

@@ -51,6 +51,23 @@ function outstandingChangeRequest(reviews) {
   return [...latest.values()].includes("CHANGES_REQUESTED");
 }
 
+function candidateFromMerge(pr, commit) {
+  const parents = commit?.parents;
+  if (
+    !SHA.test(pr.merge_commit_sha || "") ||
+    commit?.sha !== pr.merge_commit_sha ||
+    !Array.isArray(parents) ||
+    parents.length !== 2 ||
+    parents.some((parent) => !SHA.test(parent?.sha || "")) ||
+    parents[1].sha !== pr.head.sha
+  ) {
+    throw new Error("Candidate merge identity or parent SHAs do not match the pull request.");
+  }
+  // PR base.sha can lag behind main. Use the immutable merge's first parent;
+  // callers still compare it with the independently fetched current branch.
+  return { ...pr, base: { ...pr.base, sha: parents[0].sha } };
+}
+
 function assertMergeable(expected, pr, branchSha, validationSucceeded) {
   for (const value of [expected.head, expected.base, expected.merge]) {
     if (!SHA.test(value || "")) throw new Error("Missing or invalid validated SHA.");
@@ -145,10 +162,19 @@ async function prepare({ github, context, core }) {
     candidate.mergeable !== true ||
     !SHA.test(candidate.merge_commit_sha || "") ||
     candidate.head.sha !== head ||
-    candidate.base.sha !== baseSha ||
     candidate.base.ref !== repo.branch
   ) {
     core.warning(`PR #${pr.number} needs conflict resolution or a fresh base snapshot.`);
+    await core.summary.addRaw(`Review required: ${pr.html_url}`).write();
+    return;
+  }
+  const { data: commit } = await github.rest.git.getCommit({
+    ...context.repo,
+    commit_sha: candidate.merge_commit_sha,
+  });
+  candidate = candidateFromMerge(candidate, commit);
+  if (candidate.base.sha !== baseSha) {
+    core.warning(`PR #${pr.number} merge parents do not match the current base.`);
     await core.summary.addRaw(`Review required: ${pr.html_url}`).write();
     return;
   }
@@ -177,7 +203,12 @@ async function merge({ github, context, core, expected }) {
   const repo = await repository(github, context);
   const pull_number = Number(expected.pr);
   if (!Number.isSafeInteger(pull_number) || pull_number < 1) throw new Error("Invalid PR number.");
-  const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number });
+  const { data: snapshot } = await github.rest.pulls.get({ ...context.repo, pull_number });
+  const { data: commit } = await github.rest.git.getCommit({
+    ...context.repo,
+    commit_sha: expected.merge,
+  });
+  const pr = candidateFromMerge(snapshot, commit);
   const { data: branch } = await github.rest.repos.getBranch(repo);
   assertMergeable(expected, pr, branch.commit.sha, expected.validationSucceeded === true);
   if (!isUpstreamPr(pr) || pr.base.ref !== repo.branch) {
@@ -220,6 +251,13 @@ async function merge({ github, context, core, expected }) {
   // Recheck immediately before the merge API call; branch protection remains authoritative.
   const { data: latest } = await github.rest.repos.getBranch(repo);
   if (latest.commit.sha !== expected.base) throw new Error("Base moved; revalidation required.");
+  const { data: latestPr } = await github.rest.pulls.get({ ...context.repo, pull_number });
+  assertMergeable(
+    expected,
+    candidateFromMerge(latestPr, commit),
+    latest.commit.sha,
+    expected.validationSucceeded === true,
+  );
   const { data: result } = await github.rest.pulls.merge({
     ...context.repo,
     pull_number,
@@ -237,6 +275,7 @@ module.exports = {
   protectedPath,
   reviewRequired,
   outstandingChangeRequest,
+  candidateFromMerge,
   assertMergeable,
   prepare,
   merge,
