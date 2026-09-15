@@ -191,7 +191,8 @@ test("prepare creates a cross-repository PR without writing Git refs", async () 
           data: { commit: { sha: args.owner === "pingdotgg" ? head : base } },
         }),
         compareCommits: async (args) => ({
-          data: args.base === head ? { status: "diverged" } : { files: [{ filename: "apps/a.ts" }] },
+          data:
+            args.base === head ? { status: "diverged" } : { files: [{ filename: "apps/a.ts" }] },
         }),
       },
       pulls: {
