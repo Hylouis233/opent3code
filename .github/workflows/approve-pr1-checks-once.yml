@@ -42,7 +42,6 @@ jobs:
               (34943486385, 'Mobile Fingerprint Check', '.github/workflows/mobile-fingerprint-check.yml', 358431888),
           ]
           results = []
-          opener = urllib.request.build_opener()
           class NoRedirect(urllib.request.HTTPRedirectHandler):
               def redirect_request(self, req, fp, code, msg, headers, newurl):
                   return None
@@ -69,7 +68,10 @@ jobs:
               assert pull['head']['sha'] == head, 'Upstream head moved; fresh approval required'
               assert pull['head']['repo']['id'] == 1153130349, 'Unexpected source repository'
               assert pull['base']['repo']['id'] == 1341460159, 'Unexpected destination repository'
-              assert pull['merge_commit_sha'] == merge, 'Merge candidate changed'
+              # Merge metadata can be omitted while GitHub refreshes the PR summary.
+              # The canonical Git reference and both parents remain mandatory.
+              _, merge_ref = api('git/ref/pull/1/merge')
+              assert merge_ref['object']['sha'] == merge, 'Merge candidate changed'
               _, main = api('git/ref/heads/main')
               assert main['object']['sha'] == base, 'Fork main moved; fresh approval required'
               _, candidate = api('git/commits/' + merge)
