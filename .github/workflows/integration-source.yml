@@ -22,42 +22,31 @@ jobs:
           git checkout --detach FETCH_HEAD
       - uses: actions/download-artifact@v8
         with:
-          name: integration-final-verification
-          run-id: 34990493880
+          name: integration-ready-source
+          run-id: 34991370431
           github-token: ${{ github.token }}
           path: /tmp/prior-evidence
-      - name: Restore hash-verified candidate and normalize Node imports
+      - name: Restore verified candidate and apply actual-protocol regression fix
         run: |
+          set -euo pipefail
           python3 <<'PY'
-          import pathlib,json,hashlib,re
+          import pathlib,json,hashlib
           data=pathlib.Path('/tmp/prior-evidence/files.json').read_bytes()
-          assert hashlib.sha256(data).hexdigest()=='94a8b077a84157aecdd6f47dec1985afde4646fdd98a25c96ebfd14368b6d409'
-          entries=json.loads(data)
-          assert len(entries)==35
+          assert hashlib.sha256(data).hexdigest()=='ae5930854ab8e2318ae357d623edc244cb7ec04f8ae9dded1b802da2c6b3ee18'
+          entries=json.loads(data);assert len(entries)==35
           for entry in entries:
-              p=pathlib.Path(entry['path']);assert not p.is_absolute() and '..' not in p.parts and p.parts[0] in ['.github','.gitignore','README.md','apps','packages','scripts','integrations','knip.jsonc','docs']
+              p=pathlib.Path(entry['path']);assert not p.is_absolute() and '..' not in p.parts
               p.parent.mkdir(parents=True,exist_ok=True);p.write_text(entry['content']);p.chmod(int(entry['mode'],8)&0o777)
-          for name in ['scripts/opent3code-preview.mjs','integrations/dsh-opent3code/prepare-profile.mjs']:
-              p=pathlib.Path(name);text=p.read_text()
-              match=re.search(r'import \{([^}]+)\} from "node:fs";',text);assert match
-              names=[n.strip().strip(',') for n in match.group(1).split(',') if n.strip()]
-              text=text[:match.start()]+'import * as NodeFS from "node:fs";'+text[match.end():]
-              for token in names:text=re.sub(r'\b'+token+r'\(', 'NodeFS.'+token+'(',text)
-              for before,after in [('import { homedir } from "node:os";','import * as NodeOS from "node:os";'),('import path from "node:path";','import * as NodePath from "node:path";'),('import { fileURLToPath } from "node:url";','import * as NodeURL from "node:url";')]:
-                  assert text.count(before)==1;text=text.replace(before,after)
-              text=re.sub(r'\bhomedir\(', 'NodeOS.homedir(',text)
-              text=re.sub(r'\bpath\.', 'NodePath.',text)
-              text=re.sub(r'\bfileURLToPath\(', 'NodeURL.fileURLToPath(',text)
-              if 'import { spawn } from "node:child_process";' in text:
-                  text=text.replace('import { spawn } from "node:child_process";','import * as NodeChildProcess from "node:child_process";')
-                  text=re.sub(r'\bspawn\(', 'NodeChildProcess.spawn(',text)
-              p.write_text(text)
-          p=pathlib.Path('.github/scripts/opent3code-preview.test.cjs');text=p.read_text();assert text.count('    if (process.platform')==1
-          text=text.replace('    if (process.platform','    // oxlint-disable-next-line t3code/no-global-process-runtime -- Dependency-free Node test checks host symlink support, without loading the application runtime.\n    if (process.platform')
-          p.write_text(text)
           pathlib.Path('/tmp/output').mkdir(exist_ok=True)
           pathlib.Path('/tmp/output/paths.json').write_text(json.dumps(entries))
           PY
+          curl --fail --silent --show-error "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/.github/integration-native-fix.py" -o /tmp/native-fix.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('/tmp/native-fix.py');text=p.read_text();assert text.count('assert.equal(h.adapter.listSessions().length')==1
+          p.write_text(text.replace('assert.equal(h.adapter.listSessions().length','assert.equal((yield* h.adapter.listSessions()).length'))
+          PY
+          python3 /tmp/native-fix.py
       - uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
@@ -71,7 +60,7 @@ jobs:
           subprocess.run(['vp','fmt',*[p for p in paths if not p.endswith('LICENSE') and p!='.gitignore']],check=True)
           for entry in entries:entry['content']=pathlib.Path(entry['path']).read_text()
           (root/'files.json').write_text(json.dumps(entries))
-          commands={'maintenance':['node','--test',*sorted(str(p) for p in pathlib.Path('.github/scripts').glob('opent3code-*.test.cjs'))],'provider':['vp','run','--filter','t3','test','src/provider/Drivers/ExternalAcpDriver.test.ts','src/provider/acp/ExternalAcpPolicy.test.ts'],'lint':['vp','lint',*[p for p in paths if p.endswith(('.ts','.mjs','.cjs'))]],'types':['vp','run','--filter','t3','--filter','@t3tools/web','--filter','@t3tools/contracts','typecheck']}
+          commands={'maintenance':['node','--test',*sorted(str(p) for p in pathlib.Path('.github/scripts').glob('opent3code-*.test.cjs'))],'provider':['vp','run','--filter','t3','test','src/provider/Drivers/ExternalAcpDriver.test.ts','src/provider/acp/ExternalAcpPolicy.test.ts'],'lint':['vp','lint',*[p for p in paths if p.endswith(('.ts','.mjs','.cjs'))]],'types':['vp','run','--filter','t3','--filter','@t3tools/web','--filter','@t3tools/contracts','typecheck'],'knip':['vp','run','knip:check']}
           status={}
           for name,command in commands.items():
               with (root/(name+'.log')).open('w') as log:status[name]=subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,timeout=300).returncode
@@ -82,11 +71,11 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: integration-ready-source
+          name: integration-verified-source
           path: /tmp/output/
           retention-days: 3
 
-  mcode_fixture:
+  native_permission:
     if: github.repository_id == '1341460159'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -94,54 +83,31 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.13.1'
-      - name: Inspect actual ACP mode negotiation with a local deterministic model
+      - name: Reuse exact loopback fixture with native permission control and no prompt
         run: |
           set -euo pipefail
-          mkdir -p evidence
-          npm install --prefix "$RUNNER_TEMP/mcode-cli" @minimax-ai/code@0.4.7 > evidence/install.log 2>&1
-          export PATH="$RUNNER_TEMP/mcode-cli/node_modules/.bin:$PATH"
-          export MINIMAX_DATA_DIR="$RUNNER_TEMP/mcode-fixture-home"
-          export MCODE_PROVIDER_API_KEY=nonsecret-loopback-fixture
-          node --input-type=module <<'JS'
-          import http from 'node:http';import {spawn} from 'node:child_process';import {createInterface} from 'node:readline';import fs from 'node:fs';import path from 'node:path';
-          const evidence={fixtureOnly:true,paidAccountUsed:false,requests:[]};
-          const server=http.createServer(async(req,res)=>{
-            let raw='';for await(const chunk of req)raw+=chunk;
-            const body=raw?JSON.parse(raw):{};evidence.requests.push({url:req.url,method:req.method,stream:body.stream??false});
-            if(req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify({object:'list',data:[{id:'fixture-model',object:'model',owned_by:'local-fixture'}]}));return;}
-            const base={id:'chatcmpl-local-fixture',object:'chat.completion',created:1789488000,model:'fixture-model'};
-            if(body.stream){res.setHeader('content-type','text/event-stream');res.write('data: '+JSON.stringify({...base,object:'chat.completion.chunk',choices:[{index:0,delta:{role:'assistant',content:'LOCAL_FIXTURE_OK'},finish_reason:null}]})+'\n\n');res.write('data: '+JSON.stringify({...base,object:'chat.completion.chunk',choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}})+'\n\n');res.end('data: [DONE]\n\n');}
-            else {res.setHeader('content-type','application/json');res.end(JSON.stringify({...base,choices:[{index:0,message:{role:'assistant',content:'LOCAL_FIXTURE_OK'},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}}));}
-          });
-          await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const url='http://127.0.0.1:'+server.address().port+'/v1';
-          const command=(args)=>new Promise(resolve=>{const p=spawn('mcode',args,{env:process.env,stdio:['ignore','pipe','pipe']});let stdout='',stderr='';p.stdout.on('data',v=>stdout+=v);p.stderr.on('data',v=>stderr+=v);const timer=setTimeout(()=>p.kill('SIGKILL'),45000);p.on('close',code=>{clearTimeout(timer);resolve({args,code,stdout,stderr});});});
-          let child;
-          try {
-            evidence.add=await command(['provider','add','--name','local-fixture','--base-url',url,'--api-format','openai-completions','--model','fixture-model']);
-            evidence.list=await command(['provider','list','--json']);
-            const listing=JSON.parse(evidence.list.stdout);let id;
-            const walk=value=>{if(!value||typeof value!=='object')return;if(!Array.isArray(value)&&(value.name==='local-fixture'||value.baseUrl===url||value.baseURL===url))id=value.id??value.providerId;for(const item of Object.values(value))walk(item);};walk(listing);
-            if(!id)throw Error('Could not identify the newly created loopback provider');
-            evidence.test=await command(['provider','test',id,'--model','fixture-model','--json']);
-            if(evidence.test.code!==0)throw Error('Loopback provider validation failed');
-            fs.writeFileSync(path.join(process.env.MINIMAX_DATA_DIR,'config.yaml'),JSON.stringify({defaultModel:id+'/fixture-model',permissionMode:'default'})+'\n');
-            child=spawn('mcode',['acp'],{env:process.env,stdio:['pipe','pipe','pipe']});const closed=new Promise(resolve=>child.once('close',resolve));let stderr='';child.stderr.on('data',v=>stderr+=v);child.stdin.on('error',()=>{});const pending=new Map();let seq=0;const notifications=[];
-            createInterface({input:child.stdout}).on('line',line=>{try{const msg=JSON.parse(line),waiter=pending.get(msg.id);if(waiter){pending.delete(msg.id);clearTimeout(waiter.timer);waiter.resolve(msg);}else notifications.push(msg);}catch{}});
-            const call=(method,params)=>new Promise((resolve,reject)=>{const id=++seq,timer=setTimeout(()=>{pending.delete(id);reject(Error(method+' timed out'));},45000);pending.set(id,{resolve,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});
-            try{
-              evidence.initialize=await call('initialize',{protocolVersion:1,clientCapabilities:{},clientInfo:{name:'opent3code',version:'0.1.0-alpha.1'}});
-              evidence.session=await call('session/new',{cwd:process.cwd(),mcpServers:[]});
-              const sessionId=evidence.session.result?.sessionId;if(!sessionId)throw Error('Native session creation rejected');
-              const mode=evidence.session.result.configOptions?.find(o=>o.category==='mode');
-              evidence.mode=mode?await call('session/set_config_option',{sessionId,configId:mode.id,value:'default'}):await call('session/set_mode',{sessionId,modeId:'default'});
-              if(!evidence.mode.error)evidence.prompt=await call('session/prompt',{sessionId,prompt:[{type:'text',text:'Return the fixture response without tools.'}]});
-            }finally{child.kill('SIGTERM');const timer=setTimeout(()=>child.kill('SIGKILL'),2000);await closed;clearTimeout(timer);for(const waiter of pending.values())clearTimeout(waiter.timer);evidence.stderr=stderr;evidence.notifications=notifications;}
-          } catch(error){evidence.error=error.message;}
-          finally {if(child&&child.exitCode===null)child.kill('SIGKILL');server.closeAllConnections();await new Promise(resolve=>server.close(resolve));fs.writeFileSync('evidence/mcode-local-fixture.json',JSON.stringify(evidence,null,2));}
-          JS
+          curl --fail --silent --show-error "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/79c1ff9ff6443bdcdc366e85817de9c15f2c8521/.github/workflows/integration-source.yml" -o /tmp/previous.yml
+          python3 <<'PY'
+          from pathlib import Path
+          text=Path('/tmp/previous.yml').read_text()
+          marker='      - name: Inspect actual ACP mode negotiation with a local deterministic model\n        run: |\n'
+          assert text.count(marker)==1
+          body=text.split(marker)[1].split('      - uses: actions/upload-artifact@v7')[0]
+          script='\n'.join(line[10:] if line.startswith('          ') else line for line in body.splitlines())+'\n'
+          assert script.count("permissionMode:'default'")==1
+          script=script.replace("permissionMode:'default'","permissionMode:'bypassPermissions'")
+          assert script.count("o=>o.category==='mode'")==1
+          script=script.replace("o=>o.category==='mode'","o=>o.id==='permissionMode'")
+          old="if(!evidence.mode.error)evidence.prompt=await call('session/prompt',{sessionId,prompt:[{type:'text',text:'Return the fixture response without tools.'}]});"
+          assert script.count(old)==1
+          script=script.replace(old,"evidence.confirmedSupervised=evidence.mode.result?.configOptions?.some(o=>o.id==='permissionMode'&&o.currentValue==='default')===true; evidence.promptSent=false;")
+          script+="node -e \"const e=require('./evidence/mcode-local-fixture.json'); if(!e.confirmedSupervised||e.promptSent!==false)process.exit(1);\"\n"
+          Path('/tmp/native-probe.sh').write_text(script)
+          PY
+          bash /tmp/native-probe.sh
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mcode-loopback-evidence
+          name: mcode-native-permission-evidence
           path: evidence/
           retention-days: 3
