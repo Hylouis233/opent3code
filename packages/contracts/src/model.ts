@@ -167,6 +167,8 @@ export const ANTIGRAVITY_DEFAULT_MODEL = "antigravity-default";
 export const DEFAULT_TEXT_GENERATION_REASONING_EFFORT = "low";
 
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
+  [ProviderDriverKind.make("mcode")]: "cli-default",
+  [ProviderDriverKind.make("dsh")]: "cli-default",
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-fable-5-1",
   [CURSOR_DRIVER_KIND]: "auto",
@@ -216,6 +218,8 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
 // ── Provider display names ────────────────────────────────────────────
 
 export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>> = {
+  [ProviderDriverKind.make("mcode")]: "MiniMax Code",
+  [ProviderDriverKind.make("dsh")]: "DeepSeek Harness",
   [ProviderDriverKind.make("antigravity")]: "Antigravity",
   [CODEX_DRIVER_KIND]: "Codex",
   [CLAUDE_DRIVER_KIND]: "Claude",

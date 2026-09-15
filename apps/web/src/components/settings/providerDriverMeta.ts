@@ -3,6 +3,8 @@ import {
   ClaudeSettings,
   CodexSettings,
   CursorSettings,
+  MCodeSettings,
+  DshSettings,
   GrokSettings,
   OpenCodeSettings,
   ProviderDriverKind,
@@ -10,6 +12,7 @@ import {
 import type * as Schema from "effect/Schema";
 import {
   AntigravityIcon,
+  ACPRegistryIcon,
   ClaudeAI,
   CursorIcon,
   GrokIcon,
@@ -44,6 +47,20 @@ export interface ProviderClientDefinition {
 }
 
 const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
+  {
+    value: ProviderDriverKind.make("mcode"),
+    label: "MiniMax Code",
+    icon: ACPRegistryIcon,
+    settingsSchema: MCodeSettings,
+    badgeLabel: "Preview",
+  },
+  {
+    value: ProviderDriverKind.make("dsh"),
+    label: "DeepSeek Harness",
+    icon: ACPRegistryIcon,
+    settingsSchema: DshSettings,
+    badgeLabel: "Preview",
+  },
   {
     value: ProviderDriverKind.make("codex"),
     label: "Codex",
