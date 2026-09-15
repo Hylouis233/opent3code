@@ -4,7 +4,7 @@
   "description": "Supervised official DSH ACP profile bundle for OpenT3Code source previews",
   "license": "MIT",
   "private": false,
-  "files": ["cordis.patch.yml", "README.md", "LICENSE"],
+  "files": ["cordis.patch.yml", "prepare-profile.mjs", "README.md", "LICENSE"],
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "dependencies": {
     "@deepseek-ai/dsh-base": "0.1.5-rc.2",
