@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   deploy_relay:
+    # This inherited workflow owns upstream infrastructure, not the fork's.
+    if: github.repository == 'pingdotgg/t3code'
     name: Deploy production relay
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 15

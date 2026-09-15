@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="670" viewBox="0 0 1280 670" role="img" aria-labelledby="title desc">
+  <title id="title">OpenT3Code: current architecture and extension direction</title>
+  <desc id="desc">Existing provider adapters connect to orchestration and web, desktop, and mobile clients. Proposed general CLI and TUI bridges, desktop integrations, and a standalone TUI are separated below by a dashed border and labeled planned.</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#627b8c"/></marker></defs>
+  <rect x="1" y="1" width="1278" height="668" rx="20" fill="#f7fafc" stroke="#d9e4eb"/>
+  <g font-family="Inter,Segoe UI,Arial,sans-serif">
+    <text x="48" y="56" fill="#122b40" font-size="28" font-weight="700">One foundation. More ways to work.</text>
+    <text x="48" y="84" fill="#526b7c" font-size="15">Existing implementation above; proposed extensions below. This is not a product screenshot.</text>
+    <g font-size="12" font-weight="700" letter-spacing="1.5" fill="#4d687b"><text x="48" y="129">AGENTS / PROVIDERS</text><text x="495" y="129">LOCAL ORCHESTRATION</text><text x="935" y="129">CLIENTS</text></g>
+    <rect x="48" y="151" width="340" height="242" rx="14" fill="#fff" stroke="#bdcfdc"/>
+    <g fill="#19384d" font-size="17"><text x="72" y="189">Codex</text><text x="232" y="189">Claude Code</text><text x="72" y="233">Cursor</text><text x="232" y="233">Grok Build</text><text x="72" y="277">OpenCode</text><text x="232" y="277">Antigravity</text></g>
+    <path d="M72 302H364" stroke="#e0e8ef"/>
+    <text x="72" y="330" fill="#4d687b" font-size="14">Provider-specific adapters</text><text x="72" y="356" fill="#4d687b" font-size="13">Capabilities vary by provider and version.</text>
+    <g fill="none" stroke="#627b8c" stroke-width="2" marker-end="url(#arrow)"><path d="M390 269H462"/><path d="M817 269H891"/></g>
+    <rect x="470" y="151" width="342" height="242" rx="14" fill="#102d40"/>
+    <text x="494" y="191" fill="#ecf7fc" font-size="23" font-weight="700">OpenT3Code core</text>
+    <g fill="#c1d6e3" font-size="16"><text x="494" y="232">Sessions + typed events</text><text x="494" y="267">Permissions + streaming</text><text x="494" y="302">Workspaces + checkpoints</text><text x="494" y="337">Local / remote connections</text></g>
+    <rect x="900" y="151" width="332" height="242" rx="14" fill="#fff" stroke="#bdcfdc"/>
+    <g fill="#19384d" font-size="17"><text x="924" y="190">Web client</text><text x="924" y="232">Electron desktop</text><text x="924" y="274">Mobile client source</text></g>
+    <path d="M924 302H1208" stroke="#e0e8ef"/>
+    <text x="924" y="330" fill="#4d687b" font-size="14">Server CLI available</text><text x="924" y="356" fill="#4d687b" font-size="13">Not a standalone conversational TUI.</text>
+    <rect x="48" y="429" width="1184" height="185" rx="14" fill="#eff7f6" stroke="#6a9895" stroke-dasharray="7 6"/>
+    <text x="72" y="462" fill="#1e6763" font-size="12" font-weight="700" letter-spacing="1.4">PLANNED EXTENSION SPACE / CONTRIBUTIONS WELCOME</text>
+    <g fill="#184e4c" font-size="19" font-weight="600"><text x="72" y="507">General CLI / TUI bridges</text><text x="481" y="507">Desktop integrations</text><text x="890" y="507">Standalone TUI client</text></g>
+    <g fill="#426f6c" font-size="14"><text x="72" y="538">Protocol or PTY integration, with explicit</text><text x="72" y="560">session and permission capabilities.</text><text x="481" y="538">Supported local APIs or bridges,</text><text x="481" y="560">not arbitrary desktop-app control.</text><text x="890" y="538">Terminal-first access to the</text><text x="890" y="560">shared orchestration contracts.</text></g>
+    <text x="48" y="646" fill="#5e7585" font-size="13">Solid panels: available in the inherited source. Dashed panel: direction, not a compatibility guarantee.</text>
+  </g>
+</svg>

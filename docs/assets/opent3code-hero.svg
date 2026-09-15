@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="520" viewBox="0 0 1280 520" role="img" aria-labelledby="title desc">
+  <title id="title">OpenT3Code</title>
+  <desc id="desc">Your agents. Your tools. Your interface. An independent, source-first fork, open to CLI, desktop, web, mobile, and TUI integrations.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0b1220"/><stop offset="1" stop-color="#142739"/></linearGradient>
+    <linearGradient id="accent"><stop stop-color="#6ee7b7"/><stop offset="1" stop-color="#67e8f9"/></linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#6ee7b7" stroke-opacity=".055"/></pattern>
+  </defs>
+  <rect width="1280" height="520" rx="24" fill="url(#bg)"/>
+  <rect width="1280" height="520" rx="24" fill="url(#grid)"/>
+  <g font-family="Inter,Segoe UI,Arial,sans-serif">
+    <rect x="56" y="52" width="56" height="56" rx="16" fill="url(#accent)"/>
+    <g fill="none" stroke="#102331" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="m77 70-10 10 10 10m14-20 10 10-10 10m-9 4 5-28"/></g>
+    <text x="130" y="75" fill="#98b1c6" font-size="13" font-weight="700" letter-spacing="2.4">INDEPENDENT FORK</text>
+    <text x="130" y="100" fill="#d5e4ef" font-size="17">Open by design. Community by choice.</text>
+    <text x="56" y="191" fill="#f1f8fd" font-size="65" font-weight="750" letter-spacing="-2.5">OpenT3Code</text>
+    <text x="58" y="250" fill="#f1f8fd" font-size="31" font-weight="600">Your agents. Your tools.</text>
+    <text x="58" y="295" fill="url(#accent)" font-size="31" font-weight="600">Your interface.</text>
+    <text x="58" y="340" fill="#a2b8cb" font-size="17">A broader home for agent-powered development.</text>
+    <g font-size="12" font-weight="700" letter-spacing="1">
+      <rect x="58" y="389" width="96" height="33" rx="16" fill="#1b3d40"/><text x="106" y="410" fill="#98f4d4" text-anchor="middle">MIT</text>
+      <rect x="166" y="389" width="142" height="33" rx="16" fill="#203448"/><text x="237" y="410" fill="#c1d7e9" text-anchor="middle">SOURCE FIRST</text>
+      <rect x="320" y="389" width="173" height="33" rx="16" fill="#203448"/><text x="406" y="410" fill="#c1d7e9" text-anchor="middle">UPSTREAM LINKED</text>
+    </g>
+    <g transform="translate(714 89)">
+      <rect width="506" height="333" rx="18" fill="#0c1725" stroke="#344b61"/>
+      <path d="M0 43H506" stroke="#344b61"/>
+      <circle cx="21" cy="22" r="4" fill="#667c91"/><circle cx="36" cy="22" r="4" fill="#667c91"/><circle cx="51" cy="22" r="4" fill="#667c91"/>
+      <text x="482" y="27" fill="#90a8bd" font-size="11" text-anchor="end" letter-spacing="1.2">ECOSYSTEM DIRECTION</text>
+      <g fill="none" stroke="#47657b" stroke-width="1.5"><path d="M253 163V109H108m145 0h145M253 163v72H108m145 0h145"/></g>
+      <g font-size="15" font-weight="600" text-anchor="middle">
+        <rect x="29" y="77" width="156" height="64" rx="11" fill="#15293b" stroke="#3c586e"/><text x="107" y="104" fill="#def0fc">CLI + TUI</text><text x="107" y="124" fill="#99afc0" font-size="11" font-weight="400">terminal workflows</text>
+        <rect x="321" y="77" width="156" height="64" rx="11" fill="#15293b" stroke="#3c586e"/><text x="399" y="104" fill="#def0fc">Desktop</text><text x="399" y="124" fill="#99afc0" font-size="11" font-weight="400">native workflows</text>
+        <rect x="29" y="204" width="156" height="64" rx="11" fill="#15293b" stroke="#3c586e"/><text x="107" y="231" fill="#def0fc">Web + Mobile</text><text x="107" y="251" fill="#99afc0" font-size="11" font-weight="400">across your devices</text>
+        <rect x="321" y="204" width="156" height="64" rx="11" fill="#15293b" stroke="#3c586e"/><text x="399" y="231" fill="#def0fc">Your next tool</text><text x="399" y="251" fill="#99afc0" font-size="11" font-weight="400">open contributions</text>
+        <rect x="192" y="142" width="123" height="48" rx="14" fill="url(#accent)"/><text x="253" y="172" fill="#0d2b34">OpenT3Code</text>
+      </g>
+      <text x="253" y="305" fill="#8ca4b9" font-size="12" text-anchor="middle">Integration availability is documented in the README.</text>
+    </g>
+    <path d="M58 456H1220" stroke="#2b4053"/>
+    <text x="58" y="483" fill="#8ea8bd" font-size="12">Built on T3 Code. Independently maintained. Not affiliated with or endorsed by upstream.</text>
+  </g>
+</svg>

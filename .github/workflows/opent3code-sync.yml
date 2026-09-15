@@ -1,0 +1,136 @@
+name: OpenT3Code upstream sync
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/opent3code-sync.yml
+      - .github/scripts/opent3code-sync.cjs
+      - .github/scripts/opent3code-sync.test.cjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opent3code-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository_id == '1341460159'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      pr: ${{ steps.prepare.outputs.pr }}
+      head: ${{ steps.prepare.outputs.head }}
+      base: ${{ steps.prepare.outputs.base }}
+      merge: ${{ steps.prepare.outputs.merge }}
+      auto_merge: ${{ steps.prepare.outputs.auto_merge }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Test trusted maintenance policy
+        run: node --test .github/scripts/opent3code-sync.test.cjs
+      - name: Prepare an immutable upstream snapshot PR
+        id: prepare
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const sync = require('./.github/scripts/opent3code-sync.cjs');
+            await sync.prepare({ github, context, core });
+
+  validate:
+    needs: prepare
+    if: needs.prepare.outputs.merge != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the exact candidate without persisted credentials
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.merge }}
+          fetch-depth: 2
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - name: Verify the tested merge parents
+        env:
+          EXPECTED_BASE: ${{ needs.prepare.outputs.base }}
+          EXPECTED_HEAD: ${{ needs.prepare.outputs.head }}
+        run: |
+          test "$(git rev-parse HEAD^1)" = "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD^2)" = "$EXPECTED_HEAD"
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Install native desktop build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - name: Ensure Electron runtime
+        run: vp run --filter @t3tools/desktop ensure:electron
+      - name: Validate fork maintenance
+        run: node --test .github/scripts/opent3code-sync.test.cjs
+      - name: Check unused code
+        run: vp run knip:check
+      - name: Lint and formatting
+        run: vp check
+      - name: Typecheck
+        run: vp run typecheck
+      - name: Test application workspaces
+        run: vp run test
+      - name: Build desktop pipeline
+        run: vp run build:desktop
+      - name: Verify desktop preload
+        run: node apps/desktop/scripts/verify-preload-bundle.mjs
+      - name: Test Rust crates
+        run: |
+          for crate in resource-monitor kde-snap-shot hyprland-snap-shot; do
+            cargo test --locked --manifest-path "native/$crate/Cargo.toml"
+          done
+
+  merge:
+    needs: [prepare, validate]
+    if: needs.validate.result == 'success' && needs.prepare.outputs.auto_merge == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+      statuses: read
+    steps:
+      - name: Checkout the trusted base, never the candidate
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+          persist-credentials: false
+      - name: Recheck provenance, reviews, checks, base and head before merging
+        uses: actions/github-script@v8
+        env:
+          SYNC_PR: ${{ needs.prepare.outputs.pr }}
+          SYNC_HEAD: ${{ needs.prepare.outputs.head }}
+          SYNC_BASE: ${{ needs.prepare.outputs.base }}
+          SYNC_MERGE: ${{ needs.prepare.outputs.merge }}
+        with:
+          script: |
+            const sync = require('./.github/scripts/opent3code-sync.cjs');
+            await sync.merge({ github, context, core, expected: {
+              pr: process.env.SYNC_PR,
+              head: process.env.SYNC_HEAD,
+              base: process.env.SYNC_BASE,
+              merge: process.env.SYNC_MERGE,
+              validationSucceeded: true,
+            }});
