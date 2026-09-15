@@ -7,71 +7,76 @@ permissions:
   contents: read
 jobs:
   snapshot:
-    if: github.repository_id == '1341460159'
+    if: github.repository_id == '1341460159' && github.actor == 'Hylouis233'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
     steps:
-      - name: Fetch immutable base and verify exact candidate patch
-        shell: bash
-        env:
-          GIT_TERMINAL_PROMPT: '0'
-        run: |
-          set -euo pipefail
-          git init .
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
-          git fetch --no-tags --no-recurse-submodules --depth=1 origin 712baceb199943385e3e059e825c32188ecad9ba
-          git checkout --detach FETCH_HEAD
-          mkdir -p /tmp/integration-output
-          curl --fail --silent --show-error "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/.github/integration-feature.patch.gz.b64" -o /tmp/integration-output/input.b64
-          python3 <<'PY'
-          import pathlib,base64,gzip,hashlib,subprocess,json
-          text=pathlib.Path('/tmp/integration-output/input.b64').read_text().strip()
-          fixes=[[243,247,''],[3670,3673,''],[4056,4057,''],[4069,4069,'nt'],[5146,5148,''],[5654,5654,'h'],[5955,5955,'4'],[6102,6104,''],[15218,15222,'']]
-          for start,end,value in fixes[::-1]: text=text[:start]+value+text[end:]
-          patch=gzip.decompress(base64.b64decode(text,validate=True))
-          assert hashlib.sha256(patch).hexdigest()=='554563d2f20c9fd339545a5945aad3c6bee22c8f7308ea8a08f7879379313545'
-          pathlib.Path('/tmp/integration-output/candidate.patch').write_bytes(patch)
-          subprocess.run(['git','apply','--index','/tmp/integration-output/candidate.patch'],check=True)
-          paths=subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
-          assert len(paths)==9 and all(p.startswith(('apps/','packages/')) and p.endswith('.ts') for p in paths)
-          pathlib.Path('/tmp/integration-output/paths.json').write_text(json.dumps(paths))
-          PY
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-      - name: Format candidate and preserve reviewable source
-        run: |
-          python3 <<'PY'
-          import pathlib,json,subprocess,base64
-          out=pathlib.Path('/tmp/integration-output')
-          paths=json.loads((out/'paths.json').read_text())
-          subprocess.run(['vp','fmt',*paths],check=True)
-          (out/'files.json').write_text(json.dumps([{'path':p,'content':pathlib.Path(p).read_text()} for p in paths]))
-          subprocess.run(['git','add','--',*paths],check=True)
-          (out/'formatted.patch').write_bytes(subprocess.check_output(['git','diff','--cached','--binary']))
-          PY
-      - name: Typecheck affected workspaces
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          vp run --filter t3 --filter @t3tools/web --filter @t3tools/contracts typecheck 2>&1 | tee /tmp/integration-output/typecheck.log
-      - name: Run focused native ACP tests
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          vp run --filter t3 test src/provider/Drivers/ExternalAcpDriver.test.ts src/provider/acp/ExternalAcpPolicy.test.ts 2>&1 | tee /tmp/integration-output/tests.log
-      - name: Lint changed files
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          python3 -c "import json,subprocess;raise SystemExit(subprocess.call(['vp','lint',*json.load(open('/tmp/integration-output/paths.json'))]))" 2>&1 | tee /tmp/integration-output/lint.log
-      - uses: actions/upload-artifact@v7
-        if: always()
+      # Artifact content is JSON data to commit, never code to execute in this privileged job.
+      - uses: actions/download-artifact@v8
         with:
           name: integration-candidate-diagnostics
-          path: /tmp/integration-output/
-          retention-days: 3
+          run-id: 34986211968
+          github-token: ${{ github.token }}
+          path: source-data
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const crypto = require('node:crypto');
+            const base = '712baceb199943385e3e059e825c32188ecad9ba';
+            const branch = 'feat/mcode-dsh-acp';
+            const data = fs.readFileSync('source-data/files.json');
+            if (crypto.createHash('sha256').update(data).digest('hex') !== '68438a686e126d62d5932edb1015699dbd4f79edd99eadeb0492e018c4f0aba2') throw Error('Source transfer digest mismatch');
+            const allowed = new Set([
+              'apps/server/src/provider/Drivers/ExternalAcpDriver.test.ts',
+              'apps/server/src/provider/Drivers/ExternalAcpDriver.ts',
+              'apps/server/src/provider/acp/AcpSessionRuntime.ts',
+              'apps/server/src/provider/acp/ExternalAcpPolicy.test.ts',
+              'apps/server/src/provider/acp/ExternalAcpPolicy.ts',
+              'apps/server/src/provider/builtInDrivers.ts',
+              'apps/web/src/components/settings/providerDriverMeta.ts',
+              'packages/contracts/src/model.ts',
+              'packages/contracts/src/settings.ts'
+            ]);
+            const files = JSON.parse(data);
+            if (files.length !== allowed.size || new Set(files.map(f=>f.path)).size !== files.length) throw Error('Unexpected paths');
+            const replace = (file, before, after) => {
+              if (file.content.split(before).length !== 2) throw Error('Replacement is not unique: '+before);
+              file.content = file.content.replace(before, after);
+            };
+            for (const file of files) {
+              if (!allowed.has(file.path) || typeof file.content !== 'string' || file.content.length > 150000) throw Error('Invalid source file');
+              if (file.path.endsWith('/ExternalAcpDriver.ts')) {
+                replace(file, 'type Runtime = ', 'const decodeResume = Schema.decodeUnknownEffect(ExternalAcpResume);\n\ntype Runtime = ');
+                replace(file, 'const processEnv =', 'const processEnv: NodeJS.ProcessEnv =');
+                replace(file, 'Schema.decodeUnknownEffect(ExternalAcpResume)(input.resumeCursor)', 'decodeResume(input.resumeCursor)');
+                replace(file, 'detail: permissionRequest.detail,', 'detail: permissionRequest.detail ?? "Native CLI permission request",');
+                replace(file, 'streamChanges: state.changes,', 'streamChanges: SubscriptionRef.changes(state),');
+              }
+              if (file.path.endsWith('/ExternalAcpDriver.test.ts')) {
+                replace(file, 'import * as Fiber from "effect/Fiber";\n', '');
+                replace(file, 'const fixture = String.raw', 'const decodeEvent = Schema.decodeUnknownEffect(ProviderRuntimeEvent);\n\nconst fixture = String.raw');
+                replace(file, 'environment: {},', 'environment: [],');
+                replace(file, 'Schema.decodeUnknownSync(ProviderRuntimeEvent)(event);', 'yield* decodeEvent(event).pipe(Effect.orDie);');
+              }
+            }
+            const repo = context.repo;
+            const {data:metadata}=await github.rest.repos.get(repo);
+            if(metadata.id!==1341460159 || metadata.owner.login!=='Hylouis233') throw Error('Wrong repository');
+            const {data:main}=await github.rest.git.getRef({...repo,ref:'heads/main'});
+            if(main.object.sha!==base) throw Error('Main changed; reconcile before creating branch');
+            try { await github.rest.git.getRef({...repo,ref:'heads/'+branch}); throw Error('Branch already exists'); }
+            catch(e) { if(e.status!==404) throw e; }
+            const {data:commit}=await github.rest.git.getCommit({...repo,commit_sha:base});
+            const tree=[];
+            for(const file of files) {
+              const {data:blob}=await github.rest.git.createBlob({...repo,content:file.content,encoding:'utf-8'});
+              tree.push({path:file.path,mode:'100644',type:'blob',sha:blob.sha});
+            }
+            const {data:nextTree}=await github.rest.git.createTree({...repo,base_tree:commit.tree.sha,tree});
+            const {data:next}=await github.rest.git.createCommit({...repo,tree:nextTree.sha,parents:[base],message:'feat(providers): add supervised MCode and DSH ACP preview adapters\n\nAdd explicit native driver identities, scoped sessions, one-shot permission mapping, cancellation and resume validation. Include subprocess fixtures. Targeted preflight exposed API/type errors; this commit applies their focused fixes. Full PR CI is required before merge. No release or runtime authentication claim.'});
+            await github.rest.git.createRef({...repo,ref:'refs/heads/'+branch,sha:next.sha});
+            await core.summary.addRaw(`Created review branch ${branch} at ${next.sha}; main unchanged.\n`).write();
