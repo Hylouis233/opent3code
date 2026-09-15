@@ -22,10 +22,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/scripts
+      - name: Checkout public repository
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git sparse-checkout set --no-cone '/*' '!/*/' '/.github/scripts/'
+          git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
       - name: Test fork maintenance and PR automation
         run: node --test .github/scripts/opent3code-sync.test.cjs .github/scripts/opent3code-pr.test.cjs .github/scripts/opent3code-pr-report.test.cjs
 
@@ -35,13 +43,17 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
       - name: Reject repository-owned PR assets
         run: |
           files="$(git ls-files .github/pr-assets)"
@@ -61,6 +73,24 @@ jobs:
         run: |
           vp fmt README.md CONTRIBUTING.md docs/operations/opent3code.md docs/operations/pr-actions.md .github/opent3code-vouched.json .github/scripts/opent3code-*.cjs .github/workflows/ci.yml .github/workflows/deploy-relay.yml .github/workflows/opent3code-sync.yml .github/workflows/pr-size.yml .github/workflows/pr-vouch.yml .github/workflows/windows-tests.yml .github/workflows/mobile-fingerprint-check.yml .github/workflows/desktop-macos-preview.yml .github/workflows/desktop-macos-preview-publish.yml
           git diff --exit-code
+      - name: Upload maintained-file formatting diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: maintained-files-format-${{ github.sha }}
+          include-hidden-files: true
+          path: |
+            .github/opent3code-vouched.json
+            .github/scripts/opent3code-*.cjs
+            .github/workflows/ci.yml
+            .github/workflows/pr-size.yml
+            .github/workflows/pr-vouch.yml
+            .github/workflows/windows-tests.yml
+            .github/workflows/mobile-fingerprint-check.yml
+            .github/workflows/desktop-macos-preview.yml
+            .github/workflows/desktop-macos-preview-publish.yml
+            docs/operations/pr-actions.md
+          retention-days: 3
       - name: Check unused code
         run: vp run knip:check
       - name: Check
@@ -81,13 +111,17 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -116,13 +150,17 @@ jobs:
         shard: [1, 2, 3]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -166,13 +204,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -251,13 +293,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -277,13 +323,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
