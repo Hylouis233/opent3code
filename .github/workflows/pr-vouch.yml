@@ -28,13 +28,20 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      # Privileged workflow: execute default-branch code only, never PR code.
+      # Public repository: no token, no submodule traversal, and no PR checkout.
       - name: Checkout trusted labeler
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-          sparse-checkout: .github/scripts
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git check-ref-format "refs/heads/$DEFAULT_BRANCH"
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git -c protocol.version=2 fetch --filter=blob:none --no-tags --no-recurse-submodules --depth=1 origin "refs/heads/$DEFAULT_BRANCH"
+          git sparse-checkout set --no-cone '/.github/scripts/'
+          git checkout --detach FETCH_HEAD
       - name: Test label policy
         run: node --test .github/scripts/opent3code-pr.test.cjs
       - name: Initialize labels and classify pull requests
