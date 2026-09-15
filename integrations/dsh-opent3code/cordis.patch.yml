@@ -1,0 +1,26 @@
+# Install into a NEW opent3code profile backed by dsh-base, not the existing ACP profile.
+# Each config below replaces the complete row config in DSH's patch language.
+- id: system-prompt
+  config:
+    personaPrefix: You are a coding agent powered by the {{model}} model.
+    personaSuffix: Your working directory is {{cwd}}.
+- id: session-title-llm
+  disabled: true
+- id: session-telemetry-otel
+  disabled: true
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+    workspaceRoot: !!js process.cwd()
+- id: approval
+  config:
+    policy: ask
+- insert:
+    - id: acp-app-startup
+      name: '@deepseek-ai/dsh-acp-app'
+    - id: acp
+      name: '@deepseek-ai/dsh-acp'
+      inject: [acpAppStartup]
+      config:
+        provider: !!js process.env.OPENT3CODE_DSH_PROVIDER ?? 'deepseek-official'
+        model: !!js process.env.OPENT3CODE_DSH_MODEL ?? 'deepseek-flash'
