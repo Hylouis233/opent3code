@@ -5,109 +5,62 @@ on:
     paths: [.github/workflows/integration-source.yml]
 permissions:
   contents: read
-  actions: read
 jobs:
-  snapshot:
-    if: github.repository_id == '1341460159'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Fetch exact branch base without Git credentials
-        run: |
-          set -euo pipefail
-          git init .
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
-          git fetch --no-tags --no-recurse-submodules --depth=1 origin 0a7afdc46f6a81d8bae8c8b434fc4e495be5216c
-          git checkout --detach FETCH_HEAD
-      - uses: actions/download-artifact@v8
-        with:
-          name: integration-ready-source
-          run-id: 34991370431
-          github-token: ${{ github.token }}
-          path: /tmp/prior-evidence
-      - name: Restore verified candidate and apply actual-protocol regression fix
-        run: |
-          set -euo pipefail
-          python3 <<'PY'
-          import pathlib,json,hashlib
-          data=pathlib.Path('/tmp/prior-evidence/files.json').read_bytes()
-          assert hashlib.sha256(data).hexdigest()=='ae5930854ab8e2318ae357d623edc244cb7ec04f8ae9dded1b802da2c6b3ee18'
-          entries=json.loads(data);assert len(entries)==35
-          for entry in entries:
-              p=pathlib.Path(entry['path']);assert not p.is_absolute() and '..' not in p.parts
-              p.parent.mkdir(parents=True,exist_ok=True);p.write_text(entry['content']);p.chmod(int(entry['mode'],8)&0o777)
-          pathlib.Path('/tmp/output').mkdir(exist_ok=True)
-          pathlib.Path('/tmp/output/paths.json').write_text(json.dumps(entries))
-          PY
-          curl --fail --silent --show-error "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/.github/integration-native-fix.py" -o /tmp/native-fix.py
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('/tmp/native-fix.py');text=p.read_text();assert text.count('assert.equal(h.adapter.listSessions().length')==1
-          p.write_text(text.replace('assert.equal(h.adapter.listSessions().length','assert.equal((yield* h.adapter.listSessions()).length'))
-          PY
-          python3 /tmp/native-fix.py
-      - uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-      - name: Format and run strict focused verification
-        run: |
-          python3 <<'PY'
-          import pathlib,json,subprocess
-          root=pathlib.Path('/tmp/output');entries=json.loads((root/'paths.json').read_text());paths=[e['path'] for e in entries]
-          subprocess.run(['vp','fmt',*[p for p in paths if not p.endswith('LICENSE') and p!='.gitignore']],check=True)
-          for entry in entries:entry['content']=pathlib.Path(entry['path']).read_text()
-          (root/'files.json').write_text(json.dumps(entries))
-          commands={'maintenance':['node','--test',*sorted(str(p) for p in pathlib.Path('.github/scripts').glob('opent3code-*.test.cjs'))],'provider':['vp','run','--filter','t3','test','src/provider/Drivers/ExternalAcpDriver.test.ts','src/provider/acp/ExternalAcpPolicy.test.ts'],'lint':['vp','lint',*[p for p in paths if p.endswith(('.ts','.mjs','.cjs'))]],'types':['vp','run','--filter','t3','--filter','@t3tools/web','--filter','@t3tools/contracts','typecheck'],'knip':['vp','run','knip:check']}
-          status={}
-          for name,command in commands.items():
-              with (root/(name+'.log')).open('w') as log:status[name]=subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,timeout=300).returncode
-              print(name,status[name],flush=True)
-          (root/'status.json').write_text(json.dumps(status))
-          raise SystemExit(0 if all(v==0 for v in status.values()) else 1)
-          PY
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: integration-verified-source
-          path: /tmp/output/
-          retention-days: 3
-
-  native_permission:
-    if: github.repository_id == '1341460159'
+  import:
+    if: github.repository_id == '1341460159' && github.actor == 'Hylouis233'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
     steps:
-      - uses: actions/setup-node@v4
+      # JSON source is treated only as bytes. This job never executes artifact code.
+      - uses: actions/download-artifact@v8
         with:
-          node-version: '24.13.1'
-      - name: Reuse exact loopback fixture with native permission control and no prompt
-        run: |
-          set -euo pipefail
-          curl --fail --silent --show-error "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/79c1ff9ff6443bdcdc366e85817de9c15f2c8521/.github/workflows/integration-source.yml" -o /tmp/previous.yml
-          python3 <<'PY'
-          from pathlib import Path
-          text=Path('/tmp/previous.yml').read_text()
-          marker='      - name: Inspect actual ACP mode negotiation with a local deterministic model\n        run: |\n'
-          assert text.count(marker)==1
-          body=text.split(marker)[1].split('      - uses: actions/upload-artifact@v7')[0]
-          script='\n'.join(line[10:] if line.startswith('          ') else line for line in body.splitlines())+'\n'
-          assert script.count("permissionMode:'default'")==1
-          script=script.replace("permissionMode:'default'","permissionMode:'bypassPermissions'")
-          assert script.count("o=>o.category==='mode'")==1
-          script=script.replace("o=>o.category==='mode'","o=>o.id==='permissionMode'")
-          old="if(!evidence.mode.error)evidence.prompt=await call('session/prompt',{sessionId,prompt:[{type:'text',text:'Return the fixture response without tools.'}]});"
-          assert script.count(old)==1
-          script=script.replace(old,"evidence.confirmedSupervised=evidence.mode.result?.configOptions?.some(o=>o.id==='permissionMode'&&o.currentValue==='default')===true; evidence.promptSent=false;")
-          script+="node -e \"const e=require('./evidence/mcode-local-fixture.json'); if(!e.confirmedSupervised||e.promptSent!==false)process.exit(1);\"\n"
-          Path('/tmp/native-probe.sh').write_text(script)
-          PY
-          bash /tmp/native-probe.sh
-      - uses: actions/upload-artifact@v7
-        if: always()
+          name: integration-verified-source
+          run-id: 34992090870
+          github-token: ${{ github.token }}
+          path: source-data
+      - uses: actions/github-script@v8
         with:
-          name: mcode-native-permission-evidence
-          path: evidence/
-          retention-days: 3
+          script: |
+            const fs=require('node:fs'),crypto=require('node:crypto');
+            const parent='0a7afdc46f6a81d8bae8c8b434fc4e495be5216c';
+            const main='712baceb199943385e3e059e825c32188ecad9ba';
+            const bytes=fs.readFileSync('source-data/files.json');
+            if(crypto.createHash('sha256').update(bytes).digest('hex')!=='b3b02fb30e51dfdd9d3570cfc80286f39fd3b6a4c88dfa2545f9242d322e66da') throw Error('Source digest mismatch');
+            const allowed=new Set([
+              '.github/ISSUE_TEMPLATE/config.yml','.github/SECURITY.md','.github/opent3code-release.json',
+              '.github/scripts/opent3code-preview.test.cjs','.github/scripts/opent3code-release.cjs','.github/scripts/opent3code-release.test.cjs',
+              '.github/workflows/ci.yml','.github/workflows/mobile-eas-preview.yml','.github/workflows/mobile-eas-production.yml',
+              '.github/workflows/opent3code-release.yml','.github/workflows/publish-aur.yml','.github/workflows/release-desktop.yml','.github/workflows/release.yml','.github/workflows/web-preview.yml',
+              '.gitignore','README.md',
+              'apps/server/src/provider/Drivers/ExternalAcpDriver.test.ts','apps/server/src/provider/Drivers/ExternalAcpDriver.ts',
+              'apps/server/src/provider/acp/AcpSessionRuntime.ts','apps/server/src/provider/acp/ExternalAcpPolicy.test.ts','apps/server/src/provider/acp/ExternalAcpPolicy.ts','apps/server/src/provider/builtInDrivers.ts',
+              'apps/web/src/components/settings/providerDriverMeta.ts',
+              'docs/operations/development.md','docs/releases/0.1.0-alpha.1.md','docs/user/opent3code-preview.md',
+              'integrations/dsh-opent3code/LICENSE','integrations/dsh-opent3code/README.md','integrations/dsh-opent3code/cordis.patch.yml','integrations/dsh-opent3code/package.json','integrations/dsh-opent3code/prepare-profile.mjs',
+              'knip.jsonc','packages/contracts/src/model.ts','packages/contracts/src/settings.ts','scripts/opent3code-preview.mjs'
+            ]);
+            const files=JSON.parse(bytes);
+            if(files.length!==allowed.size||new Set(files.map(f=>f.path)).size!==files.length)throw Error('Invalid path set');
+            for(const file of files){
+              if(!allowed.has(file.path)||typeof file.content!=='string'||file.content.length>150000)throw Error('Invalid source');
+              if(file.mode!==(file.path==='scripts/opent3code-preview.mjs'?'100755':'100644'))throw Error('Invalid mode');
+            }
+            const {data:metadata}=await github.rest.repos.get(context.repo);
+            if(metadata.id!==1341460159||metadata.owner.login!=='Hylouis233')throw Error('Wrong repository');
+            const {data:head}=await github.rest.git.getRef({...context.repo,ref:'heads/feat/mcode-dsh-acp'});
+            const {data:base}=await github.rest.git.getRef({...context.repo,ref:'heads/main'});
+            if(head.object.sha!==parent||base.object.sha!==main)throw Error('A branch moved; reconcile instead of overwriting');
+            const {data:commit}=await github.rest.git.getCommit({...context.repo,commit_sha:parent});
+            const tree=[];
+            for(const file of files){
+              const {data:blob}=await github.rest.git.createBlob({...context.repo,content:file.content,encoding:'utf-8'});
+              tree.push({path:file.path,mode:file.mode,type:'blob',sha:blob.sha});
+            }
+            const {data:nextTree}=await github.rest.git.createTree({...context.repo,base_tree:commit.tree.sha,tree});
+            const {data:next}=await github.rest.git.createCommit({...context.repo,tree:nextTree.sha,parents:[parent],message:'fix(integrations): finalize supervised ACP providers and isolated source release\n\nDistinguish MCode permissionMode from default/plan work mode and fail closed on missing or unsettled approval policy. Match actual native CLI metadata with regression fixtures. Normalize source, include launcher/release tests in CI, isolate inherited publishers, and correct source-preview instructions.\n\nRead-only verification run 34992090870: 24 ACP tests, 50 maintenance tests, lint, typecheck and unused-code checks passed. Actual MCode process confirmed a transition from bypassPermissions to Ask using a loopback-only fixture. DSH companion installation, effective config and native session creation were verified separately. Paid-account generation and native desktop installers are not certified. Full PR and exact-main CI are still required before publication.'});
+            console.log('PROPOSED_COMMIT='+next.sha);
+            console.log('PROPOSED_TREE='+nextTree.sha);
+            await core.summary.addRaw(`Created unreferenced candidate ${next.sha}. No branch, PR state, tag or release was changed.\n`).write();
