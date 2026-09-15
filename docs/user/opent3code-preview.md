@@ -46,3 +46,5 @@ Provider subprocess fixtures and official CLI handshake tests are not a substitu
 ## Feedback
 
 Report the exact release/commit, operating system, Node version, native CLI version, integration and a minimal reproduction. Redact keys, pairing URLs, personal paths and prompt contents. If repository Issues are unavailable, use the maintainer's existing contact in the test group; do not send fork-specific bugs to upstream support.
+
+MiniMax Code work mode and permission mode are separate: this adapter explicitly negotiates `permissionMode=default` (Ask) and verifies the returned option. A native session still in Plan mode is rejected; switch it back to Default in the CLI before resuming.

@@ -1,8 +1,7 @@
-# Security policy
+# OpenT3Code security reporting
 
-Report security vulnerabilities affecting T3 Code or T3 Tools-operated infrastructure to
-[security@ping.gg](mailto:security@ping.gg). Please do not disclose them publicly until we have had
-a reasonable opportunity to investigate and remediate them.
+This is an independently maintained source-preview fork. Its integration code and preview packaging are maintained by Hylouis233, not the upstream T3 team. No independent security certification is claimed.
 
-See the [full security policy](https://t3.codes/security-policy) for reporting details, scope,
-and safe harbor terms for good-faith research.
+Do not post API keys, pairing tokens, private prompts, account files or exploit details in a public issue. Use an existing private contact with the maintainer or privately request a reporting channel through the test group. A private GitHub reporting channel must be enabled and verified before it is advertised; this file alone does not enable it.
+
+Issues reproduced in unmodified upstream T3 Code can also be reported through the upstream project's own security policy. Fork-specific integrations and releases are not covered by upstream support or its safe-harbor statements.

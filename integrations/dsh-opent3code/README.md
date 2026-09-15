@@ -6,16 +6,20 @@ The preview targets `@deepseek-ai/dsh@0.1.5-rc.1` with ACP/base/application bund
 
 ## Install into a dedicated profile
 
-Install Node.js 24 and pnpm, then the official CLI. Choose a separate `DSH_HOME` before installation when an isolated account configuration is desired. Use that same home in OpenT3Code's provider settings.
+Install Node.js 24 and pnpm 11.10.0, then the official CLI. Choose a separate `DSH_HOME` before installation when an isolated account configuration is desired. Use that same home in OpenT3Code's provider settings.
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.1.5-rc.1
+# From this source directory: initialize only a NEW dedicated profile build policy.
+node prepare-profile.mjs
 # From this source directory, create the local package; no npm publication is required.
 npm pack --ignore-scripts
 # Initialize a NEW profile with dsh-base, then add the companion bundle.
 dsh plugin --profile opent3code add ./opent3code-dsh-plugin-0.1.0-alpha.1.tgz
 dsh --profile opent3code --dump-config
 ```
+
+The setup helper approves only the observed native subprocess, node-pty and koffi versions; other native build scripts remain blocked. It refuses to overwrite an existing or changed profile. A new dependency version requires review, not disabling pnpm build checks. Keep the generated lockfile.
 
 Do not add this bundle on top of the existing `acp` application bundle: that would register two ACP application rows. Configure credentials with DSH's own settings. Nothing here signs you in or includes an API key.
 

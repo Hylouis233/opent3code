@@ -49,7 +49,7 @@ jobs:
       - name: Fetch exact public source without persisted credentials
         env:
           SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
-          GIT_TERMINAL_PROMPT: '0'
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           set -euo pipefail
           git init .
@@ -59,7 +59,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - uses: actions/setup-node@v4
         with:
-          node-version: '24.13.1'
+          node-version: "24.13.1"
       - name: Test release policy and package source-only assets
         env:
           VERSION: ${{ needs.prepare.outputs.version }}

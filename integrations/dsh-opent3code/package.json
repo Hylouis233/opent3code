@@ -1,19 +1,28 @@
 {
   "name": "@opent3code/dsh-plugin",
   "version": "0.1.0-alpha.1",
+  "private": false,
   "description": "Supervised official DSH ACP profile bundle for OpenT3Code source previews",
   "license": "MIT",
-  "private": false,
-  "files": ["cordis.patch.yml", "prepare-profile.mjs", "README.md", "LICENSE"],
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
-  "dependencies": {
-    "@deepseek-ai/dsh-base": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-acp": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-acp-app": "0.1.5-rc.2"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Hylouis233/opent3code.git",
     "directory": "integrations/dsh-opent3code"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "prepare-profile.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@deepseek-ai/dsh-acp": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-acp-app": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-base": "0.1.5-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

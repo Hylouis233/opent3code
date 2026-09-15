@@ -2,7 +2,7 @@
 
 ## First checkout
 
-Install `vp` using the [root README](../../README.md#install-vp). The checkout requires Node 24;
+Install `vp` using the [root README](../../README.md#run-this-fork). The checkout requires Node 24;
 Bun is optional. From the repository root:
 
 ```sh

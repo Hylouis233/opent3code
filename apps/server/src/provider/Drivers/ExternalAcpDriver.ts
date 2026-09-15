@@ -426,19 +426,41 @@ function makeExternalDriver(
                       ),
                     );
                     if (kind === "mcode") {
-                      // Never keep an inherited bypass-permissions session: a supervised mode must be negotiated.
-                      yield* runtime
-                        .setMode("default")
+                      // MCode's normal/plan work mode is NOT its approval policy.
+                      // The separate process-scoped permissionMode option must settle to Ask.
+                      const configured = yield* runtime
+                        .setConfigOption("permissionMode", "default")
                         .pipe(
                           Effect.mapError((error) =>
                             mapAcpToAdapterError(
                               provider,
                               input.threadId,
-                              "session/set_mode",
+                              "session/set_config_option",
                               error,
                             ),
                           ),
                         );
+                      const permissionOptions = configured.configOptions.filter(
+                        (option) => option.id === "permissionMode",
+                      );
+                      const permission = permissionOptions[0];
+                      if (
+                        permissionOptions.length !== 1 ||
+                        permission?.type !== "select" ||
+                        permission.category !== "_permission" ||
+                        permission.currentValue !== "default"
+                      ) {
+                        return yield* invalid(
+                          "session/start",
+                          "MiniMax Code did not confirm supervised permissions. No prompt was sent.",
+                        );
+                      }
+                      if (started.sessionSetupResult.modes?.currentModeId !== "default") {
+                        return yield* invalid(
+                          "session/start",
+                          "This preview requires MiniMax Code's default work mode; switch out of Plan in the native CLI before resuming.",
+                        );
+                      }
                     }
                     const resumeCursor = {
                       ...expected,
@@ -621,7 +643,17 @@ function makeExternalDriver(
             lifecycle.withPermits(1)(Effect.forEach([...sessions.keys()], stop, { discard: true })),
           listSessions: () => Effect.sync(() => [...sessions.values()].map((ctx) => ctx.session)),
           hasSession: (threadId) => Effect.sync(() => sessions.has(threadId)),
-          readThread: (threadId) => get(threadId).pipe(Effect.as({ threadId, turns: [] })),
+          readThread: (threadId) =>
+            get(threadId).pipe(
+              Effect.flatMap(() =>
+                Effect.fail(
+                  invalid(
+                    "readThread",
+                    "Native transcript export is unavailable; use the OpenT3Code conversation history.",
+                  ),
+                ),
+              ),
+            ),
           rollbackThread: () =>
             Effect.fail(
               invalid(

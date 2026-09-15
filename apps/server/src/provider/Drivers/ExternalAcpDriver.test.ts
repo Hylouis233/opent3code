@@ -24,8 +24,9 @@ import { createInterface } from "node:readline";
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 const reply = (id, result) => send({jsonrpc:"2.0", id, result});
 const update = (value) => send({jsonrpc:"2.0", method:"session/update", params:{sessionId:"session-1", update:value}});
-let mode = "bypassPermissions";
-const setup = () => ({sessionId:"session-1", configOptions:[{id:"mode", name:"Permissions", category:"mode", type:"select", currentValue:mode, options:[{value:"default", name:"Supervised"},{value:"bypassPermissions", name:"Full access"}]}]});
+let permissionMode = "bypassPermissions";
+let workMode = "default";
+const setup = () => ({sessionId:"session-1", modes:{currentModeId:workMode,availableModes:[{id:"default",name:"Default"},{id:"plan",name:"Plan"}]}, configOptions:[{id:"permissionMode", name:"Permissions", category:"_permission", type:"select", currentValue:permissionMode, options:[{value:"default", name:"Supervised"},{value:"bypassPermissions", name:"Full access"}]}]});
 let active;
 const finish = (text, stopReason="end_turn") => {
   if (!active) return;
@@ -42,10 +43,11 @@ createInterface({input:process.stdin}).on("line", (line) => {
   if (method === "initialize") return reply(id, {protocolVersion:1,agentInfo:{name:"fixture",version:"1.0.0"},agentCapabilities:{sessionCapabilities:{resume:{}}}});
   if (method === "authenticate") return send({jsonrpc:"2.0",id,error:{code:-32601,message:"No authenticate: use saved CLI credentials"}});
   if (method === "session/new" || method === "session/resume") return reply(id, setup());
-  if (method === "session/set_config_option") { mode=params.value; return reply(id,{configOptions:setup().configOptions}); }
+  if (method === "session/set_mode") { workMode=params.modeId; return reply(id,{}); }
+  if (method === "session/set_config_option") { if(params.configId!=="permissionMode") return send({jsonrpc:"2.0",id,error:{code:-32602,message:"Unknown config option"}}); permissionMode=params.value; return reply(id,{configOptions:setup().configOptions}); }
   if (method === "session/cancel") return finish("", "cancelled");
   if (method === "session/prompt") {
-    if (process.argv.includes("acp") && mode !== "default") return send({jsonrpc:"2.0",id,error:{code:-32000,message:"Supervised mode was not negotiated"}});
+    if (process.argv.includes("acp") && permissionMode !== "default") return send({jsonrpc:"2.0",id,error:{code:-32000,message:"Supervised mode was not negotiated"}});
     active=id;
     const text=params.prompt[0].text;
     if (text === "crash") return process.exit(17);
@@ -61,7 +63,7 @@ createInterface({input:process.stdin}).on("line", (line) => {
 });
 `;
 
-const harness = (kind: "mcode" | "dsh") =>
+const harness = (kind: "mcode" | "dsh", source = fixture) =>
   Effect.gen(function* () {
     const dir = yield* Effect.promise(() =>
       NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "opent3code-acp-")),
@@ -70,7 +72,7 @@ const harness = (kind: "mcode" | "dsh") =>
       Effect.promise(() => NodeFSP.rm(dir, { recursive: true, force: true })),
     );
     const driver = kind === "mcode" ? MCodeDriver : DshDriver;
-    const binaryPath = writeFakeCli({ directory: dir, name: kind, source: fixture });
+    const binaryPath = writeFakeCli({ directory: dir, name: kind, source });
     const instance = yield* driver.create({
       instanceId: ProviderInstanceId.make(`${kind}-test`),
       displayName: undefined,
@@ -97,6 +99,26 @@ const harness = (kind: "mcode" | "dsh") =>
   });
 
 it.layer(NodeServices.layer)("OpenT3Code official ACP providers", (it) => {
+  for (const [label, source] of [
+    [
+      "unsettled approval response",
+      fixture.replace("currentValue:permissionMode", 'currentValue:"bypassPermissions"'),
+    ],
+    ["missing approval identity", fixture.replace('id:"permissionMode"', 'id:"unrelated"')],
+    [
+      "resumed native Plan mode",
+      fixture.replace('let workMode = "default"', 'let workMode = "plan"'),
+    ],
+  ]) {
+    it.effect(`mcode fails closed for ${label}`, () =>
+      Effect.gen(function* () {
+        const h = yield* harness("mcode", source);
+        const result = yield* h.adapter.startSession(h.start).pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        assert.equal((yield* h.adapter.listSessions()).length, 0);
+      }),
+    );
+  }
   for (const kind of ["mcode", "dsh"] as const) {
     it.effect(
       `${kind} uses saved CLI credentials, creates a scoped session and streams a complete turn`,
