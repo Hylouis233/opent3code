@@ -4,19 +4,13 @@ OpenT3Code is an independent, source-first fork of `pingdotgg/t3code`. Its repos
 
 ## Repository name and release identity
 
-The intended repository name is `Hylouis233/opent3code`. The initial content migration was committed under `Hylouis233/t3code`; changing a README does not rename a GitHub repository. A repository administrator must complete the rename in GitHub Settings, or with an authenticated GitHub CLI:
-
-```bash
-gh repo rename opent3code --repo Hylouis233/t3code --yes
-```
-
-Verify the new repository URL before updating the clone command in README. Existing clones can then use:
+The repository was renamed from `Hylouis233/t3code` to `Hylouis233/opent3code`; its stable GitHub ID `1341460159` is unchanged. GitHub redirects the old URL only until another repository claims the `t3code` name, so existing clones should point at the new address:
 
 ```bash
 git remote set-url origin https://github.com/Hylouis233/opent3code.git
 ```
 
-The sync workflow resolves its repository from GitHub's event context and verifies the stable repository ID, so the intended rename does not require hard-coding a new destination in its script.
+The sync workflow resolves its repository from GitHub's event context and verifies the stable repository ID, so the rename did not require hard-coding a new destination in its script.
 
 Repository branding is separate from runtime and release identity. The inherited `t3` and `@t3tools` package names, application IDs, protocol names, data directories, and update/distribution endpoints have not been comprehensively migrated. Do not publish these inherited packages under upstream ownership or advertise upstream installers as OpenT3Code releases. A separately tested release migration is required before publishing independent binaries or mobile applications.
 

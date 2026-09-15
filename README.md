@@ -68,9 +68,7 @@ Availability depends on your operating system, installed provider version, accou
 Use **Node.js 24.13.1 or a compatible 24.x release**, as required by the root `package.json`, and install [Vite+](https://viteplus.dev/guide/). The checked-in package manager and lockfile are the source of truth.
 
 ```bash
-# The repository slug is being migrated from t3code to opent3code.
-# The existing URL remains the bootstrap URL until the GitHub rename is complete.
-git clone https://github.com/Hylouis233/t3code.git opent3code
+git clone https://github.com/Hylouis233/opent3code.git opent3code
 cd opent3code
 vp i
 
