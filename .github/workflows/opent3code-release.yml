@@ -1,0 +1,119 @@
+name: OpenT3Code source prerelease
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opent3code-source-prerelease
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository_id == '1341460159' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.prepare.outputs.sha }}
+      version: ${{ steps.prepare.outputs.version }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      run_id: ${{ steps.prepare.outputs.run_id }}
+    steps:
+      - id: prepare
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const sha = context.payload.workflow_run.head_sha;
+            const {data:branch}=await github.rest.repos.getBranch({...context.repo,branch:'main'});
+            if(branch.commit.sha!==sha) { core.notice('Main has moved; await its own CI.'); return; }
+            const {data:file}=await github.rest.repos.getContent({...context.repo,path:'.github/scripts/opent3code-release.cjs',ref:sha});
+            if(file.type!=='file'||file.encoding!=='base64') throw Error('Trusted release policy unavailable');
+            const {Module}=require('node:module'); const policy=new Module('opent3code-release.cjs');
+            policy._compile(Buffer.from(file.content,'base64').toString('utf8'),'opent3code-release.cjs');
+            await policy.exports.prepare({github,context,core});
+
+  package:
+    needs: prepare
+    if: needs.prepare.outputs.sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Fetch exact public source without persisted credentials
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin "$SOURCE_SHA"
+          git -c submodule.recurse=false checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.1'
+      - name: Test release policy and package source-only assets
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+          CI_RUN: ${{ needs.prepare.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          node --test .github/scripts/opent3code-preview.test.cjs .github/scripts/opent3code-release.test.cjs
+          mkdir -p "$RUNNER_TEMP/payload"
+          git archive --format=zip --prefix=opent3code/ "$SOURCE_SHA" > "$RUNNER_TEMP/payload/opent3code-source-$VERSION.zip"
+          npm pack ./integrations/dsh-opent3code --ignore-scripts --pack-destination "$RUNNER_TEMP/payload"
+          node <<'NODE'
+          const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+          const root=path.join(process.env.RUNNER_TEMP,'payload');
+          const receipt={version:process.env.VERSION,sha:process.env.SOURCE_SHA,ciRun:Number(process.env.CI_RUN),sourceOnly:true};
+          fs.writeFileSync(path.join(root,'RELEASE.json'),JSON.stringify(receipt,null,2)+'\n');
+          const names=fs.readdirSync(root).sort();
+          fs.writeFileSync(path.join(root,'SHA256SUMS'),names.map(name=>crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex')+'  '+name).join('\n')+'\n');
+          require('./.github/scripts/opent3code-release.cjs').verifyPayload(root,receipt.version,receipt.sha,receipt.ciRun);
+          NODE
+      - uses: actions/upload-artifact@v7
+        with:
+          name: opent3code-release-payload
+          path: ${{ runner.temp }}/payload/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, package]
+    if: needs.package.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      # Build artifacts are checked and uploaded as bytes, never executed here.
+      - uses: actions/download-artifact@v8
+        with:
+          name: opent3code-release-payload
+          path: payload
+      - name: Recheck exact CI and publish a complete prerelease
+        uses: actions/github-script@v8
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          CI_RUN: ${{ needs.prepare.outputs.run_id }}
+        with:
+          script: |
+            const sha=process.env.SOURCE_SHA;
+            const {data:branch}=await github.rest.repos.getBranch({...context.repo,branch:'main'});
+            if(branch.commit.sha!==sha) throw Error('Main changed; release not published');
+            const {data:file}=await github.rest.repos.getContent({...context.repo,path:'.github/scripts/opent3code-release.cjs',ref:sha});
+            if(file.type!=='file'||file.encoding!=='base64') throw Error('Trusted release policy unavailable');
+            const {Module}=require('node:module');const policy=new Module('opent3code-release.cjs');
+            policy._compile(Buffer.from(file.content,'base64').toString('utf8'),'opent3code-release.cjs');
+            await policy.exports.publish({github,context,core,sha,version:process.env.VERSION,runId:process.env.CI_RUN,root:'payload'});
