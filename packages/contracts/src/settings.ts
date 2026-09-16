@@ -668,6 +668,39 @@ export const ClaudeSettings = makeProviderSettingsSchema(
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
 
+/** Source-preview ACP providers. Authentication remains in the official CLI. */
+function makeExternalAcpSettings(binary: string) {
+  return makeProviderSettingsSchema(
+    {
+      enabled: Schema.Boolean.pipe(
+        Schema.withDecodingDefault(Effect.succeed(false)),
+        Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+      ),
+      binaryPath: makeBinaryPathSetting(binary).pipe(
+        Schema.annotateKey({
+          title: "Binary path",
+          description: "The installed official CLI. Arguments are not accepted in this field.",
+          providerSettingsForm: { placeholder: binary, clearWhenEmpty: "omit" },
+        }),
+      ),
+      homePath: TrimmedString.pipe(
+        Schema.withDecodingDefault(Effect.succeed("")),
+        Schema.annotateKey({
+          title: "CLI data directory",
+          description:
+            "Optional absolute path. Use the same directory when authenticating the CLI.",
+          providerSettingsForm: { placeholder: "Absolute path (optional)", clearWhenEmpty: "omit" },
+        }),
+      ),
+    },
+    { order: ["binaryPath", "homePath"] },
+  );
+}
+export const MCodeSettings = makeExternalAcpSettings("mcode");
+export type MCodeSettings = typeof MCodeSettings.Type;
+export const DshSettings = makeExternalAcpSettings("dsh");
+export type DshSettings = typeof DshSettings.Type;
+
 export const CursorSettings = makeProviderSettingsSchema(
   {
     // Off by default like Grok and OpenCode. Users opt in from Settings.

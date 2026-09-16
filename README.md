@@ -20,7 +20,7 @@ OpenT3Code is an independently maintained fork of [T3 Code](https://github.com/p
 **Our direction is broad compatibility, not a preferred-vendor list:** command-line agents, terminal user interfaces, desktop integrations, browser clients, mobile clients, and remote workflows should all have a place here. A tool's interface should not decide whether it belongs in the ecosystem.
 
 > [!IMPORTANT]
-> **Open to every tool does not mean every tool is already integrated.** This fork currently inherits the adapters and clients listed below. A universal CLI adapter, a standalone OpenT3Code TUI, and arbitrary desktop-app control are extension goals, not shipped features. Launching a process is not the same as supporting structured sessions, permissions, streaming, or recovery.
+> **Open to every tool does not mean every tool is already integrated.** This fork includes the inherited adapters and the explicit source-preview integrations listed below. A universal CLI adapter, a standalone OpenT3Code TUI, and arbitrary desktop-app control are extension goals, not shipped features. Launching a process is not the same as supporting structured sessions, permissions, streaming, or recovery.
 
 ## What makes this fork different?
 
@@ -35,6 +35,14 @@ OpenT3Code is an independently maintained fork of [T3 Code](https://github.com/p
 This is a difference in **project scope and maintenance policy**, not a claim that the new integrations already exist. We credit the upstream project and do not imply its endorsement.
 
 ## What works today
+
+### OpenT3Code source-preview integrations
+
+**MiniMax Code and DeepSeek Harness are now native ACP provider options.** Both support supervised text sessions, assistant/reasoning/tool events, one-shot permission requests, cancellation and instance/workspace-bound native resume. They remain opt-in preview integrations; account authentication and model selection stay with the official CLI.
+
+MiniMax Code launches `mcode acp`. DeepSeek Harness launches a dedicated `opent3code` profile provided by the [installable DSH companion bundle](./integrations/dsh-opent3code/README.md). No terminal scraping or account proxy is involved. Unsupported attachment, plan-mode, steering, rollback and background text-generation operations are rejected explicitly. DSH resume does not replay native history.
+
+Start with the [source-preview guide](./docs/user/opent3code-preview.md). This release is source-only, not a signed installer or certification of live paid-account generation on every platform.
 
 ### Agent integrations inherited from upstream
 
@@ -65,35 +73,23 @@ Availability depends on your operating system, installed provider version, accou
 
 ## Run this fork
 
-Use **Node.js 24.13.1 or a compatible 24.x release**, as required by the root `package.json`, and install [Vite+](https://viteplus.dev/guide/). The checked-in package manager and lockfile are the source of truth.
+Use Node.js **24.13.1 or newer 24.x**, and install [Vite+](https://viteplus.dev/guide/). Use a fixed source-preview release or a specific commit rather than silently following a changing main branch.
 
-```bash
-git clone https://github.com/Hylouis233/opent3code.git opent3code
+```sh
+git clone https://github.com/Hylouis233/opent3code.git
 cd opent3code
 vp i
-
-# Start the local server and web client.
-vp run dev
+node scripts/opent3code-preview.mjs
 ```
 
-Use the local address printed by the development runner. Install and authenticate at least one supported agent before starting a session. Development uses checkout-local state; do not point it at an existing production profile.
+The preview launcher initializes separate `.opent3code-preview/userdata` state with **Supervised** permissions. It refuses existing native tool namespaces and does not overwrite existing preview settings. Open the complete **pairing URL** printed by the runner, not just the bare origin. Do not share its token in a group, issue or screenshot.
 
-For the desktop client:
+Install and authenticate your native CLI first. MiniMax Code is initially enabled in the new preview; install the DSH companion profile before enabling DeepSeek Harness. See the [preview guide](./docs/user/opent3code-preview.md) for versions, account ownership, installation, limits and removal.
 
-```bash
-vp run dev:desktop
-```
+Inherited developer commands such as `vp run dev` and `vp run dev:desktop` are still available, but do not automatically acquire the preview launcher's isolation policy. Normal main checkouts and linked worktrees have different defaults; consult the [development guide](./docs/operations/development.md#state-and-ports).
 
-For a desktop build:
-
-```bash
-vp run build:desktop
-```
-
-See the [development runbook](./docs/operations/development.md#first-checkout) for native dependencies and [platform-specific packaging](./package.json) commands.
-
-> [!NOTE]
-> `npx t3@latest`, the official T3 desktop installers, and the T3 App Store / Play Store applications install **upstream T3 Code**, not this fork. No `opent3code` npm package or independently branded binary is promised here. Internal `t3` / `@t3tools` package names, protocol identifiers, and application IDs remain unchanged for now; release identity and data migration require a separate, tested change.
+> [!WARNING]
+> This release does not distribute independently branded desktop installers. Internal `t3` / `@t3tools` package names, desktop application IDs and native packaging identities remain inherited. `npx t3@latest` and official T3 installers install upstream T3 Code, not OpenT3Code. Do not use an inherited installer to replace or share an existing T3 profile.
 
 ## Extending the ecosystem
 
