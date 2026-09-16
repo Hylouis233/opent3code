@@ -75,11 +75,11 @@ concurrency:
 
 jobs:
   production:
-    if: github.repository == 'pingdotgg/t3code'
     name: EAS Production ${{ github.event_name == 'push' && 'auto' || inputs.mode }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     permissions:
       contents: read
+    if: github.repository == 'pingdotgg/t3code'
     env:
       APP_VARIANT: production
       NODE_OPTIONS: --max-old-space-size=8192
