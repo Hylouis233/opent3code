@@ -7,9 +7,11 @@ import * as NodeSqlite from "node:sqlite";
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  kimiSessionIdFromTranscriptPath,
   listTranscriptFiles,
   probeMcodeUsageStore,
   readTranscriptRecords,
+  resolveKimiDesktopDataDir,
   statSqliteUsageStore,
   statUsageFile,
 } from "./usageTranscriptReader.ts";
@@ -139,11 +141,13 @@ describe("readTranscriptRecords for opencodex", () => {
           },
           reportedCostUsd: null,
           dedupeKey: "opencodex:req-2",
-  kimiSessionIdFromTranscriptPath,
-  listTranscriptFiles,
-  readTranscriptRecords,
-  resolveKimiDesktopDataDir,
-} from "./usageTranscriptReader.ts";
+        },
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+});
 
 function createKimiTranscript(lines: readonly string[]): {
   readonly filePath: string;

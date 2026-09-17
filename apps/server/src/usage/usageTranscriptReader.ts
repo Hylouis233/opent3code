@@ -479,6 +479,8 @@ async function readMcodeUsageRecords(
     if (record !== null) records.push(record);
   }
   return records;
+}
+
 export function kimiSessionIdFromTranscriptPath(filePath: string): string {
   const parts = NodePath.normalize(filePath).split(NodePath.sep);
   const sessionsIndex = parts.lastIndexOf("sessions");

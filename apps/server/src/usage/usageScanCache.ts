@@ -157,11 +157,11 @@ export function decodeScanCache(document: unknown): ScanCache {
       entry.p !== "claude" &&
       entry.p !== "codex" &&
       entry.p !== "opencodex" &&
-      entry.p !== "mcode"
+      entry.p !== "mcode" &&
+      entry.p !== "kimi"
     ) {
       continue;
     }
-    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "kimi") continue;
     if (!isRecordArray(entry.r)) continue;
 
     const provider: UsageProviderKind = entry.p;

@@ -296,6 +296,20 @@ describe("parseMcodeUsageRow", () => {
       provider: "mcode",
       timestampMs: 1_786_000_000_000,
       model: "minimax/MiniMax-M3",
+      sessionId: "session-a",
+      totals: {
+        uncachedInputTokens: 120,
+        cachedInputTokens: 900,
+        cacheCreationTokens: 30,
+        outputTokens: 45,
+        reasoningTokens: 12,
+      },
+      reportedCostUsd: null,
+      dedupeKey: "mcode:17",
+    });
+  });
+});
+
 describe("parseKimiLine", () => {
   it("keeps uncached input separate from both cache categories", () => {
     expect(
@@ -439,11 +453,6 @@ describe("parseMcodeUsageRow supplementary", () => {
         cost_usd: 0.5,
       })?.reportedCostUsd,
     ).toBe(0.5);
-        reasoningTokens: 0,
-      },
-      reportedCostUsd: null,
-      dedupeKey: null,
-    });
   });
 
   it("rejects cumulative, malformed, and empty usage records", () => {

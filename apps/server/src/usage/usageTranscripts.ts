@@ -431,6 +431,10 @@ export function parseMcodeUsageRow(row: Record<string, unknown>): UsageRecord | 
       (typeof rowId === "string" && rowId.length > 0)
         ? `mcode:${String(rowId)}`
         : null,
+  };
+}
+
+/* --------------------------------------------------------------------------
 /* Kimi Code                                                                  */
 /* -------------------------------------------------------------------------- */
 
