@@ -536,6 +536,16 @@ export const MCode: Icon = (props) => (
   </svg>
 );
 
+export const ZCode: Icon = (props) => (
+  <svg {...props} viewBox="0 0 100 100" fill="none">
+    <rect x="4" y="4" width="92" height="92" rx="22" fill="#111314" />
+    <path
+      fill="#fff"
+      d="M22 28h34l-5.2 7H22v-7Zm38 0h20L44.8 76H24.7L60 28Zm-2.2 41H78v7H52.7l5.1-7Z"
+    />
+  </svg>
+);
+
 /** Official Kimi Code mark, shared by the TUI and desktop surfaces. */
 export const KimiCode: Icon = ({ className, ...props }) => (
   <svg

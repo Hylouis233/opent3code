@@ -21,6 +21,7 @@ import type { UsageRecord } from "./usageTranscripts.ts";
 // v3: OpenCodex scans are window-bounded and carry a per-entry coverage bound;
 // v3: MCode scans are window-bounded and carry a per-entry coverage bound;
 // v3: Kimi Code scans are window-bounded and carry a per-entry coverage bound;
+// v3: ZCode scans became window-bounded and carry a per-entry coverage bound;
 // v2 entries cannot prove which rows they include.
 export const USAGE_SCAN_CACHE_VERSION = 3 as const;
 
@@ -162,6 +163,7 @@ export function decodeScanCache(document: unknown): ScanCache {
     ) {
       continue;
     }
+    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "zcode") continue;
     if (!isRecordArray(entry.r)) continue;
 
     const provider: UsageProviderKind = entry.p;
@@ -169,6 +171,9 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (provider === "opencodex" && completeFromMs === null) continue;
     if (provider === "mcode" && completeFromMs === null) continue;
     if (provider === "kimi" && completeFromMs === null) continue;
+    // ZCode was introduced after cache v2 shipped, so a v2 entry without its
+    // coverage bound is foreign or incomplete and must be read again.
+    if (provider === "zcode" && completeFromMs === null) continue;
     const records: UsageRecord[] = [];
     // Any corrupt row disqualifies the whole entry. Keeping the survivors
     // under the original (size, mtime) would read as a valid warm hit and the

@@ -10,6 +10,10 @@
  * Code's `sessions/<workspace>/<session>/agents/<agent>/wire.jsonl`) rather than relying on T3 Code's
  * own orchestration projections, so usage stays complete even for turns that
  * were never driven through T3 Code. This mirrors the approach `ccusage` takes.
+ * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, ZCode's
+ * `~/.zcode/cli/db/db.sqlite`) rather than relying on T3 Code's own
+ * orchestration projections, so usage stays complete even for turns that were
+ * never driven through T3 Code. This mirrors the approach `ccusage` takes.
  *
  * Environments return pre-aggregated `(day, hourStart?, provider, sourcePath?, model)`
  * buckets. Raw transcript records never cross the wire.
@@ -33,6 +37,7 @@ export const UsageProviderKind = Schema.Literals([
   "opencodex",
   "mcode",
   "kimi",
+  "zcode",
 ]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
@@ -178,6 +183,7 @@ export const UsageSummaryInput = Schema.Struct({
    * the pre-OpenCodex v4 shape so rolling upgrades remain wire-compatible.
    * the pre-MCode v4 shape so rolling upgrades remain wire-compatible.
    * the pre-Kimi Code v4 shape so rolling upgrades remain wire-compatible.
+   * the pre-ZCode v4 shape so rolling upgrades remain wire-compatible.
    */
   contractVersion: Schema.optional(Schema.Number),
   /** Inclusive first day of the window, in `timeZone`. */

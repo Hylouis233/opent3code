@@ -49,6 +49,7 @@ import {
   statUsageFile,
   statSqliteUsageStore,
   resolveKimiDesktopDataDir,
+  statSqliteUsageStore,
 } from "./usageTranscriptReader.ts";
 import {
   decodeScanCache,
@@ -77,6 +78,8 @@ const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PRE_OPENCODEX_USAGE_CONTRACT_VERSION = 4 as const;
 /** Clients predating Kimi Code omit their supported response contract. */
 const PRE_KIMI_USAGE_CONTRACT_VERSION = 4 as const;
+/** Clients predating ZCode omit their supported response contract. */
+const PRE_ZCODE_USAGE_CONTRACT_VERSION = 4 as const;
 
 /** Longest window the UI offers, plus slack. Older entries are pruned. */
 const CACHE_RETENTION_DAYS = 90;
@@ -87,6 +90,13 @@ const RatesCacheFile = Schema.Struct({
   document: Schema.Unknown,
 });
 
+/**
+ * One provider's usage store.
+ *
+ * `dir` supplies the source fingerprint's volume id and is walked for
+ * `*.jsonl` transcripts — unless `file` names a single-file store (ZCode's
+ * sqlite db), which is checked for existence and read instead.
+ */
 interface TranscriptSource {
   readonly provider: UsageProviderKind;
   readonly dir: string;
@@ -170,6 +180,14 @@ export function summarizeSourceReadFailures(
     status: failedFiles === totalFiles ? "failed" : "partial",
     message: `${failedFiles} usage file${failedFiles === 1 ? "" : "s"} could not be read.`,
   };
+}
+
+export function negotiateUsageContractVersion(
+  requestedVersion: number | undefined,
+): typeof PRE_ZCODE_USAGE_CONTRACT_VERSION | typeof USAGE_CONTRACT_VERSION {
+  return requestedVersion !== undefined && requestedVersion >= USAGE_CONTRACT_VERSION
+    ? USAGE_CONTRACT_VERSION
+    : PRE_ZCODE_USAGE_CONTRACT_VERSION;
 }
 
 /** Empty summary, for suites that only need the RPC surface to resolve. */
@@ -320,6 +338,10 @@ export const make = Effect.gen(function* () {
     const homeDir = NodeOS.homedir();
     const kimiCodeHome = resolveKimiCodeHome(hostEnvironment, path.join(homeDir, ".kimi-code"));
     const kimiDesktopDataDir = resolveKimiDesktopDataDir(hostEnvironment, hostPlatform, homeDir);
+    // ZCode has no settings-driven home override; its usage store is always
+    // the app's own sqlite db. A missing directory or db file is reported as a
+    // missing source.
+    const zcodeDbDir = path.join(NodeOS.homedir(), ".zcode", "cli", "db");
 
     const sources: readonly TranscriptSource[] = [
       { provider: "claude", dir: claudeDir },
@@ -364,6 +386,9 @@ export const make = Effect.gen(function* () {
       seenKimiDirs.add(resolvedDir);
       return true;
     });
+      { provider: "zcode", dir: zcodeDbDir, file: path.join(zcodeDbDir, "db.sqlite") },
+    ];
+    return sources;
   });
 
   /**
@@ -407,6 +432,7 @@ export const make = Effect.gen(function* () {
     opencodexSinceMs: number,
     mcodeSinceMs: number,
     kimiSinceMs: number,
+    zcodeSinceMs: number,
   ): Effect.Effect<readonly UsageRecord[] | null> =>
     Effect.gen(function* () {
       const cached = fileCache.get(filePath);
@@ -421,11 +447,13 @@ export const make = Effect.gen(function* () {
               ? kimiSinceMs
               : 0;
       if (cached && isReusableCachedFile(cached, { size, mtimeMs, provider }, providerSinceMs)) {
+      if (cached && isReusableCachedFile(cached, { size, mtimeMs, provider }, zcodeSinceMs)) {
         return cached.records;
       }
 
       const parsed = yield* Effect.promise(() =>
         readTranscriptRecords(filePath, provider, providerSinceMs),
+        readTranscriptRecords(filePath, provider, zcodeSinceMs),
       );
       // A read failure is not an empty transcript: caching it under this
       // (size, mtime) would silently drop the file's usage until it changes.
@@ -446,6 +474,7 @@ export const make = Effect.gen(function* () {
               : provider === "kimi"
                 ? kimiSinceMs
                 : null,
+        completeFromMs: provider === "zcode" ? zcodeSinceMs : null,
         records,
       });
       cacheDirty = true;
@@ -505,6 +534,7 @@ export const make = Effect.gen(function* () {
               source.provider !== "mcode" &&
               source.provider !== "kimi",
           );
+        : resolvedDirs.filter((source) => source.provider !== "zcode");
     const windowStart = DateTime.make(`${input.sinceDay}T00:00:00Z`);
     if (Option.isNone(windowStart)) {
       return yield* new UsageReadError({
@@ -536,6 +566,9 @@ export const make = Effect.gen(function* () {
         : yield* fileSystem
             .exists(source.file ?? dir)
             .pipe(Effect.catchCause(() => Effect.succeed(null)));
+      const exists = yield* fileSystem
+        .exists(source.file ?? dir)
+        .pipe(Effect.catchCause(() => Effect.succeed(false)));
 
       if (exists !== true) {
         sources.push({
@@ -553,6 +586,9 @@ export const make = Effect.gen(function* () {
               : source.file === undefined
                 ? "No transcript directory on this environment."
                 : "No usage store on this environment.",
+            source.file === undefined
+              ? "No transcript directory on this environment."
+              : "No usage store on this environment.",
         });
         continue;
       }
@@ -572,6 +608,15 @@ export const make = Effect.gen(function* () {
       let scannedFiles = 0;
       let skippedFiles = 0;
       let failedFiles = listing.failedEntries;
+      walkedRoots.push(dir);
+      const files = yield* Effect.promise(() =>
+        source.file === undefined
+          ? listTranscriptFiles(dir, windowStartMs)
+          : statSqliteUsageStore(source.file, windowStartMs),
+      );
+      let scannedFiles = 0;
+      let skippedFiles = 0;
+      let failedFiles = 0;
       // Distinct per directory. Buckets carry per-cell session counts, but a
       // session spans days and models, so clients total this figure instead.
       const sessionIds = new Set<string>();
@@ -609,6 +654,7 @@ export const make = Effect.gen(function* () {
         files.length + listing.failedEntries,
         failedFiles,
       );
+      const readHealth = summarizeSourceReadFailures(files.length, failedFiles);
       sources.push({
         fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
         status: readHealth.status,

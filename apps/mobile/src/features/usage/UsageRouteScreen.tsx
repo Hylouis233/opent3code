@@ -494,6 +494,7 @@ function UsageCoverageNotice(props: {
       {incompleteSources.map((source) => (
         <Text
           key={`${source.environmentId}:${source.provider}:${source.sourcePath}`}
+          key={`${source.environmentId}:${source.provider}`}
           className="text-sm text-foreground-muted"
         >
           {source.environmentLabel}&apos;s {PROVIDER_LABEL[source.provider]} usage{" "}

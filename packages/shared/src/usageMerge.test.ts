@@ -182,6 +182,7 @@ describe("mergeUsage", () => {
               bucket({ provider: "opencodex", model: "openai/gpt-5.4", costUsd: 7 }),
               bucket({ provider: "mcode", model: "minimax/MiniMax-M3", costUsd: 7 }),
               bucket({ provider: "kimi", model: "kimi-code/k3", costUsd: 7 }),
+              bucket({ provider: "zcode", model: "glm-5.2", costUsd: 7 }),
               bucket({ provider: "claude", costUsd: 3 }),
             ],
             [
@@ -207,10 +208,24 @@ describe("mergeUsage", () => {
                 message: "1 usage file could not be read.",
               },
               {
+                provider: "zcode",
+                hostId: "mac",
+                homePath: "/a/.zcode/cli/db",
+                status: "failed",
+                message: "Usage files could not be read.",
+              },
+              {
                 provider: "claude",
                 hostId: "mac",
                 homePath: "/a/.claude",
                 status: "partial",
+                message: "Some usage files could not be read.",
+              },
+              {
+                provider: "codex",
+                hostId: "mac",
+                homePath: "/a/.codex",
+                status: "missing",
               },
             ],
           ),
@@ -224,6 +239,7 @@ describe("mergeUsage", () => {
       "opencodex",
       "mcode",
       "kimi",
+      "zcode",
       "claude",
     ]);
   });
@@ -593,6 +609,38 @@ describe("mergeUsage", () => {
           "env-b",
           summary(
             [bucket({ provider: "opencodex", model: "openai/gpt-5.4", costUsd: 7 })],
+            [{ ...shared, status: "ok" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(7);
+    expect(merged.contributingEnvironments).toEqual(["env-b"]);
+    expect(merged.incompleteSources).toEqual([]);
+  });
+
+  it("prefers a complete duplicate without reporting a false coverage gap", () => {
+    const shared = {
+      provider: "zcode" as const,
+      hostId: "mac",
+      homePath: "/a/.zcode/cli/db",
+      volumeId: "16777220:1234",
+    };
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [bucket({ provider: "zcode", model: "glm-5.2", costUsd: 3 })],
+            [{ ...shared, status: "partial" }],
+          ),
+        ),
+        environment(
+          "env-b",
+          summary(
+            [bucket({ provider: "zcode", model: "glm-5.2", costUsd: 7 })],
             [{ ...shared, status: "ok" }],
           ),
         ),

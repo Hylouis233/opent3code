@@ -17,6 +17,7 @@ import * as NodeProcess from "node:process";
 import * as NodeReadline from "node:readline";
 import * as NodeTimers from "node:timers";
 import * as NodeWorkerThreads from "node:worker_threads";
+import * as NodeSqlite from "node:sqlite";
 
 import type { UsageProviderKind } from "@t3tools/contracts";
 
@@ -282,6 +283,12 @@ function runMcodeWorker(request: McodeWorkerRequest): Promise<McodeWorkerRespons
     }
   });
 }
+  parseZcodeUsageRow,
+  type UsageRecord,
+} from "./usageTranscripts.ts";
+
+/** Wait through brief writer locks without stalling the server indefinitely. */
+const ZCODE_BUSY_TIMEOUT_MS = 1_000;
 
 export interface TranscriptFile {
   readonly path: string;
@@ -426,6 +433,26 @@ export async function probeMcodeUsageStore(filePath: string): Promise<McodeUsage
 }
 
 /**
+ * Stats a sqlite usage store, applying the same mtime prefilter as the jsonl
+ * walk. The WAL participates in the fingerprint because active ZCode writes
+ * can leave the main db's size and mtime unchanged until a checkpoint.
+ */
+export async function statSqliteUsageStore(
+  filePath: string,
+  sinceMs: number,
+): Promise<readonly TranscriptFile[]> {
+  try {
+    const stats = await NodeFSP.stat(filePath);
+    const walStats = await NodeFSP.stat(`${filePath}-wal`).catch(() => null);
+    const size = stats.size + (walStats?.size ?? 0);
+    const mtimeMs = Math.max(stats.mtimeMs, walStats?.mtimeMs ?? 0);
+    return mtimeMs >= sinceMs ? [{ path: filePath, size, mtimeMs }] : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Filesystem identity of a directory, as `device:inode`.
  *
  * Used to tell "two servers reading the same transcript directory" apart from
@@ -488,6 +515,49 @@ export function kimiSessionIdFromTranscriptPath(filePath: string): string {
 }
 
 /**
+ * Reads retained usage rows from ZCode's sqlite store.
+ *
+ * `sinceMs` is a conservative indexed prefilter. The caller includes mtime
+ * slack, and the aggregator applies the exact requested boundary after parsing.
+ * An older schema without `model_usage` yields zero records; other read
+ * failures return `null` so the caller does not cache a transient failure as an
+ * empty store.
+ */
+async function readZcodeUsageRecords(
+  filePath: string,
+  sinceMs: number,
+): Promise<readonly UsageRecord[] | null> {
+  let db: NodeSqlite.DatabaseSync | undefined;
+  try {
+    db = new NodeSqlite.DatabaseSync(filePath, {
+      readOnly: true,
+      timeout: ZCODE_BUSY_TIMEOUT_MS,
+    });
+    const rows = db
+      .prepare(
+        `SELECT id, session_id, model_id, status, started_at, completed_at,
+                input_tokens, output_tokens, reasoning_tokens,
+                cache_creation_input_tokens, cache_read_input_tokens
+         FROM model_usage
+         WHERE status = 'completed' AND started_at >= ?`,
+      )
+      .iterate(sinceMs);
+    const records: UsageRecord[] = [];
+    for (const row of rows) {
+      const record = parseZcodeUsageRow(row);
+      if (record !== null) records.push(record);
+    }
+    return records;
+  } catch (error) {
+    return error instanceof Error && error.message.includes("no such table: model_usage")
+      ? []
+      : null;
+  } finally {
+    db?.close();
+  }
+}
+
+/**
  * Streams one transcript and returns the usage records it contains, or `null`
  * when the file could not be read.
  *
@@ -499,6 +569,8 @@ export function kimiSessionIdFromTranscriptPath(filePath: string): string {
  * Codex carries the active model on `turn_context` lines that hold no usage of
  * their own, so those still have to pass through the reducer to keep model
  * attribution correct.
+ *
+ * ZCode never reaches line parsing: its store is sqlite, handled above.
  */
 export async function readTranscriptRecords(
   filePath: string,
@@ -508,6 +580,9 @@ export async function readTranscriptRecords(
 ): Promise<readonly UsageRecord[] | null> {
   if (provider === "opencodex") return readOpenCodexUsageRecords(filePath, sinceMs);
   if (provider === "mcode") return readMcodeUsageRecords(filePath, sinceMs);
+  zcodeSinceMs = 0,
+): Promise<readonly UsageRecord[] | null> {
+  if (provider === "zcode") return readZcodeUsageRecords(filePath, zcodeSinceMs);
 
   const records: UsageRecord[] = [];
   const codexState = initialCodexScanState();
