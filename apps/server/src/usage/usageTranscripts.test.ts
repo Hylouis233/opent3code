@@ -1,11 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
-  GROK_COST_USD_TICKS_PER_DOLLAR,
   initialCodexScanState,
+  normalizeOpenCodexProvider,
   parseClaudeLine,
   parseCodexLine,
-  parseGrokLine,
+  parseOpenCodexUsageEntry,
+  parseMcodeUsageRow,
+  parseKimiLine,
   totalTokens,
 } from "./usageTranscripts.ts";
 
@@ -238,6 +240,238 @@ describe("parseCodexLine", () => {
   });
 });
 
+describe("parseOpenCodexUsageEntry", () => {
+  it("splits inclusive input and normalizes account-scoped providers", () => {
+    expect(
+      parseOpenCodexUsageEntry({
+        requestId: "req-17",
+        conversationId: "session-a",
+        provider: "openai-p372059",
+        model: "gpt-5.4",
+        resolvedModel: "gpt-5.4-mini",
+        timestamp: 1_786_000_000_000,
+        usage: {
+          inputTokens: 1_050,
+          outputTokens: 45,
+          reasoningOutputTokens: 12,
+          // Historical rows may combine reads and writes here.
+          cachedInputTokens: 930,
+          cacheCreationInputTokens: 30,
+        },
+      }),
+    ).toEqual({
+      provider: "opencodex",
+      timestampMs: 1_786_000_000_000,
+      model: "openai/gpt-5.4-mini",
+      sessionId: "session-a",
+      totals: {
+        uncachedInputTokens: 120,
+        cachedInputTokens: 900,
+        cacheCreationTokens: 30,
+        outputTokens: 45,
+        reasoningTokens: 12,
+      },
+      reportedCostUsd: null,
+      dedupeKey: "opencodex:req-17",
+    });
+  });
+});
+
+describe("parseMcodeUsageRow", () => {
+  it("keeps uncached input separate from both cache categories", () => {
+    expect(
+      parseMcodeUsageRow({
+        id: 17,
+        session_id: "session-a",
+        model: "minimax/MiniMax-M3",
+        ts: 1_786_000_000_000,
+        input_tokens: 120,
+        output_tokens: 45,
+        reasoning_tokens: 12,
+        cache_read_tokens: 900,
+        cache_write_tokens: 30,
+        cost_usd: 0,
+      }),
+    ).toEqual({
+      provider: "mcode",
+      timestampMs: 1_786_000_000_000,
+      model: "minimax/MiniMax-M3",
+      sessionId: "session-a",
+      totals: {
+        uncachedInputTokens: 120,
+        cachedInputTokens: 900,
+        cacheCreationTokens: 30,
+        outputTokens: 45,
+        reasoningTokens: 12,
+      },
+      reportedCostUsd: null,
+      dedupeKey: "mcode:17",
+    });
+  });
+});
+
+describe("parseKimiLine", () => {
+  it("keeps uncached input separate from both cache categories", () => {
+    expect(
+      parseKimiLine(
+        JSON.stringify({
+          type: "usage.record",
+          model: "kimi-code/k3",
+          usage: {
+            inputOther: 120,
+            output: 45,
+            inputCacheRead: 900,
+            inputCacheCreation: 30,
+          },
+          usageScope: "turn",
+          time: 1_786_000_000_000,
+        }),
+        "session-a",
+      ),
+    ).toEqual({
+      provider: "kimi",
+      timestampMs: 1_786_000_000_000,
+      model: "kimi-code/k3",
+      sessionId: "session-a",
+      totals: {
+        uncachedInputTokens: 120,
+        cachedInputTokens: 900,
+        cacheCreationTokens: 30,
+        outputTokens: 45,
+        reasoningTokens: 12,
+      },
+      reportedCostUsd: null,
+      dedupeKey: "mcode:17",
+    });
+  });
+
+  it("prefers explicit cache reads and caps corrupt detail within inclusive input", () => {
+    const record = parseOpenCodexUsageEntry({
+      provider: "zhipu-bigmodel-coding",
+      model: "glm-4.7",
+      timestamp: 1_786_000_001_000,
+      usage: {
+        inputTokens: 100,
+        outputTokens: 5,
+        cachedInputTokens: 99,
+        cacheReadInputTokens: 80,
+        cacheCreationInputTokens: 80,
+        reasoningOutputTokens: 12,
+      },
+    });
+
+    expect(record?.model).toBe("zhipu-bigmodel-coding/glm-4.7");
+    expect(record?.totals).toEqual({
+      uncachedInputTokens: 0,
+      cachedInputTokens: 20,
+      cacheCreationTokens: 80,
+      outputTokens: 5,
+      reasoningTokens: 5,
+    });
+  });
+
+  it("uses the top-level final usage exactly once instead of summing attempts", () => {
+    const record = parseOpenCodexUsageEntry({
+      provider: "chatgpt",
+      model: "gpt-5.4",
+      timestamp: 1_786_000_002_000,
+      usage: { inputTokens: 10, outputTokens: 5 },
+      attempts: [{ usage: { inputTokens: 10_000, outputTokens: 5_000 } }],
+    });
+
+    expect(record?.model).toBe("openai/gpt-5.4");
+    expect(record?.totals.uncachedInputTokens).toBe(10);
+    expect(record?.totals.outputTokens).toBe(5);
+  });
+
+  it("drops rows without measurable top-level usage", () => {
+    expect(
+      parseOpenCodexUsageEntry({
+        requestId: "unreported",
+        provider: "openai",
+        model: "gpt-5.4",
+        timestamp: 1_786_000_003_000,
+        attempts: [{ usage: { inputTokens: 10, outputTokens: 5 } }],
+      }),
+    ).toBeNull();
+  });
+
+  it("drops timestamps outside JavaScript's Date range", () => {
+    expect(
+      parseOpenCodexUsageEntry({
+        requestId: "bad-time",
+        provider: "openai",
+        model: "gpt-5.4",
+        timestamp: 1e100,
+        usage: { inputTokens: 10, outputTokens: 5 },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("normalizeOpenCodexProvider", () => {
+  it("collapses canonical account suffixes without truncating ordinary provider ids", () => {
+    expect(normalizeOpenCodexProvider("openai-main")).toBe("openai");
+    expect(normalizeOpenCodexProvider("openai-p372059")).toBe("openai");
+    expect(normalizeOpenCodexProvider("chatgpt")).toBe("openai");
+    expect(normalizeOpenCodexProvider("chatgpt-main")).toBe("openai");
+    expect(normalizeOpenCodexProvider("openai-multi-pabcdef")).toBe("openai");
+    expect(normalizeOpenCodexProvider("zhipu-bigmodel-coding")).toBe("zhipu-bigmodel-coding");
+  });
+});
+
+describe("parseMcodeUsageRow supplementary", () => {
+  it("keeps rows with missing historical model attribution", () => {
+    expect(
+      parseMcodeUsageRow({
+        id: 18,
+        session_id: "session-b",
+        model: null,
+        ts: 1_786_000_001_000,
+        input_tokens: 10,
+        output_tokens: 5,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        cost_usd: 0.25,
+      })?.model,
+    ).toBe("unknown");
+  });
+
+  it("keeps positive reported cost even when token counters are zero", () => {
+    expect(
+      parseMcodeUsageRow({
+        id: 19,
+        session_id: "session-c",
+        model: "minimax/MiniMax-M3",
+        ts: 1_786_000_002_000,
+        input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        cost_usd: 0.5,
+      })?.reportedCostUsd,
+    ).toBe(0.5);
+  });
+
+  it("rejects cumulative, malformed, and empty usage records", () => {
+    const valid = {
+      type: "usage.record",
+      model: "kimi-code/k3",
+      usage: { inputOther: 0, output: 0, inputCacheRead: 0, inputCacheCreation: 0 },
+      usageScope: "turn",
+      time: 1_786_000_002_000,
+    };
+    expect(
+      parseKimiLine(JSON.stringify({ ...valid, usageScope: "session" }), "session-b"),
+    ).toBeNull();
+    expect(parseKimiLine(JSON.stringify({ ...valid, model: "" }), "session-b")).toBeNull();
+    expect(parseKimiLine(JSON.stringify(valid), "session-b")).toBeNull();
+    expect(parseKimiLine("not-json", "session-b")).toBeNull();
+  });
+});
+
 describe("totalTokens", () => {
   it("does not add reasoning on top of output", () => {
     expect(
@@ -249,318 +483,5 @@ describe("totalTokens", () => {
         reasoningTokens: 25,
       }),
     ).toBe(100);
-  });
-});
-
-describe("parseGrokLine", () => {
-  /** Shaped after a real Grok Build `turn_completed` session update. */
-  function turnCompleted(overrides?: {
-    sessionId?: string;
-    promptId?: string;
-    timestamp?: number;
-    agentTimestampMs?: number;
-    usage?: Record<string, unknown>;
-    modelUsage?: Record<string, Record<string, unknown>> | null;
-  }): string {
-    const modelUsage =
-      overrides && "modelUsage" in overrides
-        ? overrides.modelUsage
-        : {
-            "grok-4.5-build": {
-              inputTokens: 20_272,
-              outputTokens: 272,
-              totalTokens: 20_544,
-              cachedReadTokens: 11_264,
-              cacheCreationTokens: 0,
-              reasoningTokens: 180,
-              costUsdTicks: 230_272_000,
-            },
-          };
-
-    return JSON.stringify({
-      timestamp: overrides?.timestamp ?? 1_786_372_566,
-      method: "_x.ai/session/update",
-      params: {
-        sessionId: overrides?.sessionId ?? "019fec1a-12f7-72f2-9b1f-7778a00aea3c",
-        update: {
-          sessionUpdate: "turn_completed",
-          prompt_id: overrides?.promptId ?? "prompt-1",
-          stop_reason: "end_turn",
-          usage: {
-            inputTokens: 20_272,
-            outputTokens: 272,
-            totalTokens: 20_544,
-            cachedReadTokens: 11_264,
-            cacheCreationTokens: 0,
-            reasoningTokens: 180,
-            costUsdTicks: 230_272_000,
-            ...(modelUsage === null ? {} : { modelUsage }),
-            ...overrides?.usage,
-          },
-        },
-        _meta: {
-          eventId: "event-1",
-          agentTimestampMs: overrides?.agentTimestampMs ?? 1_786_372_566_485,
-        },
-      },
-    });
-  }
-
-  it("extracts per-model totals and provider-reported cost ticks", () => {
-    const records = parseGrokLine(turnCompleted());
-
-    expect(records).toHaveLength(1);
-    const [record] = records;
-    expect(record?.provider).toBe("grok");
-    expect(record?.model).toBe("grok-4.5-build");
-    expect(record?.sessionId).toBe("019fec1a-12f7-72f2-9b1f-7778a00aea3c");
-    expect(record?.timestampMs).toBe(1_786_372_566_485);
-    expect(record?.totals).toEqual({
-      uncachedInputTokens: 20_272 - 11_264,
-      cachedInputTokens: 11_264,
-      cacheCreationTokens: 0,
-      outputTokens: 272,
-      reasoningTokens: 180,
-    });
-    expect(record?.reportedCostUsd).toBeCloseTo(230_272_000 / GROK_COST_USD_TICKS_PER_DOLLAR, 12);
-    expect(record?.dedupeKey).toBe("019fec1a-12f7-72f2-9b1f-7778a00aea3c:prompt-1:grok-4.5-build");
-  });
-
-  it("emits one record per model when modelUsage has several entries", () => {
-    const records = parseGrokLine(
-      turnCompleted({
-        modelUsage: {
-          "grok-4.5": {
-            inputTokens: 1000,
-            outputTokens: 50,
-            cachedReadTokens: 400,
-            reasoningTokens: 20,
-            costUsdTicks: 50_000_000,
-          },
-          "grok-composer-2.5-fast": {
-            inputTokens: 200,
-            outputTokens: 30,
-            cachedReadTokens: 100,
-            reasoningTokens: 0,
-            costUsdTicks: 10_000_000,
-          },
-        },
-      }),
-    );
-
-    expect(records.map((record) => record.model).toSorted()).toEqual([
-      "grok-4.5",
-      "grok-composer-2.5-fast",
-    ]);
-    expect(records.every((record) => record.provider === "grok")).toBe(true);
-    expect(records.find((record) => record.model === "grok-4.5")?.reportedCostUsd).toBeCloseTo(
-      0.005,
-      12,
-    );
-  });
-
-  it("inherits top-level cost ticks for a single model without its own ticks", () => {
-    const records = parseGrokLine(
-      turnCompleted({
-        modelUsage: {
-          "grok-4.5-build": {
-            inputTokens: 1000,
-            outputTokens: 10,
-            cachedReadTokens: 0,
-            reasoningTokens: 0,
-          },
-        },
-        usage: { costUsdTicks: GROK_COST_USD_TICKS_PER_DOLLAR },
-      }),
-    );
-
-    expect(records).toHaveLength(1);
-    expect(records[0]?.reportedCostUsd).toBe(1);
-  });
-
-  it("falls back to a generic grok model when modelUsage is absent", () => {
-    const records = parseGrokLine(turnCompleted({ modelUsage: null }));
-
-    expect(records).toHaveLength(1);
-    const [record] = records;
-    expect(record?.provider).toBe("grok");
-    expect(record?.model).toBe("grok");
-    expect(record?.totals).toEqual({
-      uncachedInputTokens: 20_272 - 11_264,
-      cachedInputTokens: 11_264,
-      cacheCreationTokens: 0,
-      outputTokens: 272,
-      reasoningTokens: 180,
-    });
-    expect(record?.reportedCostUsd).toBeCloseTo(230_272_000 / GROK_COST_USD_TICKS_PER_DOLLAR, 12);
-    expect(record?.dedupeKey).toBe("019fec1a-12f7-72f2-9b1f-7778a00aea3c:prompt-1:grok");
-  });
-
-  it("pro-rates top-level cost ticks across multi-model turns without per-model ticks", () => {
-    const records = parseGrokLine(
-      turnCompleted({
-        modelUsage: {
-          "grok-4.5": {
-            inputTokens: 300,
-            outputTokens: 0,
-            cachedReadTokens: 0,
-            reasoningTokens: 0,
-          },
-          "grok-composer-2.5-fast": {
-            inputTokens: 100,
-            outputTokens: 0,
-            cachedReadTokens: 0,
-            reasoningTokens: 0,
-          },
-        },
-        usage: { costUsdTicks: GROK_COST_USD_TICKS_PER_DOLLAR },
-      }),
-    );
-
-    expect(records).toHaveLength(2);
-    const byModel = Object.fromEntries(records.map((record) => [record.model, record]));
-    expect(byModel["grok-4.5"]?.reportedCostUsd).toBeCloseTo(0.75, 12);
-    expect(byModel["grok-composer-2.5-fast"]?.reportedCostUsd).toBeCloseTo(0.25, 12);
-    const sum =
-      (byModel["grok-4.5"]?.reportedCostUsd ?? 0) +
-      (byModel["grok-composer-2.5-fast"]?.reportedCostUsd ?? 0);
-    expect(sum).toBeCloseTo(1, 12);
-  });
-
-  it("pro-rates aggregate cost when a zero-token sibling carries costUsdTicks: 0", () => {
-    const records = parseGrokLine(
-      turnCompleted({
-        modelUsage: {
-          "grok-4.5": {
-            inputTokens: 300,
-            outputTokens: 0,
-            cachedReadTokens: 0,
-            reasoningTokens: 0,
-          },
-          "grok-composer-2.5-fast": {
-            inputTokens: 100,
-            outputTokens: 0,
-            cachedReadTokens: 0,
-            reasoningTokens: 0,
-          },
-          "empty-sibling": {
-            inputTokens: 0,
-            outputTokens: 0,
-            cachedReadTokens: 0,
-            reasoningTokens: 0,
-            costUsdTicks: 0,
-          },
-        },
-        usage: { costUsdTicks: GROK_COST_USD_TICKS_PER_DOLLAR },
-      }),
-    );
-
-    expect(records).toHaveLength(2);
-    expect(records.every((record) => record.model !== "empty-sibling")).toBe(true);
-    const byModel = Object.fromEntries(records.map((record) => [record.model, record]));
-    expect(byModel["grok-4.5"]?.reportedCostUsd).toBeCloseTo(0.75, 12);
-    expect(byModel["grok-composer-2.5-fast"]?.reportedCostUsd).toBeCloseTo(0.25, 12);
-    const sum =
-      (byModel["grok-4.5"]?.reportedCostUsd ?? 0) +
-      (byModel["grok-composer-2.5-fast"]?.reportedCostUsd ?? 0);
-    expect(sum).toBeCloseTo(1, 12);
-  });
-
-  it("allocates leftover aggregate ticks to models that omit per-model ticks", () => {
-    const records = parseGrokLine(
-      turnCompleted({
-        modelUsage: {
-          "grok-4.5": {
-            inputTokens: 300,
-            outputTokens: 0,
-            cachedReadTokens: 0,
-            reasoningTokens: 0,
-            costUsdTicks: 0.4 * GROK_COST_USD_TICKS_PER_DOLLAR,
-          },
-          "grok-composer-2.5-fast": {
-            inputTokens: 100,
-            outputTokens: 0,
-            cachedReadTokens: 0,
-            reasoningTokens: 0,
-          },
-        },
-        usage: { costUsdTicks: GROK_COST_USD_TICKS_PER_DOLLAR },
-      }),
-    );
-
-    expect(records).toHaveLength(2);
-    const byModel = Object.fromEntries(records.map((record) => [record.model, record]));
-    expect(byModel["grok-4.5"]?.reportedCostUsd).toBeCloseTo(0.4, 12);
-    expect(byModel["grok-composer-2.5-fast"]?.reportedCostUsd).toBeCloseTo(0.6, 12);
-    const sum =
-      (byModel["grok-4.5"]?.reportedCostUsd ?? 0) +
-      (byModel["grok-composer-2.5-fast"]?.reportedCostUsd ?? 0);
-    expect(sum).toBeCloseTo(1, 12);
-  });
-
-  it("does not invent a colliding dedupe key when prompt_id is missing", () => {
-    const line = JSON.stringify({
-      timestamp: 1_786_372_566,
-      method: "_x.ai/session/update",
-      params: {
-        sessionId: "s1",
-        update: {
-          sessionUpdate: "turn_completed",
-          usage: {
-            inputTokens: 10,
-            outputTokens: 2,
-            modelUsage: {
-              "grok-4.5": { inputTokens: 10, outputTokens: 2 },
-            },
-          },
-        },
-      },
-    });
-
-    expect(parseGrokLine(line)[0]?.dedupeKey).toBeNull();
-  });
-
-  it("ignores non-turn lines and empty usage", () => {
-    expect(parseGrokLine(JSON.stringify({ method: "session/update", params: {} }))).toEqual([]);
-    expect(parseGrokLine("not json")).toEqual([]);
-    expect(
-      parseGrokLine(
-        turnCompleted({
-          modelUsage: {
-            "grok-4.5-build": {
-              inputTokens: 0,
-              outputTokens: 0,
-              cachedReadTokens: 0,
-              reasoningTokens: 0,
-              costUsdTicks: 0,
-            },
-          },
-        }),
-      ),
-    ).toEqual([]);
-  });
-
-  it("falls back to the outer unix-seconds timestamp when agent meta is missing", () => {
-    const line = JSON.stringify({
-      timestamp: 1_786_372_566,
-      method: "_x.ai/session/update",
-      params: {
-        sessionId: "s1",
-        update: {
-          sessionUpdate: "turn_completed",
-          prompt_id: "p1",
-          usage: {
-            inputTokens: 10,
-            outputTokens: 2,
-            modelUsage: {
-              "grok-4.5": { inputTokens: 10, outputTokens: 2 },
-            },
-          },
-        },
-      },
-    });
-
-    const records = parseGrokLine(line);
-    expect(records[0]?.timestampMs).toBe(1_786_372_566_000);
   });
 });

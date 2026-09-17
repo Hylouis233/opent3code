@@ -75,6 +75,15 @@ export interface CostQuality {
   readonly cacheSavingsUsd: number;
 }
 
+export interface IncompleteUsageSource {
+  readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string;
+  readonly provider: UsageProviderKind;
+  readonly sourcePath: string;
+  readonly status: "partial" | "failed";
+  readonly message: string | null;
+}
+
 export interface MergedUsage {
   readonly costUsd: number;
   readonly uncachedInputTokens: number;
@@ -92,6 +101,8 @@ export interface MergedUsage {
   readonly costQuality: CostQuality;
   /** Environments whose data was dropped as a duplicate of another's. */
   readonly duplicateSources: readonly string[];
+  /** Provider stores that could not be read completely. */
+  readonly incompleteSources: readonly IncompleteUsageSource[];
   readonly contributingEnvironments: readonly EnvironmentId[];
   readonly staleEnvironments: readonly EnvironmentId[];
 }
@@ -113,55 +124,163 @@ function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
   ].join(" ");
 }
 
+function environmentProviderKey(environmentId: EnvironmentId, provider: UsageProviderKind): string {
+  return `${environmentId}\0${provider}`;
+}
+
+function sourceClaimKey(fingerprint: UsageSourceFingerprint, environmentId: EnvironmentId): string {
+  const key = fingerprintKey(fingerprint);
+  return fingerprint.volumeId.length > 0 ? key : `${key}\0${environmentId}`;
+}
+
 /**
- * Decides which environment owns each physical transcript directory.
+ * Decides which environment owns each connected provider-source group.
  *
  * Several environments on one machine (worktree servers, for instance) resolve
- * the same provider home and would otherwise double count every token. The
- * first environment in a stable order claims a fingerprint; the rest have that
- * provider's buckets dropped. Environments are sorted by id so the winner does
- * not change between renders.
+ * the same provider home and would otherwise double count every token. A complete
+ * source wins over a partial duplicate; ties are sorted by
+ * environment id so the owner does not change between renders. Fully failed
+ * and missing sources cannot own a fingerprint.
+ * the same provider home and would otherwise double count every token. Current
+ * buckets carry source attribution and are claimed exactly; the connected-group
+ * winner is the conservative fallback for an older/unattributed bucket. The
+ * environment with the most complete/readable stores wins that fallback; ties
+ * are sorted by environment id so ownership does not change between renders.
  */
 function claimSources(environments: readonly EnvironmentUsage[]): {
   readonly ownerByFingerprint: ReadonlyMap<string, EnvironmentId>;
+  readonly ownedEnvironmentProviders: ReadonlySet<string>;
   readonly duplicates: readonly string[];
 } {
   const ownerByFingerprint = new Map<string, EnvironmentId>();
+  const ownedEnvironmentProviders = new Set<string>();
   const duplicates: string[] = [];
 
-  const ordered = [...environments].sort((a, b) => a.environmentId.localeCompare(b.environmentId));
-
-  for (const environment of ordered) {
-    for (const source of environment.summary.sources) {
-      if (source.status === "missing") continue;
-      const key = fingerprintKey(source.fingerprint);
-      if (ownerByFingerprint.has(key)) {
-        duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
-        continue;
-      }
+  const exactCandidates = environments
+    .flatMap((environment) =>
+      environment.summary.sources.flatMap((source) =>
+        source.status === "missing" ? [] : [{ environment, source }],
+      ),
+    )
+    .sort((a, b) => {
+      const rank = (status: "ok" | "partial" | "failed" | "missing") =>
+        status === "ok" ? 0 : status === "partial" ? 1 : status === "failed" ? 2 : 3;
+      const statusOrder = rank(a.source.status) - rank(b.source.status);
+      return statusOrder || a.environment.environmentId.localeCompare(b.environment.environmentId);
+    });
+  for (const { environment, source } of exactCandidates) {
+    const key = sourceClaimKey(source.fingerprint, environment.environmentId);
+    if (ownerByFingerprint.has(key)) {
+      duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
+    } else {
       ownerByFingerprint.set(key, environment.environmentId);
+    }
+    ownerByFingerprint.set(key, environment.environmentId);
+  }
+
+  for (const provider of new Set(
+    environments.flatMap((environment) =>
+      environment.summary.sources.map((source) => source.fingerprint.provider),
+    ),
+  )) {
+    const candidates = environments.flatMap((environment) => {
+      const sources = environment.summary.sources.filter(
+        (source) => source.fingerprint.provider === provider,
+      );
+      return sources.length === 0 ? [] : [{ environment, sources }];
+    });
+    const byEnvironment = new Map(
+      candidates.map((candidate) => [candidate.environment.environmentId, candidate]),
+    );
+    const adjacent = new Map<EnvironmentId, Set<EnvironmentId>>(
+      candidates.map((candidate) => [candidate.environment.environmentId, new Set()]),
+    );
+    const environmentsByFingerprint = new Map<string, EnvironmentId[]>();
+    for (const candidate of candidates) {
+      for (const source of candidate.sources) {
+        if (source.status === "missing" || source.fingerprint.volumeId.length === 0) continue;
+        const key = fingerprintKey(source.fingerprint);
+        const owners = environmentsByFingerprint.get(key) ?? [];
+        owners.push(candidate.environment.environmentId);
+        environmentsByFingerprint.set(key, owners);
+      }
+    }
+    for (const owners of environmentsByFingerprint.values()) {
+      const first = owners[0];
+      if (first === undefined) continue;
+      for (const owner of owners.slice(1)) {
+        adjacent.get(first)?.add(owner);
+        adjacent.get(owner)?.add(first);
+      }
+    }
+
+    const visited = new Set<EnvironmentId>();
+    for (const environmentId of [...byEnvironment.keys()].sort()) {
+      if (visited.has(environmentId)) continue;
+      const component: EnvironmentId[] = [];
+      const pending = [environmentId];
+      while (pending.length > 0) {
+        const current = pending.pop();
+        if (current === undefined || visited.has(current)) continue;
+        visited.add(current);
+        component.push(current);
+        for (const neighbor of adjacent.get(current) ?? []) pending.push(neighbor);
+      }
+
+      const ranked = component
+        .map((id) => byEnvironment.get(id))
+        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== undefined)
+        .sort((a, b) => {
+          const aOk = a.sources.filter((source) => source.status === "ok").length;
+          const bOk = b.sources.filter((source) => source.status === "ok").length;
+          const aReadable = a.sources.filter(
+            (source) => source.status === "ok" || source.status === "partial",
+          ).length;
+          const bReadable = b.sources.filter(
+            (source) => source.status === "ok" || source.status === "partial",
+          ).length;
+          return (
+            bOk - aOk ||
+            bReadable - aReadable ||
+            a.environment.environmentId.localeCompare(b.environment.environmentId)
+          );
+        });
+      const winner = ranked[0];
+      if (winner === undefined) continue;
+      ownedEnvironmentProviders.add(
+        environmentProviderKey(winner.environment.environmentId, provider),
+      );
     }
   }
 
-  return { ownerByFingerprint, duplicates };
+  return { ownerByFingerprint, ownedEnvironmentProviders, duplicates };
 }
 
 /** Sources this environment owns after fingerprint claims, plus their buckets. */
 function ownedContribution(
   environment: EnvironmentUsage,
   ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
+  ownedEnvironmentProviders: ReadonlySet<string>,
 ): {
   readonly buckets: readonly UsageBucket[];
   readonly sessionsByProvider: ReadonlyMap<UsageProviderKind, number>;
 } {
-  const ownedProviders = new Set<UsageProviderKind>();
   const sessionsByProvider = new Map<UsageProviderKind, number>();
+  const readableProviders = new Set<UsageProviderKind>();
+  const sourceByPath = new Map(
+    environment.summary.sources.map((source) => [
+      `${source.fingerprint.provider}\0${source.fingerprint.resolvedHomePath}`,
+      source,
+    ]),
+  );
   for (const source of environment.summary.sources) {
-    if (source.status === "missing") continue;
-    const key = fingerprintKey(source.fingerprint);
-    if (ownerByFingerprint.get(key) === environment.environmentId) {
-      const provider = source.fingerprint.provider;
-      ownedProviders.add(provider);
+    if (source.status === "missing" || source.status === "failed") continue;
+    const provider = source.fingerprint.provider;
+    readableProviders.add(provider);
+    if (
+      ownerByFingerprint.get(sourceClaimKey(source.fingerprint, environment.environmentId)) ===
+      environment.environmentId
+    ) {
       // Distinct within a directory. Summing per-bucket session counts instead
       // would count a session once per day and model it spans.
       sessionsByProvider.set(
@@ -171,7 +290,23 @@ function ownedContribution(
     }
   }
   return {
-    buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
+    buckets: environment.summary.buckets.filter((bucket) => {
+      if (bucket.sourcePath !== undefined) {
+        const source = sourceByPath.get(`${bucket.provider}\0${bucket.sourcePath}`);
+        return (
+          source !== undefined &&
+          source.status !== "missing" &&
+          source.status !== "failed" &&
+          ownerByFingerprint.get(sourceClaimKey(source.fingerprint, environment.environmentId)) ===
+            environment.environmentId
+        );
+      }
+      return (
+        ownedEnvironmentProviders.has(
+          environmentProviderKey(environment.environmentId, bucket.provider),
+        ) && readableProviders.has(bucket.provider)
+      );
+    }),
     sessionsByProvider,
   };
 }
@@ -211,6 +346,7 @@ const EMPTY_MERGED: MergedUsage = {
     cacheSavingsUsd: 0,
   },
   duplicateSources: [],
+  incompleteSources: [],
   contributingEnvironments: [],
   staleEnvironments: [],
 };
@@ -242,7 +378,64 @@ export function mergeUsage(
     }
   }
 
-  const { ownerByFingerprint, duplicates } = claimSources(current);
+  const { ownerByFingerprint, ownedEnvironmentProviders, duplicates } = claimSources(current);
+  const providerCoverage = new Map<
+    string,
+    {
+      environmentId: EnvironmentId;
+      environmentLabel: string;
+      provider: UsageProviderKind;
+      sourcePath: string;
+      message: string | null;
+      hasReadableSource: boolean;
+      hasProblem: boolean;
+    }
+  >();
+  for (const environment of current) {
+    for (const source of environment.summary.sources) {
+      const exactOwner = ownerByFingerprint.get(
+        sourceClaimKey(source.fingerprint, environment.environmentId),
+      );
+      const ownsFallback = ownedEnvironmentProviders.has(
+        environmentProviderKey(environment.environmentId, source.fingerprint.provider),
+      );
+      if (
+        (exactOwner !== undefined && exactOwner !== environment.environmentId) ||
+        (exactOwner === undefined && !ownsFallback)
+      ) {
+        continue;
+      }
+      if (source.status === "missing") continue;
+
+      const key = `${environment.environmentId}\0${source.fingerprint.provider}`;
+      const coverage = providerCoverage.get(key) ?? {
+        environmentId: environment.environmentId,
+        environmentLabel: environment.label,
+        provider: source.fingerprint.provider,
+        sourcePath: source.fingerprint.resolvedHomePath,
+        message: null,
+        hasReadableSource: false,
+        hasProblem: false,
+      };
+      if (source.status === "ok" || source.status === "partial") {
+        coverage.hasReadableSource = true;
+      }
+      if (source.status === "partial" || source.status === "failed") {
+        if (!coverage.hasProblem) {
+          coverage.sourcePath = source.fingerprint.resolvedHomePath;
+          coverage.message = source.message;
+        }
+        coverage.hasProblem = true;
+      }
+      providerCoverage.set(key, coverage);
+    }
+  }
+  const incompleteSources: IncompleteUsageSource[] = [...providerCoverage.values()]
+    .filter((coverage) => coverage.hasProblem)
+    .map(({ hasReadableSource, hasProblem: _, ...coverage }) => ({
+      ...coverage,
+      status: hasReadableSource ? "partial" : "failed",
+    }));
 
   let costUsd = 0;
   let uncachedInputTokens = 0;
@@ -291,7 +484,11 @@ export function mergeUsage(
   const contributingEnvironments: EnvironmentId[] = [];
 
   for (const environment of current) {
-    const { buckets, sessionsByProvider } = ownedContribution(environment, ownerByFingerprint);
+    const { buckets, sessionsByProvider } = ownedContribution(
+      environment,
+      ownerByFingerprint,
+      ownedEnvironmentProviders,
+    );
     if (buckets.length > 0) contributingEnvironments.push(environment.environmentId);
 
     for (const [providerKind, providerSessions] of sessionsByProvider) {
@@ -442,6 +639,7 @@ export function mergeUsage(
       cacheSavingsUsd,
     },
     duplicateSources: duplicates,
+    incompleteSources,
     contributingEnvironments,
     staleEnvironments,
   };

@@ -85,6 +85,7 @@ export function useUsage(
   const windowKey = useMemo(
     () =>
       JSON.stringify({
+        contractVersion: input.contractVersion,
         sinceDay: input.sinceDay,
         untilDay: input.untilDay,
         timeZone: input.timeZone,
@@ -93,6 +94,7 @@ export function useUsage(
         untilTime: input.untilTime,
       }),
     [
+      input.contractVersion,
       input.sinceDay,
       input.untilDay,
       input.timeZone,

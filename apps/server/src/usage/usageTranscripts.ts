@@ -1,8 +1,8 @@
 /**
  * Pure parsers for the provider CLIs' on-disk session transcripts.
  *
- * Each parser is a line-at-a-time reducer so callers can stream large files
- * without materialising them. None of them touch the filesystem.
+ * Both parsers are line-at-a-time reducers so callers can stream large files
+ * without materialising them. Neither touches the filesystem.
  *
  * @module usageTranscripts
  */
@@ -29,6 +29,9 @@ const EMPTY_TOTALS: UsageTokenTotals = {
   outputTokens: 0,
   reasoningTokens: 0,
 };
+
+/** Inclusive upper bound accepted by JavaScript's Date time clip. */
+const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 
 function int(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
@@ -68,20 +71,25 @@ export function totalTokens(totals: UsageTokenTotals): number {
  * an order of magnitude.
  */
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
-  if (provider === "claude") return line.includes('"usage"');
-  if (provider === "grok") return line.includes('"turn_completed"');
-  return line.includes('"token_count"');
-}
-
-/**
- * Grok reports cost in integer ticks where `1 USD = 10^10` ticks. See Grok
- * headless `total_cost_usd_ticks`. Convert to dollars for pricing.
- */
-export const GROK_COST_USD_TICKS_PER_DOLLAR = 10_000_000_000;
-
-function grokCostTicksToUsd(ticks: unknown): number | null {
-  if (typeof ticks !== "number" || !Number.isFinite(ticks) || ticks < 0) return null;
-  return ticks / GROK_COST_USD_TICKS_PER_DOLLAR;
+  switch (provider) {
+    case "claude":
+      return line.includes('"usage"');
+    case "codex":
+      return line.includes('"token_count"');
+    case "opencodex":
+    // The OpenCodex ledger is parsed in a worker so its append-only JSONL file
+    // never blocks the server event loop.
+    case "mcode":
+      // MCode usage is read from its SQLite accounting table, never parsed as
+      // transcript lines.
+      return false;
+    case "kimi":
+      return line.includes('"usage.record"');
+    case "zcode":
+      // ZCode usage is read from its sqlite store, never line-parsed, so this
+      // gate is unreachable for it.
+      return false;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -311,178 +319,212 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
 }
 
 /* -------------------------------------------------------------------------- */
-/* Grok Build                                                                 */
+/* OpenCodex                                                                  */
 /* -------------------------------------------------------------------------- */
 
-interface GrokUsageTotals {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cachedReadTokens: number;
-  readonly cacheCreationTokens: number;
-  readonly reasoningTokens: number;
-  readonly costUsdTicks: number | null;
+/** Mirrors OpenCodex's account-suffix normalization for usage presentation. */
+export function normalizeOpenCodexProvider(provider: string): string {
+  const canonical = (value: string) =>
+    value === "chatgpt" || value === "openai-multi" ? "openai" : value;
+  const direct = canonical(provider);
+  if (direct !== provider) return direct;
+
+  const cut = provider.lastIndexOf("-");
+  if (cut <= 0) return direct;
+
+  const suffix = provider.slice(cut + 1);
+  return suffix === "main" || /^p[0-9a-f]{6}$/i.test(suffix)
+    ? canonical(provider.slice(0, cut))
+    : direct;
 }
 
-function readGrokUsageTotals(value: unknown): GrokUsageTotals | null {
-  if (typeof value !== "object" || value === null) return null;
-  const record = value as Record<string, unknown>;
+/** Maps one canonical row from OpenCodex's append-only `usage.jsonl` ledger. */
+export function parseOpenCodexUsageEntry(row: Record<string, unknown>): UsageRecord | null {
+  const timestampMs = int(row["timestamp"]);
+  if (timestampMs === 0 || timestampMs > MAX_DATE_TIMESTAMP_MS) return null;
+
+  const rawUsage = row["usage"];
+  if (typeof rawUsage !== "object" || rawUsage === null) return null;
+  const usage = rawUsage as Record<string, unknown>;
+
+  // OpenCodex stores total input inclusive of both cache categories. Cap the
+  // detail fields so malformed or legacy rows cannot make uncached input
+  // negative or inflate the total beyond `inputTokens`.
+  const inputTokens = int(usage["inputTokens"]);
+  const cacheCreationTokens = Math.min(inputTokens, int(usage["cacheCreationInputTokens"]));
+  const explicitCacheRead = usage["cacheReadInputTokens"];
+  const legacyCachedInput = int(usage["cachedInputTokens"]);
+  const cacheReadCandidate =
+    typeof explicitCacheRead === "number" && Number.isFinite(explicitCacheRead)
+      ? int(explicitCacheRead)
+      : typeof usage["cacheCreationInputTokens"] === "number"
+        ? Math.max(0, legacyCachedInput - cacheCreationTokens)
+        : legacyCachedInput;
+  const cachedInputTokens = Math.min(inputTokens - cacheCreationTokens, cacheReadCandidate);
+  const outputTokens = int(usage["outputTokens"]);
+  const totals: UsageTokenTotals = {
+    uncachedInputTokens: inputTokens - cachedInputTokens - cacheCreationTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningTokens: Math.min(outputTokens, int(usage["reasoningOutputTokens"])),
+  };
+  if (totalTokens(totals) === 0) return null;
+
+  const rawProvider = typeof row["provider"] === "string" ? row["provider"].trim() : "";
+  const provider = normalizeOpenCodexProvider(rawProvider) || "unknown";
+  const resolvedModel = typeof row["resolvedModel"] === "string" ? row["resolvedModel"].trim() : "";
+  const requestedModel = typeof row["model"] === "string" ? row["model"].trim() : "";
+  const rawModel = resolvedModel || requestedModel || "unknown";
+  const model =
+    provider === "unknown" || rawModel.includes("/") ? rawModel : `${provider}/${rawModel}`;
+  const requestId = typeof row["requestId"] === "string" ? row["requestId"].trim() : "";
+
   return {
-    inputTokens: int(record["inputTokens"]),
-    outputTokens: int(record["outputTokens"]),
-    cachedReadTokens: int(record["cachedReadTokens"]),
-    cacheCreationTokens: int(record["cacheCreationTokens"]),
-    reasoningTokens: int(record["reasoningTokens"]),
-    costUsdTicks:
-      typeof record["costUsdTicks"] === "number" && Number.isFinite(record["costUsdTicks"])
-        ? record["costUsdTicks"]
+    provider: "opencodex",
+    timestampMs,
+    model,
+    sessionId: typeof row["conversationId"] === "string" ? row["conversationId"] : "",
+    totals,
+    // The ledger persists usage, not billed cost. Price it with the shared
+    // LiteLLM table just like Codex transcripts.
+    reportedCostUsd: null,
+    dedupeKey: requestId.length > 0 ? `opencodex:${requestId}` : null,
+  };
+}
+
+/* --------------------------------------------------------------------------
+/* MCode                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** Maps one row of MCode's `local_runtime_token_usage` table. */
+export function parseMcodeUsageRow(row: Record<string, unknown>): UsageRecord | null {
+  const timestampMs = int(row["ts"]);
+  if (timestampMs === 0) return null;
+
+  const inputTokens = int(row["input_tokens"]);
+  const cachedInputTokens = int(row["cache_read_tokens"]);
+  const cacheCreationTokens = int(row["cache_write_tokens"]);
+  const outputTokens = int(row["output_tokens"]);
+  const totals: UsageTokenTotals = {
+    // MCode stores uncached input separately from both cache categories.
+    uncachedInputTokens: inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningTokens: Math.min(outputTokens, int(row["reasoning_tokens"])),
+  };
+  const rawModel = typeof row["model"] === "string" ? row["model"].trim() : "";
+  const rowId = row["id"];
+  const cost = row["cost_usd"];
+  const reportedCostUsd =
+    typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? cost : null;
+  if (totalTokens(totals) === 0 && reportedCostUsd === null) return null;
+
+  return {
+    provider: "mcode",
+    timestampMs,
+    model: rawModel || "unknown",
+    sessionId: typeof row["session_id"] === "string" ? row["session_id"] : "",
+    totals,
+    // Subscription-backed MCode records commonly store zero here. Let the
+    // rate table price those rather than claiming they had no API-equivalent cost.
+    reportedCostUsd,
+    dedupeKey:
+      (typeof rowId === "number" && Number.isFinite(rowId)) ||
+      (typeof rowId === "string" && rowId.length > 0)
+        ? `mcode:${String(rowId)}`
         : null,
   };
 }
 
-function grokTotalsToUsage(totals: GrokUsageTotals): UsageTokenTotals {
-  const cachedInputTokens = totals.cachedReadTokens;
-  const cacheCreationTokens = totals.cacheCreationTokens;
-  // Grok reports `inputTokens` inclusive of the cached portion, matching Codex.
-  const uncachedInputTokens = Math.max(
-    0,
-    totals.inputTokens - cachedInputTokens - cacheCreationTokens,
-  );
-  const outputTokens = totals.outputTokens;
-  return {
-    uncachedInputTokens,
-    cachedInputTokens,
-    cacheCreationTokens,
-    outputTokens,
-    reasoningTokens: Math.min(outputTokens, totals.reasoningTokens),
-  };
-}
+/* --------------------------------------------------------------------------
+/* Kimi Code                                                                  */
+/* -------------------------------------------------------------------------- */
 
-/**
- * Parses one line of a Grok Build `updates.jsonl` session log.
- *
- * Usage lands on `turn_completed` session updates. Per-model breakdowns live
- * under `usage.modelUsage`; when present each model becomes its own record.
- *
- * Returns every record for the line (0 or more). Callers stream line-by-line
- * and flatten.
- */
-export function parseGrokLine(line: string): readonly UsageRecord[] {
+/** Parses one turn-scoped `usage.record` from a Kimi Code wire transcript. */
+export function parseKimiLine(line: string, sessionId: string): UsageRecord | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
-    return [];
+    return null;
   }
-  if (typeof parsed !== "object" || parsed === null) return [];
-
+  if (typeof parsed !== "object" || parsed === null) return null;
   const record = parsed as Record<string, unknown>;
-  const params = record["params"];
-  if (typeof params !== "object" || params === null) return [];
-  const paramsRecord = params as Record<string, unknown>;
+  if (record["type"] !== "usage.record" || record["usageScope"] !== "turn") return null;
 
-  const update = paramsRecord["update"];
-  if (typeof update !== "object" || update === null) return [];
-  const updateRecord = update as Record<string, unknown>;
-  if (updateRecord["sessionUpdate"] !== "turn_completed") return [];
-
-  const usage = updateRecord["usage"];
-  if (typeof usage !== "object" || usage === null) return [];
+  const timestampMs = int(record["time"]);
+  const model = typeof record["model"] === "string" ? record["model"].trim() : "";
+  const usage = record["usage"];
+  if (timestampMs === 0 || model.length === 0 || typeof usage !== "object" || usage === null) {
+    return null;
+  }
   const usageRecord = usage as Record<string, unknown>;
+  const totals: UsageTokenTotals = {
+    uncachedInputTokens: int(usageRecord["inputOther"]),
+    cachedInputTokens: int(usageRecord["inputCacheRead"]),
+    cacheCreationTokens: int(usageRecord["inputCacheCreation"]),
+    outputTokens: int(usageRecord["output"]),
+    // Kimi Code does not currently break thinking tokens out from output.
+    reasoningTokens: 0,
+  };
+  if (totalTokens(totals) === 0) return null;
 
-  const sessionId = typeof paramsRecord["sessionId"] === "string" ? paramsRecord["sessionId"] : "";
-  const promptId = typeof updateRecord["prompt_id"] === "string" ? updateRecord["prompt_id"] : null;
+  return {
+    provider: "kimi",
+    timestampMs,
+    model,
+    sessionId,
+    totals,
+    reportedCostUsd: null,
+    dedupeKey: null,
+  };
+}
 
-  // Prefer the high-resolution agent clock; fall back to the outer unix seconds.
-  const meta = paramsRecord["_meta"];
-  let timestampMs: number | null = null;
-  if (typeof meta === "object" && meta !== null) {
-    const agentTimestampMs = (meta as Record<string, unknown>)["agentTimestampMs"];
-    if (typeof agentTimestampMs === "number" && Number.isFinite(agentTimestampMs)) {
-      timestampMs = agentTimestampMs;
-    }
-  }
-  if (timestampMs === null) {
-    const timestamp = record["timestamp"];
-    if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
-      timestampMs = timestamp > 1e12 ? timestamp : timestamp * 1000;
-    }
-  }
-  if (timestampMs === null) return [];
+/* --------------------------------------------------------------------------
+/* ZCode                                                                      */
+/* -------------------------------------------------------------------------- */
 
-  const topLevel = readGrokUsageTotals(usageRecord);
-  if (topLevel === null) return [];
+/**
+ * Maps one row of ZCode's `model_usage` sqlite table to a usage record.
+ *
+ * Each row is one model request attempt; only `completed` attempts carried
+ * real traffic. `started_at` stamps the record so the indexed SQLite window
+ * prefilter and the aggregator use the same boundary. ZCode stores no cost, so
+ * pricing falls to the rate table.
+ */
+export function parseZcodeUsageRow(row: Record<string, unknown>): UsageRecord | null {
+  if (row["status"] !== "completed") return null;
 
-  const modelUsage = usageRecord["modelUsage"];
-  const modelEntries: Array<{ model: string; totals: GrokUsageTotals }> = [];
-  if (typeof modelUsage === "object" && modelUsage !== null) {
-    for (const [model, raw] of Object.entries(modelUsage as Record<string, unknown>)) {
-      if (model.length === 0) continue;
-      const totals = readGrokUsageTotals(raw);
-      if (totals === null) continue;
-      modelEntries.push({ model, totals });
-    }
-  }
+  const timestampMs = int(row["started_at"]);
+  if (timestampMs === 0) return null;
 
-  if (modelEntries.length === 0) {
-    if (totalTokens(grokTotalsToUsage(topLevel)) === 0) return [];
-    return [
-      {
-        provider: "grok",
-        timestampMs,
-        model: "grok",
-        sessionId,
-        totals: grokTotalsToUsage(topLevel),
-        reportedCostUsd: grokCostTicksToUsd(topLevel.costUsdTicks),
-        // No prompt id means we cannot tell two same-second updates apart.
-        dedupeKey: promptId === null ? null : `${sessionId}:${promptId}:grok`,
-      },
-    ];
-  }
+  const model = typeof row["model_id"] === "string" ? row["model_id"] : "";
+  if (model.length === 0) return null;
 
-  // Cost allocation:
-  // 1. Emitted models with their own costUsdTicks keep those values.
-  // 2. Remaining aggregate cost (top-level minus those per-model ticks,
-  //    clamped at 0) is pro-rated across emitted models that lack ticks,
-  //    by token share among the unticked models only.
-  // 3. When no model has per-model ticks, remaining equals the full
-  //    aggregate and every emitted model gets a token-share slice.
-  // Zero-token rows are never emitted and never count toward used ticks.
-  const topLevelCostUsd = grokCostTicksToUsd(topLevel.costUsdTicks);
-  let usedTickedCostUsd = 0;
-  let untickedTokenDenominator = 0;
-  for (const entry of modelEntries) {
-    const tokens = totalTokens(grokTotalsToUsage(entry.totals));
-    if (tokens === 0) continue;
-    if (entry.totals.costUsdTicks !== null) {
-      usedTickedCostUsd += grokCostTicksToUsd(entry.totals.costUsdTicks) ?? 0;
-    } else {
-      untickedTokenDenominator += tokens;
-    }
-  }
-  const remainingCostUsd =
-    topLevelCostUsd === null ? null : Math.max(0, topLevelCostUsd - usedTickedCostUsd);
+  const id = row["id"];
+  const inputTokens = int(row["input_tokens"]);
+  const cachedInputTokens = int(row["cache_read_input_tokens"]);
+  const cacheCreationTokens = int(row["cache_creation_input_tokens"]);
 
-  const results: UsageRecord[] = [];
-  for (const entry of modelEntries) {
-    const totals = grokTotalsToUsage(entry.totals);
-    if (totalTokens(totals) === 0) continue;
-
-    let reportedCostUsd = grokCostTicksToUsd(entry.totals.costUsdTicks);
-    if (reportedCostUsd === null && remainingCostUsd !== null && untickedTokenDenominator > 0) {
-      reportedCostUsd = remainingCostUsd * (totalTokens(totals) / untickedTokenDenominator);
-    }
-
-    results.push({
-      provider: "grok",
-      timestampMs,
-      model: entry.model,
-      sessionId,
-      totals,
-      reportedCostUsd,
-      dedupeKey: promptId === null ? null : `${sessionId}:${promptId}:${entry.model}`,
-    });
-  }
-  return results;
+  return {
+    provider: "zcode",
+    timestampMs,
+    model,
+    sessionId: typeof row["session_id"] === "string" ? row["session_id"] : "",
+    totals: {
+      // ZCode's input_tokens includes both cache categories.
+      uncachedInputTokens: Math.max(0, inputTokens - cachedInputTokens - cacheCreationTokens),
+      cachedInputTokens,
+      cacheCreationTokens,
+      outputTokens: int(row["output_tokens"]),
+      reasoningTokens: int(row["reasoning_tokens"]),
+    },
+    reportedCostUsd: null,
+    // The row id is unique per request attempt, so it keys de-duplication.
+    dedupeKey: typeof id === "string" && id.length > 0 ? id : null,
+  };
 }
 
 export { EMPTY_TOTALS };

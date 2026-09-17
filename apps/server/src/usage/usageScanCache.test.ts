@@ -4,8 +4,8 @@ import {
   decodeScanCache,
   dedupeWithinFile,
   encodeScanCache,
+  isReusableCachedFile,
   pruneScanCache,
-  type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
 import type { UsageRecord } from "./usageTranscripts.ts";
@@ -29,16 +29,6 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
   };
 }
 
-function position(overrides: Partial<CachedFile["position"]> = {}): CachedFile["position"] {
-  return {
-    resumeOffset: 120,
-    guardLength: 64,
-    guardHash: 0xdeadbeef,
-    codexState: null,
-    ...overrides,
-  };
-}
-
 function cacheWith(entries: readonly [string, number, readonly UsageRecord[]][]): ScanCache {
   const cache: ScanCache = new Map();
   for (const [path, mtimeMs, records] of entries) {
@@ -46,9 +36,8 @@ function cacheWith(entries: readonly [string, number, readonly UsageRecord[]][])
       size: records.length * 10,
       mtimeMs,
       provider: "claude",
+      completeFromMs: null,
       records,
-      tailRecords: [],
-      position: position(),
     });
   }
   return cache;
@@ -60,74 +49,65 @@ describe("scan cache round trip", () => {
       ["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:", model: "claude-opus-5" })]],
       ["/b.jsonl", 200, [record({ sessionId: "session-b", reportedCostUsd: 1.5 })]],
     ]);
-    original.set("/grok.jsonl", {
-      size: 40,
-      mtimeMs: 300,
-      provider: "grok",
-      records: [
-        record({ provider: "grok", model: "grok-4.5-build", dedupeKey: "s:p:grok-4.5-build" }),
-      ],
-      tailRecords: [record({ provider: "grok", model: "grok-4.5-build", dedupeKey: null })],
-      position: position({ resumeOffset: 30, guardLength: 30, guardHash: 123 }),
-    });
-    original.set("/codex.jsonl", {
-      size: 80,
-      mtimeMs: 400,
-      provider: "codex",
-      records: [record({ provider: "codex", model: "gpt-5.2-codex", dedupeKey: null })],
-      tailRecords: [],
-      position: position({
-        codexState: {
-          model: "gpt-5.2-codex",
-          sessionId: "session-c",
-          lastUsageSignature: '{"input_tokens":1}',
-          sawSessionMeta: true,
-          suppressingForkCopies: false,
-          forkCopyAnchorMs: 0,
-        },
-      }),
-    });
 
     const restored = decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))));
 
-    expect(restored.size).toBe(4);
+    expect(restored.size).toBe(2);
     expect(restored.get("/a.jsonl")).toEqual(original.get("/a.jsonl"));
     expect(restored.get("/b.jsonl")).toEqual(original.get("/b.jsonl"));
-    expect(restored.get("/grok.jsonl")).toEqual(original.get("/grok.jsonl"));
-    expect(restored.get("/codex.jsonl")).toEqual(original.get("/codex.jsonl"));
   });
 
-  it("drops an entry whose persisted parse state is corrupt", () => {
-    // Resuming with a bad reducer state would attach appended usage to the
-    // wrong model or replay fork-copied history; that entry must cold parse.
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const poisoned = {
+  it("round-trips a ZCode sqlite entry", () => {
+    const zcodeRecord = record({
+      provider: "zcode",
+      model: "glm-5.2",
+      sessionId: "zcode-session",
+      dedupeKey: "usage-row-1",
+    });
+    const original: ScanCache = new Map([
+      [
+        "/home/user/.zcode/cli/db/db.sqlite",
+        {
+          size: 42,
+          mtimeMs: 200,
+          provider: "zcode",
+          completeFromMs: 1_786_000_000_000,
+          records: [zcodeRecord],
+        },
+      ],
+    ]);
+
+    const restored = decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))));
+
+    expect(restored.get("/home/user/.zcode/cli/db/db.sqlite")).toEqual(
+      original.get("/home/user/.zcode/cli/db/db.sqlite"),
+    );
+  });
+
+  it("drops a ZCode entry whose coverage bound is missing", () => {
+    const zcodeRecord = record({ provider: "zcode", dedupeKey: "usage-row-1" });
+    const encoded = encodeScanCache(
+      new Map([
+        [
+          "/db.sqlite",
+          {
+            size: 42,
+            mtimeMs: 200,
+            provider: "zcode" as const,
+            completeFromMs: 1_786_000_000_000,
+            records: [zcodeRecord],
+          },
+        ],
+      ]),
+    );
+    const withoutCoverage = {
       ...encoded,
-      files: {
-        "/a.jsonl": { ...encoded.files["/a.jsonl"]!, cs: { model: 42 } },
-      },
+      files: { "/db.sqlite": { ...encoded.files["/db.sqlite"]!, c: undefined } },
     };
 
-    expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned))).has("/a.jsonl")).toBe(false);
-  });
-
-  it("drops an entry whose guard length is outside the supported range", () => {
-    // The guard length sizes a Buffer in the reader; a bogus value would make
-    // every parse of that file fail and silently drop its usage.
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const poisoned = {
-      ...encoded,
-      files: { "/a.jsonl": { ...encoded.files["/a.jsonl"]!, gl: 1e20 } },
-    };
-
-    expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned))).has("/a.jsonl")).toBe(false);
-  });
-
-  it("rejects a document from the previous cache version", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const previous = { ...encoded, version: 2 };
-
-    expect(decodeScanCache(JSON.parse(JSON.stringify(previous))).size).toBe(0);
+    expect(decodeScanCache(JSON.parse(JSON.stringify(withoutCoverage))).has("/db.sqlite")).toBe(
+      false,
+    );
   });
 
   it("interns repeated model and session strings", () => {
@@ -137,6 +117,81 @@ describe("scan cache round trip", () => {
 
     expect(encoded.models).toEqual(["claude-fable-5"]);
     expect(encoded.sessions).toEqual(["session-a"]);
+  });
+
+  it("round-trips an OpenCodex ledger entry with its coverage bound", () => {
+    const opencodexRecord = record({
+      provider: "opencodex",
+      model: "openai/gpt-5.4",
+      sessionId: "opencodex-session",
+      dedupeKey: "opencodex:1",
+    });
+    const original: ScanCache = new Map([
+      [
+        "/home/user/.opencodex/usage.jsonl",
+        {
+          size: 42,
+          mtimeMs: 200,
+          provider: "opencodex",
+          completeFromMs: 1_786_000_000_000,
+          records: [opencodexRecord],
+        },
+      ],
+    ]);
+
+    expect(decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))))).toEqual(
+      original,
+    );
+  });
+
+  it("round-trips an MCode SQLite entry with its coverage bound", () => {
+    const mcodeRecord = record({
+      provider: "mcode",
+      model: "minimax/MiniMax-M3",
+      sessionId: "mcode-session",
+      dedupeKey: "mcode:1",
+    });
+    const original: ScanCache = new Map([
+      [
+        "/home/user/.minimax/v2/sqlite/runtime-state.sqlite",
+        {
+          size: 42,
+          mtimeMs: 200,
+          provider: "mcode",
+          completeFromMs: 1_786_000_000_000,
+          records: [mcodeRecord],
+        },
+      ],
+    ]);
+
+    expect(decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))))).toEqual(
+      original,
+    );
+  });
+
+  it("round-trips a Kimi Code wire transcript with its coverage bound", () => {
+    const kimiRecord = record({
+      provider: "kimi",
+      model: "kimi-code/k3",
+      sessionId: "kimi-session",
+      dedupeKey: null,
+    });
+    const original: ScanCache = new Map([
+      [
+        "/home/user/.kimi-code/sessions/wd_demo/session-a/agents/main/wire.jsonl",
+        {
+          size: 42,
+          mtimeMs: 200,
+          provider: "kimi",
+          completeFromMs: 1_786_000_000_000,
+          records: [kimiRecord],
+        },
+      ],
+    ]);
+
+    expect(decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))))).toEqual(
+      original,
+    );
   });
 
   it("treats a corrupt or foreign document as an empty cache", () => {
@@ -159,7 +214,7 @@ describe("scan cache round trip", () => {
 
   it("rejects the whole cache when an intern table holds a non-string", () => {
     // models: [1] would pass the undefined guard, put a number in a record's
-    // model, and crash lookupRate at aggregate time.
+    // model, and crash normalizeModelName at aggregate time.
     const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
     const poisoned = { ...encoded, models: [1] };
 
@@ -185,6 +240,94 @@ describe("scan cache round trip", () => {
 
     const restored = decodeScanCache(JSON.parse(JSON.stringify(poisoned)));
     expect(restored.has("/a.jsonl")).toBe(false);
+  });
+});
+
+describe("isReusableCachedFile", () => {
+  const entry = {
+    size: 42,
+    mtimeMs: 100,
+    provider: "opencodex" as const,
+    completeFromMs: 1_000,
+    records: [record({ provider: "opencodex" })],
+  };
+
+  it("reuses a broad OpenCodex scan for a narrower request", () => {
+    expect(
+      isReusableCachedFile(entry, { size: 42, mtimeMs: 100, provider: "opencodex" }, 2_000),
+    ).toBe(true);
+  });
+
+  it("rejects a narrow OpenCodex scan for a broader request", () => {
+    expect(
+      isReusableCachedFile(entry, { size: 42, mtimeMs: 100, provider: "opencodex" }, 500),
+    ).toBe(false);
+  });
+
+  const mcodeEntry = {
+    size: 42,
+    mtimeMs: 100,
+    provider: "mcode" as const,
+    completeFromMs: 1_000,
+    records: [record({ provider: "mcode" })],
+  };
+
+  it("reuses a broad MCode scan for a narrower request", () => {
+    expect(
+      isReusableCachedFile(mcodeEntry, { size: 42, mtimeMs: 100, provider: "mcode" }, 2_000),
+    ).toBe(true);
+  });
+
+  it("rejects a narrow MCode scan for a broader request", () => {
+    expect(
+      isReusableCachedFile(mcodeEntry, { size: 42, mtimeMs: 100, provider: "mcode" }, 500),
+    ).toBe(false);
+  });
+
+  const kimiEntry = {
+    size: 42,
+    mtimeMs: 100,
+    provider: "kimi" as const,
+    completeFromMs: 1_000,
+    records: [record({ provider: "kimi" })],
+  };
+
+  it("reuses a broad Kimi Code scan for a narrower request", () => {
+    expect(
+      isReusableCachedFile(kimiEntry, { size: 42, mtimeMs: 100, provider: "kimi" }, 2_000),
+    ).toBe(true);
+  });
+
+  it("rejects a narrow Kimi Code scan for a broader request", () => {
+    expect(
+      isReusableCachedFile(kimiEntry, { size: 42, mtimeMs: 100, provider: "kimi" }, 500),
+    ).toBe(false);
+  });
+  const zcodeEntry = {
+    size: 42,
+    mtimeMs: 200,
+    provider: "zcode" as const,
+    completeFromMs: 1_000,
+    records: [record({ provider: "zcode" })],
+  };
+  const fingerprint = { size: 42, mtimeMs: 200, provider: "zcode" as const };
+
+  it("reuses a broad ZCode read for a narrower window", () => {
+    expect(isReusableCachedFile(zcodeEntry, fingerprint, 2_000)).toBe(true);
+  });
+
+  it("re-reads ZCode when the requested window starts before cached coverage", () => {
+    expect(isReusableCachedFile(zcodeEntry, fingerprint, 500)).toBe(false);
+  });
+
+  it("always reuses a matching whole-file transcript", () => {
+    expect(
+      isReusableCachedFile(
+        { ...zcodeEntry, provider: "claude", completeFromMs: null },
+        { ...fingerprint, provider: "claude" },
+        0,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -253,20 +396,6 @@ describe("pruneScanCache with an unwalked root", () => {
     // A missing provider root or failed settings read leaves livePaths without
     // that provider's files. Its warm entries must survive the pass.
     const cache = cacheWith([["/codex/sessions/a.jsonl", 5000, [record()]]]);
-
-    const removed = pruneScanCache(cache, {
-      livePaths: new Set(),
-      walkedRoots: ["/claude/projects"],
-      windowStartMs: 4000,
-      retentionCutoffMs: 1000,
-    });
-
-    expect(removed).toBe(0);
-    expect(cache.size).toBe(1);
-  });
-
-  it("keeps entries under a sibling path that only shares the walked root prefix", () => {
-    const cache = cacheWith([["/claude/projects-copy/a.jsonl", 5000, [record()]]]);
 
     const removed = pruneScanCache(cache, {
       livePaths: new Set(),

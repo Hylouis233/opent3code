@@ -543,6 +543,82 @@ export const Zed: Icon = (props) => {
   );
 };
 
+/** OpenCodex terminal mark, adapted from the project's official app icon. */
+export const OpenCodex: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox="0 0 24 24"
+    className={cn("text-[color:var(--usage-provider-opencodex)]", className)}
+    fill="none"
+  >
+    <path
+      d="M8.1 3.45A8.7 8.7 0 0 1 12 2.55a8.7 8.7 0 0 1 3.9.9M15.9 20.55a8.7 8.7 0 0 1-3.9.9 8.7 8.7 0 0 1-3.9-.9"
+      stroke="currentColor"
+      strokeWidth="1.35"
+      strokeLinecap="round"
+    />
+    <path
+      d="M5.55 6.15c-1.25 0-1.6.7-1.6 1.65v1.1c0 .95-.35 1.45-1.15 1.65.8.2 1.15.7 1.15 1.65v1.1c0 .95.35 1.65 1.6 1.65M18.45 6.15c1.25 0 1.6.7 1.6 1.65v1.1c0 .95.35 1.45 1.15 1.65-.8.2-1.15.7-1.15 1.65v1.1c0 .95-.35 1.65-1.6 1.65"
+      stroke="currentColor"
+      strokeWidth="1.45"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="m8.55 8.6 2.35 3.4-2.35 3.4M13.15 15.4h3.05"
+      stroke="currentColor"
+      strokeWidth="1.55"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <circle cx="12" cy="2.55" r="0.8" fill="currentColor" />
+    <circle cx="12" cy="21.45" r="0.8" fill="currentColor" />
+  </svg>
+);
+
+/** MiniMax Code app mark, shared by the TUI and desktop surfaces. */
+export const MCode: Icon = (props) => (
+  <svg {...props} viewBox="0 0 80 80" fill="none">
+    <rect width="80" height="80" rx="20" fill="#7DC6FF" />
+    <path
+      fill="#000"
+      d="M66.958 50.656c0 1.05-.472 2.045-1.286 2.71l-9.664 7.89a3.5 3.5 0 0 1-2.212.788H17.112a3.28 3.28 0 0 1-3.28-3.28V31.108c0-1.053.475-2.05 1.292-2.714l10.752-8.744a3.5 3.5 0 0 1 2.207-.784h35.595a3.28 3.28 0 0 1 3.28 3.28v28.51Z"
+    />
+    <path
+      fill="#fff"
+      d="M60.398 48.368c0 .527-.237 1.025-.645 1.357l-6.579 5.354c-.312.253-.702.392-1.104.392H21.535a1.093 1.093 0 0 1-1.093-1.093V33.26c0-.528.239-1.028.649-1.36l7.544-6.1c.311-.252.7-.389 1.1-.389l29.57.014c.604 0 1.093.49 1.093 1.093v21.85Z"
+    />
+    <path
+      fill="#000"
+      d="M26.555 43.662c0-.966.783-1.749 1.749-1.749h4.153c.966 0 1.75.783 1.75 1.749v12.57h-7.652v-12.57Zm11.587 0c0-.966.783-1.749 1.749-1.749h4.154c.966 0 1.749.783 1.749 1.749v12.57h-7.652v-12.57Z"
+    />
+  </svg>
+);
+
+export const ZCode: Icon = (props) => (
+  <svg {...props} viewBox="0 0 100 100" fill="none">
+    <rect x="4" y="4" width="92" height="92" rx="22" fill="#111314" />
+    <path
+      fill="#fff"
+      d="M22 28h34l-5.2 7H22v-7Zm38 0h20L44.8 76H24.7L60 28Zm-2.2 41H78v7H52.7l5.1-7Z"
+    />
+  </svg>
+);
+
+/** Official Kimi Code mark, shared by the TUI and desktop surfaces. */
+export const KimiCode: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox="0 0 24 24"
+    className={cn("text-[color:var(--usage-provider-kimi)]", className)}
+    fill="none"
+  >
+    <rect x="3" y="4.5" width="18" height="13" rx="2.2" stroke="currentColor" strokeWidth="1.6" />
+    <rect x="9.6" y="8" width="1.4" height="2.6" rx="0.45" fill="currentColor" />
+    <rect x="15.6" y="8" width="1.4" height="2.6" rx="0.45" fill="currentColor" />
+  </svg>
+);
+
 export const OpenAI: Icon = ({ className, ...props }) => (
   <svg
     {...props}

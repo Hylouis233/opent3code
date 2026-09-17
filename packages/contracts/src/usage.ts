@@ -1,13 +1,21 @@
 /**
  * Usage reporting contract.
  *
- * Each environment scans the provider CLIs' own on-disk session transcripts
- * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`,
- * `~/.grok/sessions/**\/updates.jsonl`) rather than relying on T3 Code's own
+ * Each environment scans the provider CLIs' own on-disk usage stores
+ * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, OpenCodex's
+ * `~/.opencodex/usage.jsonl`) rather than relying on T3 Code's
+ * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, MCode's
+ * `~/.minimax/v2/sqlite/runtime-state.sqlite`) rather than relying on T3 Code's
+ * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, and Kimi
+ * Code's `sessions/<workspace>/<session>/agents/<agent>/wire.jsonl`) rather than relying on T3 Code's
+ * own orchestration projections, so usage stays complete even for turns that
+ * were never driven through T3 Code. This mirrors the approach `ccusage` takes.
+ * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, ZCode's
+ * `~/.zcode/cli/db/db.sqlite`) rather than relying on T3 Code's own
  * orchestration projections, so usage stays complete even for turns that were
  * never driven through T3 Code. This mirrors the approach `ccusage` takes.
  *
- * Environments return pre-aggregated `(day, hourStart?, provider, model)`
+ * Environments return pre-aggregated `(day, hourStart?, provider, sourcePath?, model)`
  * buckets. Raw transcript records never cross the wire.
  *
  * @module usage
@@ -23,16 +31,14 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  */
 export const USAGE_CONTRACT_VERSION = 5 as const;
 
-/**
- * Oldest {@link UsageSummary} version a current client will still merge.
- *
- * v5 only adds `grok` to {@link UsageProviderKind}; v4 Claude/Codex buckets
- * remain valid, so mixed-version environments keep those totals instead of
- * treating every older server as stale.
- */
-export const USAGE_MERGE_COMPATIBLE_SINCE = 4 as const;
-
-export const UsageProviderKind = Schema.Literals(["claude", "codex", "grok"]);
+export const UsageProviderKind = Schema.Literals([
+  "claude",
+  "codex",
+  "opencodex",
+  "mcode",
+  "kimi",
+  "zcode",
+]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
@@ -55,7 +61,7 @@ export type UsageResolution = typeof UsageResolution.Type;
  * Why a bucket's cost is what it is.
  *
  * - `providerReported` - the transcript carried an explicit cost figure.
- * - `modelPriced` - we used a custom price override or the LiteLLM rate table.
+ * - `modelPriced` - we matched the model against the LiteLLM rate table.
  * - `unpriced` - tokens are known, rates are not. Counted in totals, excluded
  *   from cost.
  */
@@ -80,7 +86,7 @@ export const UsageTokenTotals = Schema.Struct({
 export type UsageTokenTotals = typeof UsageTokenTotals.Type;
 
 /**
- * One `(day, hourStart?, provider, model)` cell. `hourStart` is the UTC start
+ * One `(day, hourStart?, provider, sourcePath?, model)` cell. `hourStart` is the UTC start
  * instant of a rolling bucket and is present only for hourly requests.
  *
  * `costUsd` is the raw API-equivalent cost of these tokens. It is not money
@@ -92,6 +98,8 @@ export const UsageBucket = Schema.Struct({
   day: UsageDay,
   hourStart: Schema.optional(TrimmedNonEmptyString),
   provider: UsageProviderKind,
+  /** Resolved provider store that produced this bucket, for cross-environment de-duplication. */
+  sourcePath: Schema.optional(TrimmedNonEmptyString),
   model: TrimmedNonEmptyString,
   totals: UsageTokenTotals,
   costUsd: Schema.Number,
@@ -170,6 +178,14 @@ export const UsagePricing = Schema.Struct({
 export type UsagePricing = typeof UsagePricing.Type;
 
 export const UsageSummaryInput = Schema.Struct({
+  /**
+   * Highest response contract the client can decode. Omitted clients receive
+   * the pre-OpenCodex v4 shape so rolling upgrades remain wire-compatible.
+   * the pre-MCode v4 shape so rolling upgrades remain wire-compatible.
+   * the pre-Kimi Code v4 shape so rolling upgrades remain wire-compatible.
+   * the pre-ZCode v4 shape so rolling upgrades remain wire-compatible.
+   */
+  contractVersion: Schema.optional(Schema.Number),
   /** Inclusive first day of the window, in `timeZone`. */
   sinceDay: UsageDay,
   /** Inclusive last day of the window, in `timeZone`. */
@@ -202,7 +218,7 @@ export const UsageSummary = Schema.Struct({
 });
 export type UsageSummary = typeof UsageSummary.Type;
 
-export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageReadError", {
+export class UsageReadError extends Schema.TaggedErrorClass<UsageReadError>()("UsageReadError", {
   reason: Schema.Literals(["scanFailed", "invalidWindow"]),
   /** Stable, bounded description. The underlying failure travels in `cause`. */
   detail: TrimmedNonEmptyString,

@@ -1,22 +1,23 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off -- Raw filesystem readers and the worker watchdog run below the Effect service boundary.
 /**
  * Raw filesystem access for transcript scanning.
  *
  * Isolated here so the rest of the usage code stays on Effect's `FileSystem`.
  * The direct `node:fs` streaming is deliberate: a cold 30-day window is ~1.4 GB
- * across ~1,500 files, and buffer-level streaming is roughly an order of
+ * across ~1,500 files, and `readline` over a read stream is roughly an order of
  * magnitude cheaper than materialising each file. The equivalent Effect stream
  * pipeline is idiomatic but not fast enough to sit behind a page load.
  *
- * Transcripts are append-only, so a parse also reports the byte position it
- * stopped at. A later scan of the same file resumes from that position and
- * parses only the appended bytes, which is what keeps a warm scan cheap while a
- * session is actively writing a multi-hundred-megabyte rollout.
- *
  * @module usageTranscriptReader
  */
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as NodeProcess from "node:process";
+import * as NodeReadline from "node:readline";
+import * as NodeSqlite from "node:sqlite";
+import * as NodeTimers from "node:timers";
+import * as NodeWorkerThreads from "node:worker_threads";
 
 import type { UsageProviderKind } from "@t3tools/contracts";
 
@@ -25,10 +26,264 @@ import {
   mightCarryUsage,
   parseClaudeLine,
   parseCodexLine,
-  parseGrokLine,
-  type CodexScanState,
+  parseMcodeUsageRow,
+  parseOpenCodexUsageEntry,
+  parseZcodeUsageRow,
+  parseKimiLine,
   type UsageRecord,
 } from "./usageTranscripts.ts";
+
+/** Bound a corrupt or unexpectedly expensive ledger scan. */
+const OPENCODEX_WORKER_WALL_TIMEOUT_MS = 30_000;
+/** Wait through brief writer locks without stalling the server indefinitely. */
+const MCODE_BUSY_TIMEOUT_MS = 1_000;
+/** Bound a corrupt or unexpectedly expensive store independently of SQLite locks. */
+const MCODE_WORKER_WALL_TIMEOUT_MS = 30_000;
+
+interface OpenCodexWorkerRequest {
+  readonly filePath: string;
+  readonly sinceMs: number;
+}
+
+type OpenCodexWorkerMessage =
+  | { readonly kind: "chunk"; readonly rows: readonly Record<string, unknown>[] }
+  | { readonly kind: "done" }
+  | { readonly kind: "failed" };
+
+type OpenCodexWorkerResponse =
+  | { readonly kind: "rows"; readonly rows: readonly Record<string, unknown>[] }
+  | { readonly kind: "failed" };
+
+// OpenCodex's canonical ledger can grow to tens of megabytes. Stream and parse
+// it off the WebSocket server's event loop without adding a separate bundle
+// entry: this constant worker program is embedded in the server chunk.
+const OPENCODEX_WORKER_SOURCE = String.raw`
+const NodeFS = require("node:fs");
+const NodeReadline = require("node:readline");
+const { parentPort, workerData } = require("node:worker_threads");
+
+async function readRows() {
+  let rows = [];
+  try {
+    const lines = NodeReadline.createInterface({
+      input: NodeFS.createReadStream(workerData.filePath, { encoding: "utf8" }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of lines) {
+      if (!line.includes('"timestamp"') || !line.includes('"usage"')) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (
+          typeof parsed !== "object" ||
+          parsed === null ||
+          typeof parsed.timestamp !== "number" ||
+          parsed.timestamp < workerData.sinceMs ||
+          typeof parsed.usage !== "object" ||
+          parsed.usage === null
+        ) {
+          continue;
+        }
+        rows.push({
+          requestId: parsed.requestId,
+          timestamp: parsed.timestamp,
+          provider: parsed.provider,
+          model: parsed.model,
+          resolvedModel: parsed.resolvedModel,
+          conversationId: parsed.conversationId,
+          usage: parsed.usage,
+        });
+        if (rows.length >= 1000) {
+          parentPort.postMessage({ kind: "chunk", rows });
+          rows = [];
+        }
+      } catch {
+        // The ledger is user-owned and append-only. Ignore an isolated corrupt
+        // line while preserving all valid usage around it.
+      }
+    }
+    if (rows.length > 0) parentPort.postMessage({ kind: "chunk", rows });
+  } catch {
+    throw new Error("OpenCodex usage ledger could not be read");
+  }
+}
+
+void readRows()
+  .then(() => parentPort.postMessage({ kind: "done" }))
+  .catch(() => parentPort.postMessage({ kind: "failed" }));
+`;
+
+function runOpenCodexWorker(
+  request: OpenCodexWorkerRequest,
+): Promise<OpenCodexWorkerResponse | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeout: ReturnType<typeof NodeTimers.setTimeout> | undefined;
+    const rows: Record<string, unknown>[] = [];
+    const settle = (value: OpenCodexWorkerResponse | null) => {
+      if (settled) return;
+      settled = true;
+      if (timeout !== undefined) NodeTimers.clearTimeout(timeout);
+      resolve(value);
+    };
+
+    try {
+      const worker = new NodeWorkerThreads.Worker(OPENCODEX_WORKER_SOURCE, {
+        eval: true,
+        workerData: request,
+        // `--input-type` only describes eval/stdin in the parent process. If
+        // inherited it incorrectly turns this explicit CommonJS worker into an
+        // ES module where `require` is unavailable.
+        execArgv: NodeProcess.execArgv.filter((argument) => !argument.startsWith("--input-type")),
+      });
+      worker.on("message", (message: OpenCodexWorkerMessage) => {
+        if (message.kind === "chunk") {
+          rows.push(...message.rows);
+          return;
+        }
+        settle(message.kind === "done" ? { kind: "rows", rows } : { kind: "failed" });
+      });
+      worker.once("error", () => settle(null));
+      // A large structured-clone payload can still be queued when the worker's
+      // clean exit event arrives. Let the message win that race; the watchdog
+      // covers the impossible "exit 0 without a message" case.
+      worker.once("exit", (code) => {
+        if (code !== 0) settle(null);
+      });
+      timeout = NodeTimers.setTimeout(() => {
+        void worker.terminate();
+        settle(null);
+      }, OPENCODEX_WORKER_WALL_TIMEOUT_MS);
+      timeout.unref();
+    } catch {
+      settle(null);
+    }
+  });
+}
+
+type McodeWorkerRequest =
+  | { readonly kind: "probe"; readonly filePath: string; readonly timeoutMs: number }
+  | {
+      readonly kind: "read";
+      readonly filePath: string;
+      readonly sinceMs: number;
+      readonly timeoutMs: number;
+    };
+
+type McodeWorkerResponse =
+  | { readonly kind: "probe"; readonly status: McodeUsageStoreProbe }
+  | { readonly kind: "rows"; readonly rows: readonly Record<string, unknown>[] }
+  | { readonly kind: "failed" };
+
+// SQLite's Node API is synchronous. Keep both the busy timeout and row
+// iteration off the WebSocket server's event loop without adding a separate
+// bundle entry: this constant worker program is embedded in the server chunk.
+const MCODE_WORKER_SOURCE = String.raw`
+const NodeFS = require("node:fs");
+const NodeSqlite = require("node:sqlite");
+const { parentPort, workerData } = require("node:worker_threads");
+
+function probe() {
+  try {
+    NodeFS.statSync(workerData.filePath);
+  } catch (error) {
+    return {
+      kind: "probe",
+      status: error && error.code === "ENOENT" ? "absent" : "failed",
+    };
+  }
+
+  let db;
+  try {
+    db = new NodeSqlite.DatabaseSync(workerData.filePath, {
+      readOnly: true,
+      timeout: workerData.timeoutMs,
+    });
+    db.prepare(
+      "SELECT id, session_id, model, ts, " +
+        "input_tokens, output_tokens, reasoning_tokens, " +
+        "cache_read_tokens, cache_write_tokens, cost_usd " +
+        "FROM local_runtime_token_usage LIMIT 0",
+    );
+    return { kind: "probe", status: "ready" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    return {
+      kind: "probe",
+      status:
+        message.includes("no such table: local_runtime_token_usage") ||
+        message.includes("no such column:")
+          ? "absent"
+          : "failed",
+    };
+  } finally {
+    db?.close();
+  }
+}
+
+function readRows() {
+  let db;
+  try {
+    db = new NodeSqlite.DatabaseSync(workerData.filePath, {
+      readOnly: true,
+      timeout: workerData.timeoutMs,
+    });
+    const rows = [];
+    for (const row of db
+      .prepare(
+        "SELECT id, session_id, model, ts, " +
+          "input_tokens, output_tokens, reasoning_tokens, " +
+          "cache_read_tokens, cache_write_tokens, cost_usd " +
+          "FROM local_runtime_token_usage WHERE ts >= ? ORDER BY ts, id",
+      )
+      .iterate(workerData.sinceMs)) {
+      rows.push({ ...row });
+    }
+    return { kind: "rows", rows };
+  } catch (error) {
+    return error instanceof Error && error.message.includes("no such table: local_runtime_token_usage")
+      ? { kind: "rows", rows: [] }
+      : { kind: "failed" };
+  } finally {
+    db?.close();
+  }
+}
+
+try {
+  parentPort.postMessage(workerData.kind === "probe" ? probe() : readRows());
+} catch {
+  parentPort.postMessage({ kind: "failed" });
+}
+`;
+
+function runMcodeWorker(request: McodeWorkerRequest): Promise<McodeWorkerResponse | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeout: ReturnType<typeof NodeTimers.setTimeout> | undefined;
+    const settle = (value: McodeWorkerResponse | null) => {
+      if (settled) return;
+      settled = true;
+      if (timeout !== undefined) NodeTimers.clearTimeout(timeout);
+      resolve(value);
+    };
+
+    try {
+      const worker = new NodeWorkerThreads.Worker(MCODE_WORKER_SOURCE, {
+        eval: true,
+        workerData: request,
+      });
+      worker.once("message", (message: McodeWorkerResponse) => settle(message));
+      worker.once("error", () => settle(null));
+      worker.once("exit", () => settle(null));
+      timeout = NodeTimers.setTimeout(() => {
+        void worker.terminate();
+        settle(null);
+      }, MCODE_WORKER_WALL_TIMEOUT_MS);
+      timeout.unref();
+    } catch {
+      settle(null);
+    }
+  });
+}
 
 export interface TranscriptFile {
   readonly path: string;
@@ -36,54 +291,37 @@ export interface TranscriptFile {
   readonly mtimeMs: number;
 }
 
-/**
- * Where a parse stopped, with enough state to continue from there.
- *
- * The guard hash fingerprints the bytes immediately before `resumeOffset`. A
- * resume only proceeds when those bytes still match: transcripts are
- * append-only by design, but a rotated or rewritten file silently mis-parsed
- * from the middle would corrupt usage totals. The window is a cheap tripwire
- * for those realistic failure shapes, all of which disturb the file's tail at
- * that exact offset; it deliberately does not hash the whole prefix, which
- * would cost the full re-read the resume exists to avoid.
- */
-export interface TranscriptParsePosition {
-  /** Byte offset just past the last newline-terminated line consumed. */
-  readonly resumeOffset: number;
-  /** Length of the fingerprinted window ending at `resumeOffset`. */
-  readonly guardLength: number;
-  /** FNV-1a hash of that window. */
-  readonly guardHash: number;
-  /** Codex reducer state as of `resumeOffset`; `null` for stateless providers. */
-  readonly codexState: CodexScanState | null;
+export interface TranscriptListing {
+  readonly files: readonly TranscriptFile[];
+  readonly failedEntries: number;
 }
 
-export interface TranscriptParseResult {
-  /** Records from newline-terminated lines at or after the parse start. */
-  readonly records: readonly UsageRecord[];
-  /**
-   * Records from a trailing segment the writer has not newline-terminated yet.
-   * Kept out of `records` because `position` deliberately excludes that
-   * segment: the next scan re-reads it once the writer finishes the line.
-   */
-  readonly tailRecords: readonly UsageRecord[];
-  readonly position: TranscriptParsePosition;
-  /** Whether the parse continued from `resumeFrom` rather than byte 0. */
-  readonly resumed: boolean;
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as { readonly code?: unknown }).code)
+    : undefined;
 }
 
-/** 64 bytes of JSONL tail is ample to distinguish a replaced file. */
-export const GUARD_LENGTH = 64;
-const NEWLINE = 0x0a;
-const CARRIAGE_RETURN = 0x0d;
-
-function fnv1a(buffer: Buffer): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < buffer.length; index += 1) {
-    hash ^= buffer[index]!;
-    hash = Math.imul(hash, 0x01000193);
+export function resolveKimiDesktopDataDir(
+  environment: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform,
+  homeDir: string,
+): string {
+  const override = environment["KIMI_DESKTOP_DATA_DIR"]?.trim();
+  if (override) return override;
+  if (platform === "win32") {
+    return NodePath.join(
+      environment["APPDATA"]?.trim() || NodePath.join(homeDir, "AppData", "Roaming"),
+      "kimi-desktop",
+    );
   }
-  return hash >>> 0;
+  if (platform === "darwin") {
+    return NodePath.join(homeDir, "Library", "Application Support", "kimi-desktop");
+  }
+  return NodePath.join(
+    environment["XDG_CONFIG_HOME"]?.trim() || NodePath.join(homeDir, ".config"),
+    "kimi-desktop",
+  );
 }
 
 /**
@@ -92,24 +330,23 @@ function fnv1a(buffer: Buffer): number {
  * Errors on individual entries are swallowed: session files rotate and get
  * removed while the walk is in flight, and a partial listing is far better than
  * failing the page.
- *
- * `fileName` restricts the walk to a single basename (Grok's `updates.jsonl`).
- * Grok sessions also ship multi-megabyte `chat_history` and `events` logs that
- * never carry usage, so the basename filter keeps a cold scan off those files.
  */
 export async function listTranscriptFiles(
   root: string,
   sinceMs: number,
-  options?: { readonly fileName?: string },
-): Promise<readonly TranscriptFile[]> {
+): Promise<TranscriptListing> {
   const found: TranscriptFile[] = [];
-  const fileName = options?.fileName;
+  let failedEntries = 0;
 
-  const walk = async (dir: string): Promise<void> => {
+  const walk = async (dir: string, isRoot = false): Promise<void> => {
     let entries;
     try {
       entries = await NodeFSP.readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      // A nested entry may rotate away between its parent readdir and this
+      // walk. The root disappearing after the caller's existence check is a
+      // real source failure, as is any permission or I/O error.
+      if (isRoot || errorCode(error) !== "ENOENT") failedEntries += 1;
       return;
     }
     for (const entry of entries) {
@@ -118,24 +355,76 @@ export async function listTranscriptFiles(
         await walk(child);
         continue;
       }
-      if (fileName !== undefined) {
-        if (entry.name !== fileName) continue;
-      } else if (!entry.name.endsWith(".jsonl")) {
-        continue;
-      }
+      if (!entry.name.endsWith(".jsonl")) continue;
       try {
         const stats = await NodeFSP.stat(child);
         if (stats.mtimeMs >= sinceMs) {
           found.push({ path: child, size: stats.size, mtimeMs: stats.mtimeMs });
         }
-      } catch {
-        // Vanished between readdir and stat.
+      } catch (error) {
+        // Vanishing between readdir and stat is benign rotation; other errors
+        // mean coverage is partial.
+        if (errorCode(error) !== "ENOENT") failedEntries += 1;
       }
     }
   };
 
-  await walk(root);
-  return found;
+  await walk(root, true);
+  return { files: found, failedEntries };
+}
+
+/**
+ * Stats a single append-only usage ledger for cache invalidation.
+ */
+export async function statUsageFile(
+  filePath: string,
+  sinceMs: number,
+): Promise<readonly TranscriptFile[] | null> {
+  try {
+    const stats = await NodeFSP.stat(filePath);
+    return stats.mtimeMs >= sinceMs
+      ? [{ path: filePath, size: stats.size, mtimeMs: stats.mtimeMs }]
+      : [];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stats a SQLite usage store with its WAL so active writes invalidate cache
+ * entries even before the main database checkpoints.
+ */
+export async function statSqliteUsageStore(
+  filePath: string,
+  sinceMs: number,
+): Promise<readonly TranscriptFile[] | null> {
+  try {
+    const stats = await NodeFSP.stat(filePath);
+    let walStats: Awaited<ReturnType<typeof NodeFSP.stat>> | null;
+    try {
+      walStats = await NodeFSP.stat(`${filePath}-wal`);
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") return null;
+      walStats = null;
+    }
+    const size = stats.size + (walStats?.size ?? 0);
+    const mtimeMs = Math.max(stats.mtimeMs, walStats?.mtimeMs ?? 0);
+    return mtimeMs >= sinceMs ? [{ path: filePath, size, mtimeMs }] : [];
+  } catch {
+    return null;
+  }
+}
+
+export type McodeUsageStoreProbe = "ready" | "absent" | "failed";
+
+/** Whether a candidate MCode database contains readable canonical accounting. */
+export async function probeMcodeUsageStore(filePath: string): Promise<McodeUsageStoreProbe> {
+  const result = await runMcodeWorker({
+    kind: "probe",
+    filePath,
+    timeoutMs: MCODE_BUSY_TIMEOUT_MS,
+  });
+  return result?.kind === "probe" ? result.status : "failed";
 }
 
 /**
@@ -154,22 +443,95 @@ export async function readDirectoryVolumeId(path: string): Promise<string> {
   }
 }
 
-async function guardMatches(
-  handle: NodeFSP.FileHandle,
-  position: TranscriptParsePosition,
-): Promise<boolean> {
-  if (position.guardLength <= 0 || position.guardLength > GUARD_LENGTH) return false;
+/** Reads OpenCodex's canonical, per-request token accounting rows. */
+async function readOpenCodexUsageRecords(
+  filePath: string,
+  sinceMs: number,
+): Promise<readonly UsageRecord[] | null> {
+  const result = await runOpenCodexWorker({
+    filePath,
+    sinceMs,
+  });
+  if (result?.kind !== "rows") return null;
+
+  const records: UsageRecord[] = [];
+  for (const row of result.rows) {
+    const record = parseOpenCodexUsageEntry(row);
+    if (record !== null) records.push(record);
+  }
+  return records;
+}
+
+/** Reads MCode's indexed, per-request token accounting rows. */
+async function readMcodeUsageRecords(
+  filePath: string,
+  sinceMs: number,
+): Promise<readonly UsageRecord[] | null> {
+  const result = await runMcodeWorker({
+    kind: "read",
+    filePath,
+    sinceMs,
+    timeoutMs: MCODE_BUSY_TIMEOUT_MS,
+  });
+  if (result?.kind !== "rows") return null;
+
+  const records: UsageRecord[] = [];
+  for (const row of result.rows) {
+    const record = parseMcodeUsageRow(row);
+    if (record !== null) records.push(record);
+  }
+  return records;
+}
+
+export function kimiSessionIdFromTranscriptPath(filePath: string): string {
+  const parts = NodePath.normalize(filePath).split(NodePath.sep);
+  const sessionsIndex = parts.lastIndexOf("sessions");
+  return sessionsIndex >= 0 ? (parts[sessionsIndex + 2] ?? "") : "";
+}
+
+/** Wait through brief writer locks without stalling the server indefinitely. */
+const ZCODE_BUSY_TIMEOUT_MS = 1_000;
+
+/**
+ * Reads retained usage rows from ZCode's sqlite store.
+ *
+ * `sinceMs` is a conservative indexed prefilter. The caller includes mtime
+ * slack, and the aggregator applies the exact requested boundary after parsing.
+ * An older schema without `model_usage` yields zero records; other read
+ * failures return `null` so the caller does not cache a transient failure as an
+ * empty store.
+ */
+async function readZcodeUsageRecords(
+  filePath: string,
+  sinceMs: number,
+): Promise<readonly UsageRecord[] | null> {
+  let db: NodeSqlite.DatabaseSync | undefined;
   try {
-    const window = Buffer.alloc(position.guardLength);
-    const { bytesRead } = await handle.read(
-      window,
-      0,
-      position.guardLength,
-      position.resumeOffset - position.guardLength,
-    );
-    return bytesRead === position.guardLength && fnv1a(window) === position.guardHash;
-  } catch {
-    return false;
+    db = new NodeSqlite.DatabaseSync(filePath, {
+      readOnly: true,
+      timeout: ZCODE_BUSY_TIMEOUT_MS,
+    });
+    const rows = db
+      .prepare(
+        `SELECT id, session_id, model_id, status, started_at, completed_at,
+                input_tokens, output_tokens, reasoning_tokens,
+                cache_creation_input_tokens, cache_read_input_tokens
+         FROM model_usage
+         WHERE status = 'completed' AND started_at >= ?`,
+      )
+      .iterate(sinceMs);
+    const records: UsageRecord[] = [];
+    for (const row of rows) {
+      const record = parseZcodeUsageRow(row);
+      if (record !== null) records.push(record);
+    }
+    return records;
+  } catch (error) {
+    return error instanceof Error && error.message.includes("no such table: model_usage")
+      ? []
+      : null;
+  } finally {
+    db?.close();
   }
 }
 
@@ -182,10 +544,6 @@ async function guardMatches(
  * under the same `(size, mtime)` key would silently drop that file's usage
  * until the file next changes.
  *
- * With `resumeFrom`, parsing continues from that position when its guard bytes
- * still match, so only appended lines are read; otherwise the whole file is
- * re-parsed from the start and `resumed` reports `false`.
- *
  * Codex carries the active model on `turn_context` lines that hold no usage of
  * their own, so those still have to pass through the reducer to keep model
  * attribution correct.
@@ -193,121 +551,51 @@ async function guardMatches(
 export async function readTranscriptRecords(
   filePath: string,
   provider: UsageProviderKind,
-  resumeFrom?: TranscriptParsePosition,
-): Promise<TranscriptParseResult | null> {
-  let handle: NodeFSP.FileHandle;
-  try {
-    handle = await NodeFSP.open(filePath, "r");
-  } catch {
-    return null;
-  }
+  sinceMs = 0,
+  kimiSinceMs = 0,
+): Promise<readonly UsageRecord[] | null> {
+  if (provider === "opencodex") return readOpenCodexUsageRecords(filePath, sinceMs);
+  if (provider === "mcode") return readMcodeUsageRecords(filePath, sinceMs);
+  if (provider === "zcode") return readZcodeUsageRecords(filePath, sinceMs);
+
+  const records: UsageRecord[] = [];
+  const codexState = initialCodexScanState();
+  const kimiSessionId = provider === "kimi" ? kimiSessionIdFromTranscriptPath(filePath) : "";
 
   try {
-    let codexState = initialCodexScanState();
-    let resumed = false;
-    let start = 0;
-    if (
-      resumeFrom !== undefined &&
-      resumeFrom.resumeOffset > 0 &&
-      (provider !== "codex" || resumeFrom.codexState !== null) &&
-      (await guardMatches(handle, resumeFrom))
-    ) {
-      if (resumeFrom.codexState !== null) codexState = { ...resumeFrom.codexState };
-      start = resumeFrom.resumeOffset;
-      resumed = true;
-    }
+    const lines = NodeReadline.createInterface({
+      input: NodeFS.createReadStream(filePath, { encoding: "utf8" }),
+      crlfDelay: Infinity,
+    });
 
-    const parseLine = (line: string, state: CodexScanState, out: UsageRecord[]): void => {
+    for await (const line of lines) {
       if (provider === "codex") {
         if (
           !mightCarryUsage(line, provider) &&
           !line.includes('"turn_context"') &&
           !line.includes('"session_meta"')
         ) {
-          return;
+          continue;
         }
-        const record = parseCodexLine(line, state);
-        if (record !== null) out.push(record);
-        return;
-      }
-      if (!mightCarryUsage(line, provider)) return;
-      if (provider === "grok") {
-        for (const grokRecord of parseGrokLine(line)) out.push(grokRecord);
-        return;
-      }
-      const record = parseClaudeLine(line);
-      if (record !== null) out.push(record);
-    };
-
-    const toLineString = (lineBuffer: Buffer): string => {
-      const content =
-        lineBuffer.length > 0 && lineBuffer[lineBuffer.length - 1] === CARRIAGE_RETURN
-          ? lineBuffer.subarray(0, -1)
-          : lineBuffer;
-      return content.toString("utf8");
-    };
-
-    const records: UsageRecord[] = [];
-    // Buffer-level line splitting rather than `readline`, because resuming
-    // needs byte-exact offsets and decoded strings cannot provide them.
-    // Newline-free chunks are collected rather than concatenated as they
-    // arrive, so a single huge line costs one copy instead of one per chunk.
-    let resumeOffset = start;
-    let pendingChunks: Buffer[] = [];
-    const stream = handle.createReadStream({
-      start,
-      autoClose: false,
-    }) as AsyncIterable<Buffer>;
-    for await (const chunk of stream) {
-      if (!chunk.includes(NEWLINE)) {
-        pendingChunks.push(chunk);
+        const record = parseCodexLine(line, codexState);
+        if (record !== null) records.push(record);
         continue;
       }
-      const buffer: Buffer =
-        pendingChunks.length === 0 ? chunk : Buffer.concat([...pendingChunks, chunk]);
-      pendingChunks = [];
-      let lineStart = 0;
-      for (;;) {
-        const newlineIndex = buffer.indexOf(NEWLINE, lineStart);
-        if (newlineIndex === -1) break;
-        parseLine(toLineString(buffer.subarray(lineStart, newlineIndex)), codexState, records);
-        lineStart = newlineIndex + 1;
+
+      if (provider === "kimi") {
+        if (!mightCarryUsage(line, provider)) continue;
+        const record = parseKimiLine(line, kimiSessionId);
+        if (record !== null && record.timestampMs >= kimiSinceMs) records.push(record);
+        continue;
       }
-      resumeOffset += lineStart;
-      if (lineStart < buffer.length) pendingChunks.push(buffer.subarray(lineStart));
-    }
 
-    // A trailing segment without its newline is parsed for this result but not
-    // consumed: a writer may still be appending to it, and counting a half
-    // record now and its full form later would double count.
-    const tailRecords: UsageRecord[] = [];
-    if (pendingChunks.length > 0) {
-      const pending = pendingChunks.length === 1 ? pendingChunks[0]! : Buffer.concat(pendingChunks);
-      if (pending.length > 0) parseLine(toLineString(pending), { ...codexState }, tailRecords);
+      if (!mightCarryUsage(line, provider)) continue;
+      const record = parseClaudeLine(line);
+      if (record !== null) records.push(record);
     }
-
-    const guardLength = Math.min(GUARD_LENGTH, resumeOffset);
-    let guardHash = 0;
-    if (guardLength > 0) {
-      const window = Buffer.alloc(guardLength);
-      await handle.read(window, 0, guardLength, resumeOffset - guardLength);
-      guardHash = fnv1a(window);
-    }
-
-    return {
-      records,
-      tailRecords,
-      position: {
-        resumeOffset,
-        guardLength,
-        guardHash,
-        codexState: provider === "codex" ? codexState : null,
-      },
-      resumed,
-    };
   } catch {
     return null;
-  } finally {
-    await handle.close().catch(() => undefined);
   }
+
+  return records;
 }
