@@ -42,9 +42,12 @@ import { UsageAggregator } from "./usageAggregation.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
+  type McodeUsageStoreProbe,
+  probeMcodeUsageStore,
   readDirectoryVolumeId,
   readTranscriptRecords,
   statUsageFile,
+  statSqliteUsageStore,
 } from "./usageTranscriptReader.ts";
 import {
   decodeScanCache,
@@ -69,7 +72,7 @@ const RATES_TTL_MS = 24 * 60 * 60 * 1000;
 const MTIME_SLACK_MS = 36 * 60 * 60 * 1000;
 const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** Clients predating OpenCodex omit their supported response contract. */
+/** Clients predating a provider-specific response contract. */
 const PRE_OPENCODEX_USAGE_CONTRACT_VERSION = 4 as const;
 
 /** Longest window the UI offers, plus slack. Older entries are pruned. */
@@ -110,6 +113,27 @@ export function resolveOpenCodexHome(
   defaultHome: string,
 ): string {
   return environment["OPENCODEX_HOME"]?.trim() || defaultHome;
+}
+
+export function resolveMcodeDataDir(
+  environment: Readonly<Record<string, string | undefined>>,
+  defaultDataDir: string,
+): string {
+  return (
+    environment["MINIMAX_DATA_DIR"]?.trim() ||
+    environment["MAVIS_DATA_DIR"]?.trim() ||
+    defaultDataDir
+  );
+}
+
+export function chooseMcodeUsageStore(
+  primaryPath: string,
+  primaryProbe: McodeUsageStoreProbe,
+  alternatePath: string,
+  alternateProbe: McodeUsageStoreProbe,
+): string {
+  if (primaryProbe !== "absent") return primaryPath;
+  return alternateProbe === "absent" ? primaryPath : alternatePath;
 }
 
 export function negotiateUsageContractVersion(
@@ -269,11 +293,24 @@ export const make = Effect.gen(function* () {
       path.join(NodeOS.homedir(), ".opencodex"),
     );
     const opencodexUsageLog = path.join(opencodexHome, "usage.jsonl");
+    const mcodeDataDir = resolveMcodeDataDir(process.env, path.join(NodeOS.homedir(), ".minimax"));
+    const primaryMcodeDb = path.join(mcodeDataDir, "v2", "sqlite", "runtime-state.sqlite");
+    const alternateMcodeDb = path.join(mcodeDataDir, "v2", "chats", "local-runtime.sqlite");
+    const [primaryProbe, alternateProbe] = yield* Effect.promise(() =>
+      Promise.all([probeMcodeUsageStore(primaryMcodeDb), probeMcodeUsageStore(alternateMcodeDb)]),
+    );
+    const mcodeDb = chooseMcodeUsageStore(
+      primaryMcodeDb,
+      primaryProbe,
+      alternateMcodeDb,
+      alternateProbe,
+    );
 
     const sources: readonly TranscriptSource[] = [
       { provider: "claude", dir: claudeDir },
       { provider: "codex", dir: path.join(codexLayout.sharedHomePath, "sessions") },
       { provider: "opencodex", dir: opencodexHome, file: opencodexUsageLog },
+      { provider: "mcode", dir: path.dirname(mcodeDb), file: mcodeDb },
     ];
     return sources;
   });
@@ -317,17 +354,20 @@ export const make = Effect.gen(function* () {
     mtimeMs: number,
     provider: UsageProviderKind,
     opencodexSinceMs: number,
+    mcodeSinceMs: number,
   ): Effect.Effect<readonly UsageRecord[] | null> =>
     Effect.gen(function* () {
       const cached = fileCache.get(filePath);
       // Provider is part of the identity: if both providers were ever pointed
       // at one directory, a hit parsed by the other parser must not be reused.
-      if (cached && isReusableCachedFile(cached, { size, mtimeMs, provider }, opencodexSinceMs)) {
+      const providerSinceMs =
+        provider === "opencodex" ? opencodexSinceMs : provider === "mcode" ? mcodeSinceMs : 0;
+      if (cached && isReusableCachedFile(cached, { size, mtimeMs, provider }, providerSinceMs)) {
         return cached.records;
       }
 
       const parsed = yield* Effect.promise(() =>
-        readTranscriptRecords(filePath, provider, opencodexSinceMs),
+        readTranscriptRecords(filePath, provider, providerSinceMs),
       );
       // A read failure is not an empty transcript: caching it under this
       // (size, mtime) would silently drop the file's usage until it changes.
@@ -340,7 +380,8 @@ export const make = Effect.gen(function* () {
         size,
         mtimeMs,
         provider,
-        completeFromMs: provider === "opencodex" ? opencodexSinceMs : null,
+        completeFromMs:
+          provider === "opencodex" ? opencodexSinceMs : provider === "mcode" ? mcodeSinceMs : null,
         records,
       });
       cacheDirty = true;
@@ -394,7 +435,9 @@ export const make = Effect.gen(function* () {
     const dirs =
       contractVersion >= USAGE_CONTRACT_VERSION
         ? resolvedDirs
-        : resolvedDirs.filter((source) => source.provider !== "opencodex");
+        : resolvedDirs.filter(
+            (source) => source.provider !== "opencodex" && source.provider !== "mcode",
+          );
     const windowStart = DateTime.make(`${input.sinceDay}T00:00:00Z`);
     if (Option.isNone(windowStart)) {
       return yield* new UsageReadError({
@@ -448,7 +491,10 @@ export const make = Effect.gen(function* () {
 
       const listing = yield* Effect.promise(async () => {
         if (source.file === undefined) return listTranscriptFiles(dir, windowStartMs);
-        const files = await statUsageFile(source.file, windowStartMs);
+        const files =
+          provider === "mcode"
+            ? await statSqliteUsageStore(source.file, windowStartMs)
+            : await statUsageFile(source.file, windowStartMs);
         return files === null ? { files: [], failedEntries: 1 } : { files, failedEntries: 0 };
       });
       const files = listing.files;
@@ -469,6 +515,7 @@ export const make = Effect.gen(function* () {
           file.size,
           file.mtimeMs,
           provider,
+          windowStartMs,
           windowStartMs,
         );
         if (records === null) {

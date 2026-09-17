@@ -6,17 +6,21 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
  * order, so it also fixes which band sits on top of the bars.
  */
 export const PROVIDER_ORDER: readonly UsageProviderKind[] = ["codex", "claude", "opencodex"];
+export const PROVIDER_ORDER: readonly UsageProviderKind[] = ["codex", "claude", "mcode"];
 
 export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   claude: "Claude Code",
   codex: "Codex",
   opencodex: "OpenCodex",
+  mcode: "MCode",
 };
 
 /**
  * Claude's brand orange holds in both themes; Codex is neutral and must flip
  * with the theme or its bars vanish against the matching background. OpenCodex's
  * purple accent remains legible in both themes.
+ * with the theme or its bars vanish against the matching background. MCode's
+ * official sky blue remains legible in both themes.
  */
 export function useProviderColors(): Record<UsageProviderKind, string> {
   const { themeAppearance: scheme } = useAppearancePreferences();
@@ -24,5 +28,6 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
     claude: "#d97757",
     codex: scheme === "dark" ? "#e6e6e6" : "#3c3c43",
     opencodex: scheme === "dark" ? "#D39CFF" : "#8B2BE2",
+    mcode: scheme === "dark" ? "#7DC6FF" : "#2563EB",
   };
 }

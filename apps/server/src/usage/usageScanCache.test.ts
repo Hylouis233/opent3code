@@ -91,6 +91,31 @@ describe("scan cache round trip", () => {
     );
   });
 
+  it("round-trips an MCode SQLite entry with its coverage bound", () => {
+    const mcodeRecord = record({
+      provider: "mcode",
+      model: "minimax/MiniMax-M3",
+      sessionId: "mcode-session",
+      dedupeKey: "mcode:1",
+    });
+    const original: ScanCache = new Map([
+      [
+        "/home/user/.minimax/v2/sqlite/runtime-state.sqlite",
+        {
+          size: 42,
+          mtimeMs: 200,
+          provider: "mcode",
+          completeFromMs: 1_786_000_000_000,
+          records: [mcodeRecord],
+        },
+      ],
+    ]);
+
+    expect(decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))))).toEqual(
+      original,
+    );
+  });
+
   it("treats a corrupt or foreign document as an empty cache", () => {
     // A bad cache should cost one cold scan, never a broken page.
     expect(decodeScanCache(null).size).toBe(0);
@@ -158,6 +183,26 @@ describe("isReusableCachedFile", () => {
   it("rejects a narrow OpenCodex scan for a broader request", () => {
     expect(
       isReusableCachedFile(entry, { size: 42, mtimeMs: 100, provider: "opencodex" }, 500),
+    ).toBe(false);
+  });
+
+  const mcodeEntry = {
+    size: 42,
+    mtimeMs: 100,
+    provider: "mcode" as const,
+    completeFromMs: 1_000,
+    records: [record({ provider: "mcode" })],
+  };
+
+  it("reuses a broad MCode scan for a narrower request", () => {
+    expect(
+      isReusableCachedFile(mcodeEntry, { size: 42, mtimeMs: 100, provider: "mcode" }, 2_000),
+    ).toBe(true);
+  });
+
+  it("rejects a narrow MCode scan for a broader request", () => {
+    expect(
+      isReusableCachedFile(mcodeEntry, { size: 42, mtimeMs: 100, provider: "mcode" }, 500),
     ).toBe(false);
   });
 });

@@ -4,6 +4,8 @@
  * Each environment scans the provider CLIs' own on-disk usage stores
  * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, OpenCodex's
  * `~/.opencodex/usage.jsonl`) rather than relying on T3 Code's
+ * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, MCode's
+ * `~/.minimax/v2/sqlite/runtime-state.sqlite`) rather than relying on T3 Code's
  * own orchestration projections, so usage stays complete even for turns that
  * were never driven through T3 Code. This mirrors the approach `ccusage` takes.
  *
@@ -23,7 +25,7 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  */
 export const USAGE_CONTRACT_VERSION = 5 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex", "opencodex"]);
+export const UsageProviderKind = Schema.Literals(["claude", "codex", "opencodex", "mcode"]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
@@ -164,6 +166,7 @@ export const UsageSummaryInput = Schema.Struct({
   /**
    * Highest response contract the client can decode. Omitted clients receive
    * the pre-OpenCodex v4 shape so rolling upgrades remain wire-compatible.
+   * the pre-MCode v4 shape so rolling upgrades remain wire-compatible.
    */
   contractVersion: Schema.optional(Schema.Number),
   /** Inclusive first day of the window, in `timeZone`. */

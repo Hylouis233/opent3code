@@ -19,6 +19,7 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 import type { UsageRecord } from "./usageTranscripts.ts";
 
 // v3: OpenCodex scans are window-bounded and carry a per-entry coverage bound;
+// v3: MCode scans are window-bounded and carry a per-entry coverage bound;
 // v2 entries cannot prove which rows they include.
 export const USAGE_SCAN_CACHE_VERSION = 3 as const;
 
@@ -151,12 +152,20 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof raw !== "object" || raw === null) continue;
     const entry = raw as Partial<SerializedFile>;
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "opencodex") continue;
+    if (
+      entry.p !== "claude" &&
+      entry.p !== "codex" &&
+      entry.p !== "opencodex" &&
+      entry.p !== "mcode"
+    ) {
+      continue;
+    }
     if (!isRecordArray(entry.r)) continue;
 
     const provider: UsageProviderKind = entry.p;
     const completeFromMs = typeof entry.c === "number" && Number.isFinite(entry.c) ? entry.c : null;
     if (provider === "opencodex" && completeFromMs === null) continue;
+    if (provider === "mcode" && completeFromMs === null) continue;
     const records: UsageRecord[] = [];
     // Any corrupt row disqualifies the whole entry. Keeping the survivors
     // under the original (size, mtime) would read as a valid warm hit and the

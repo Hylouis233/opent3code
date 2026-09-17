@@ -77,8 +77,11 @@ export function mightCarryUsage(line: string, provider: UsageProviderKind): bool
     case "codex":
       return line.includes('"token_count"');
     case "opencodex":
-      // The OpenCodex ledger is parsed in a worker so its append-only JSONL file
-      // never blocks the server event loop.
+    // The OpenCodex ledger is parsed in a worker so its append-only JSONL file
+    // never blocks the server event loop.
+    case "mcode":
+      // MCode usage is read from its SQLite accounting table, never parsed as
+      // transcript lines.
       return false;
   }
 }
@@ -381,6 +384,51 @@ export function parseOpenCodexUsageEntry(row: Record<string, unknown>): UsageRec
     // LiteLLM table just like Codex transcripts.
     reportedCostUsd: null,
     dedupeKey: requestId.length > 0 ? `opencodex:${requestId}` : null,
+  };
+}
+
+/* --------------------------------------------------------------------------
+/* MCode                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** Maps one row of MCode's `local_runtime_token_usage` table. */
+export function parseMcodeUsageRow(row: Record<string, unknown>): UsageRecord | null {
+  const timestampMs = int(row["ts"]);
+  if (timestampMs === 0) return null;
+
+  const inputTokens = int(row["input_tokens"]);
+  const cachedInputTokens = int(row["cache_read_tokens"]);
+  const cacheCreationTokens = int(row["cache_write_tokens"]);
+  const outputTokens = int(row["output_tokens"]);
+  const totals: UsageTokenTotals = {
+    // MCode stores uncached input separately from both cache categories.
+    uncachedInputTokens: inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningTokens: Math.min(outputTokens, int(row["reasoning_tokens"])),
+  };
+  const rawModel = typeof row["model"] === "string" ? row["model"].trim() : "";
+  const rowId = row["id"];
+  const cost = row["cost_usd"];
+  const reportedCostUsd =
+    typeof cost === "number" && Number.isFinite(cost) && cost > 0 ? cost : null;
+  if (totalTokens(totals) === 0 && reportedCostUsd === null) return null;
+
+  return {
+    provider: "mcode",
+    timestampMs,
+    model: rawModel || "unknown",
+    sessionId: typeof row["session_id"] === "string" ? row["session_id"] : "",
+    totals,
+    // Subscription-backed MCode records commonly store zero here. Let the
+    // rate table price those rather than claiming they had no API-equivalent cost.
+    reportedCostUsd,
+    dedupeKey:
+      (typeof rowId === "number" && Number.isFinite(rowId)) ||
+      (typeof rowId === "string" && rowId.length > 0)
+        ? `mcode:${String(rowId)}`
+        : null,
   };
 }
 

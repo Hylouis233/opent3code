@@ -1,6 +1,6 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 
-import { ClaudeAI, type Icon, OpenCodex, OpenAI } from "../Icons";
+import { ClaudeAI, type Icon, MCode, OpenCodex, OpenAI } from "../Icons";
 
 type UsageProviderPresentation = {
   readonly label: string;
@@ -28,6 +28,11 @@ export const PROVIDER_PRESENTATION = {
     label: "OpenCodex",
     color: "var(--usage-provider-opencodex)",
     mark: OpenCodex,
+  },
+  mcode: {
+    label: "MCode",
+    color: "var(--usage-provider-mcode)",
+    mark: MCode,
   },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 

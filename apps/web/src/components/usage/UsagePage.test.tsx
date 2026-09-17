@@ -54,21 +54,23 @@ vi.mock("../WorkspacePageContainer", () => ({ WorkspacePageContainer: "main" }))
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
 vi.mock("./UsageProviderChart", () => ({ UsageProviderChart: "div" }));
 vi.mock("./usageProviders", () => ({
-  PROVIDER_ORDER: ["codex", "claude", "opencodex"],
+  PROVIDER_ORDER: ["codex", "claude", "opencodex", "mcode"],
   PROVIDER_PRESENTATION: {
     codex: { color: "white", label: "Codex", mark: "span" },
     claude: { color: "orange", label: "Claude Code", mark: "span" },
     opencodex: { color: "blue", label: "OpenCodex", mark: "span" },
+    mcode: { color: "blue", label: "MCode", mark: "span" },
   },
 }));
 
 import { UsagePage } from "./UsagePage";
 
-const providerTotals = (codex: number, claude: number, opencodex: number) =>
+const providerTotals = (codex: number, claude: number, opencodex: number, mcode: number) =>
   new Map([
     ["codex", { costUsd: codex, totalTokens: codex * 1_000 }],
     ["claude", { costUsd: claude, totalTokens: claude * 1_000 }],
     ["opencodex", { costUsd: opencodex, totalTokens: opencodex * 1_000 }],
+    ["mcode", { costUsd: mcode, totalTokens: mcode * 1_000 }],
   ] as const);
 
 beforeEach(() => {
@@ -81,14 +83,14 @@ beforeEach(() => {
           hourStart: "2026-08-10T13:37:00.000Z",
           costUsd: 13,
           totalTokens: 13_000,
-          byProvider: providerTotals(7, 6, 0),
+          byProvider: providerTotals(7, 6, 0, 0),
         },
         {
           day: "2026-08-11",
           hourStart: "2026-08-11T11:37:00.000Z",
           costUsd: 11,
           totalTokens: 11_000,
-          byProvider: providerTotals(6, 4, 1),
+          byProvider: providerTotals(6, 4, 1, 1),
         },
       ],
     },
@@ -108,6 +110,7 @@ describe("UsagePage hourly breakdown", () => {
     expect(body).toContain("$11.00");
     expect(body).toContain("$13.00");
     expect(markup).toContain("OpenCodex");
+    expect(markup).toContain("MCode");
     expect(body).toContain("$1.00");
     expect(body.indexOf("$11.00")).toBeLessThan(body.indexOf("$13.00"));
   });
@@ -134,6 +137,31 @@ describe("UsagePage hourly breakdown", () => {
 
     expect(renderToStaticMarkup(<UsagePage />)).toContain(
       "Local&#x27;s OpenCodex usage could not be read.",
+    );
+  });
+
+  it("warns when the MCode store could not be read", () => {
+    testState.useUsage.mockReturnValue({
+      merged: {
+        ...mergeUsage([], USAGE_CONTRACT_VERSION),
+        incompleteSources: [
+          {
+            environmentId: "env-a",
+            environmentLabel: "Local",
+            provider: "mcode",
+            status: "failed",
+            message: "1 usage file could not be read.",
+          },
+        ],
+      },
+      environments: [],
+      isPending: false,
+      isPartial: false,
+      refresh: vi.fn(),
+    });
+
+    expect(renderToStaticMarkup(<UsagePage />)).toContain(
+      "Local&#x27;s MCode usage could not be read.",
     );
   });
 

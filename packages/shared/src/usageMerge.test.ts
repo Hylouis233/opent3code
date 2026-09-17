@@ -180,6 +180,7 @@ describe("mergeUsage", () => {
           summary(
             [
               bucket({ provider: "opencodex", model: "openai/gpt-5.4", costUsd: 7 }),
+              bucket({ provider: "mcode", model: "minimax/MiniMax-M3", costUsd: 7 }),
               bucket({ provider: "claude", costUsd: 3 }),
             ],
             [
@@ -187,6 +188,13 @@ describe("mergeUsage", () => {
                 provider: "opencodex",
                 hostId: "mac",
                 homePath: "/a/.opencodex",
+                status: "failed",
+                message: "1 usage file could not be read.",
+              },
+              {
+                provider: "mcode",
+                hostId: "mac",
+                homePath: "/a/.minimax/v2/sqlite",
                 status: "failed",
                 message: "1 usage file could not be read.",
               },
@@ -206,6 +214,7 @@ describe("mergeUsage", () => {
     expect(merged.costUsd).toBe(3);
     expect(merged.incompleteSources.map((source) => source.provider)).toEqual([
       "opencodex",
+      "mcode",
       "claude",
     ]);
   });
@@ -230,6 +239,38 @@ describe("mergeUsage", () => {
           "env-b",
           summary(
             [bucket({ provider: "opencodex", model: "openai/gpt-5.4", costUsd: 7 })],
+            [{ ...shared, status: "ok" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(7);
+    expect(merged.contributingEnvironments).toEqual(["env-b"]);
+    expect(merged.incompleteSources).toEqual([]);
+  });
+
+  it("prefers a complete MCode duplicate without a false coverage gap", () => {
+    const shared = {
+      provider: "mcode" as const,
+      hostId: "mac",
+      homePath: "/a/.minimax/v2/sqlite",
+      volumeId: "16777220:1234",
+    };
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [bucket({ provider: "mcode", model: "minimax/MiniMax-M3", costUsd: 3 })],
+            [{ ...shared, status: "partial" }],
+          ),
+        ),
+        environment(
+          "env-b",
+          summary(
+            [bucket({ provider: "mcode", model: "minimax/MiniMax-M3", costUsd: 7 })],
             [{ ...shared, status: "ok" }],
           ),
         ),
