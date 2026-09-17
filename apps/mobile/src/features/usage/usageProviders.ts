@@ -11,8 +11,8 @@ export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
   "opencodex",
   "mcode",
   "kimi",
+  "zcode",
 ];
-export const PROVIDER_ORDER: readonly UsageProviderKind[] = ["codex", "claude", "zcode"];
 
 export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   claude: "Claude Code",

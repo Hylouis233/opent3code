@@ -47,7 +47,6 @@ import {
   readDirectoryVolumeId,
   readTranscriptRecords,
   statUsageFile,
-  statSqliteUsageStore,
   resolveKimiDesktopDataDir,
   statSqliteUsageStore,
 } from "./usageTranscriptReader.ts";
@@ -180,14 +179,6 @@ export function summarizeSourceReadFailures(
     status: failedFiles === totalFiles ? "failed" : "partial",
     message: `${failedFiles} usage file${failedFiles === 1 ? "" : "s"} could not be read.`,
   };
-}
-
-export function negotiateUsageContractVersion(
-  requestedVersion: number | undefined,
-): typeof PRE_ZCODE_USAGE_CONTRACT_VERSION | typeof USAGE_CONTRACT_VERSION {
-  return requestedVersion !== undefined && requestedVersion >= USAGE_CONTRACT_VERSION
-    ? USAGE_CONTRACT_VERSION
-    : PRE_ZCODE_USAGE_CONTRACT_VERSION;
 }
 
 /** Empty summary, for suites that only need the RPC surface to resolve. */
@@ -361,6 +352,7 @@ export const make = Effect.gen(function* () {
           "sessions",
         ),
       },
+      { provider: "zcode", dir: zcodeDbDir, file: path.join(zcodeDbDir, "db.sqlite") },
     ];
     const canonicalSources = yield* Effect.forEach(sources, (source) =>
       source.provider === "kimi"
@@ -386,9 +378,6 @@ export const make = Effect.gen(function* () {
       seenKimiDirs.add(resolvedDir);
       return true;
     });
-      { provider: "zcode", dir: zcodeDbDir, file: path.join(zcodeDbDir, "db.sqlite") },
-    ];
-    return sources;
   });
 
   /**
@@ -445,15 +434,15 @@ export const make = Effect.gen(function* () {
             ? mcodeSinceMs
             : provider === "kimi"
               ? kimiSinceMs
-              : 0;
+              : provider === "zcode"
+                ? zcodeSinceMs
+                : 0;
       if (cached && isReusableCachedFile(cached, { size, mtimeMs, provider }, providerSinceMs)) {
-      if (cached && isReusableCachedFile(cached, { size, mtimeMs, provider }, zcodeSinceMs)) {
         return cached.records;
       }
 
       const parsed = yield* Effect.promise(() =>
         readTranscriptRecords(filePath, provider, providerSinceMs),
-        readTranscriptRecords(filePath, provider, zcodeSinceMs),
       );
       // A read failure is not an empty transcript: caching it under this
       // (size, mtime) would silently drop the file's usage until it changes.
@@ -473,8 +462,9 @@ export const make = Effect.gen(function* () {
               ? mcodeSinceMs
               : provider === "kimi"
                 ? kimiSinceMs
-                : null,
-        completeFromMs: provider === "zcode" ? zcodeSinceMs : null,
+                : provider === "zcode"
+                  ? zcodeSinceMs
+                  : null,
         records,
       });
       cacheDirty = true;
@@ -532,9 +522,9 @@ export const make = Effect.gen(function* () {
             (source) =>
               source.provider !== "opencodex" &&
               source.provider !== "mcode" &&
-              source.provider !== "kimi",
+              source.provider !== "kimi" &&
+              source.provider !== "zcode",
           );
-        : resolvedDirs.filter((source) => source.provider !== "zcode");
     const windowStart = DateTime.make(`${input.sinceDay}T00:00:00Z`);
     if (Option.isNone(windowStart)) {
       return yield* new UsageReadError({
@@ -566,9 +556,6 @@ export const make = Effect.gen(function* () {
         : yield* fileSystem
             .exists(source.file ?? dir)
             .pipe(Effect.catchCause(() => Effect.succeed(null)));
-      const exists = yield* fileSystem
-        .exists(source.file ?? dir)
-        .pipe(Effect.catchCause(() => Effect.succeed(false)));
 
       if (exists !== true) {
         sources.push({
@@ -586,9 +573,6 @@ export const make = Effect.gen(function* () {
               : source.file === undefined
                 ? "No transcript directory on this environment."
                 : "No usage store on this environment.",
-            source.file === undefined
-              ? "No transcript directory on this environment."
-              : "No usage store on this environment.",
         });
         continue;
       }
@@ -608,15 +592,6 @@ export const make = Effect.gen(function* () {
       let scannedFiles = 0;
       let skippedFiles = 0;
       let failedFiles = listing.failedEntries;
-      walkedRoots.push(dir);
-      const files = yield* Effect.promise(() =>
-        source.file === undefined
-          ? listTranscriptFiles(dir, windowStartMs)
-          : statSqliteUsageStore(source.file, windowStartMs),
-      );
-      let scannedFiles = 0;
-      let skippedFiles = 0;
-      let failedFiles = 0;
       // Distinct per directory. Buckets carry per-cell session counts, but a
       // session spans days and models, so clients total this figure instead.
       const sessionIds = new Set<string>();
@@ -628,6 +603,7 @@ export const make = Effect.gen(function* () {
           file.size,
           file.mtimeMs,
           provider,
+          windowStartMs,
           windowStartMs,
           windowStartMs,
           windowStartMs,
@@ -654,7 +630,6 @@ export const make = Effect.gen(function* () {
         files.length + listing.failedEntries,
         failedFiles,
       );
-      const readHealth = summarizeSourceReadFailures(files.length, failedFiles);
       sources.push({
         fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
         status: readHealth.status,

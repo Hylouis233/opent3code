@@ -479,6 +479,10 @@ export function parseKimiLine(line: string, sessionId: string): UsageRecord | nu
     totals,
     reportedCostUsd: null,
     dedupeKey: null,
+  };
+}
+
+/* --------------------------------------------------------------------------
 /* ZCode                                                                      */
 /* -------------------------------------------------------------------------- */
 

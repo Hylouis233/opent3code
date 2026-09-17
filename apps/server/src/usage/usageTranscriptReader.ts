@@ -15,9 +15,9 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
 import * as NodeReadline from "node:readline";
+import * as NodeSqlite from "node:sqlite";
 import * as NodeTimers from "node:timers";
 import * as NodeWorkerThreads from "node:worker_threads";
-import * as NodeSqlite from "node:sqlite";
 
 import type { UsageProviderKind } from "@t3tools/contracts";
 
@@ -28,6 +28,7 @@ import {
   parseCodexLine,
   parseMcodeUsageRow,
   parseOpenCodexUsageEntry,
+  parseZcodeUsageRow,
   parseKimiLine,
   type UsageRecord,
 } from "./usageTranscripts.ts";
@@ -283,12 +284,6 @@ function runMcodeWorker(request: McodeWorkerRequest): Promise<McodeWorkerRespons
     }
   });
 }
-  parseZcodeUsageRow,
-  type UsageRecord,
-} from "./usageTranscripts.ts";
-
-/** Wait through brief writer locks without stalling the server indefinitely. */
-const ZCODE_BUSY_TIMEOUT_MS = 1_000;
 
 export interface TranscriptFile {
   readonly path: string;
@@ -433,26 +428,6 @@ export async function probeMcodeUsageStore(filePath: string): Promise<McodeUsage
 }
 
 /**
- * Stats a sqlite usage store, applying the same mtime prefilter as the jsonl
- * walk. The WAL participates in the fingerprint because active ZCode writes
- * can leave the main db's size and mtime unchanged until a checkpoint.
- */
-export async function statSqliteUsageStore(
-  filePath: string,
-  sinceMs: number,
-): Promise<readonly TranscriptFile[]> {
-  try {
-    const stats = await NodeFSP.stat(filePath);
-    const walStats = await NodeFSP.stat(`${filePath}-wal`).catch(() => null);
-    const size = stats.size + (walStats?.size ?? 0);
-    const mtimeMs = Math.max(stats.mtimeMs, walStats?.mtimeMs ?? 0);
-    return mtimeMs >= sinceMs ? [{ path: filePath, size, mtimeMs }] : [];
-  } catch {
-    return [];
-  }
-}
-
-/**
  * Filesystem identity of a directory, as `device:inode`.
  *
  * Used to tell "two servers reading the same transcript directory" apart from
@@ -514,6 +489,9 @@ export function kimiSessionIdFromTranscriptPath(filePath: string): string {
   return sessionsIndex >= 0 ? (parts[sessionsIndex + 2] ?? "") : "";
 }
 
+/** Wait through brief writer locks without stalling the server indefinitely. */
+const ZCODE_BUSY_TIMEOUT_MS = 1_000;
+
 /**
  * Reads retained usage rows from ZCode's sqlite store.
  *
@@ -569,8 +547,6 @@ async function readZcodeUsageRecords(
  * Codex carries the active model on `turn_context` lines that hold no usage of
  * their own, so those still have to pass through the reducer to keep model
  * attribution correct.
- *
- * ZCode never reaches line parsing: its store is sqlite, handled above.
  */
 export async function readTranscriptRecords(
   filePath: string,
@@ -580,9 +556,7 @@ export async function readTranscriptRecords(
 ): Promise<readonly UsageRecord[] | null> {
   if (provider === "opencodex") return readOpenCodexUsageRecords(filePath, sinceMs);
   if (provider === "mcode") return readMcodeUsageRecords(filePath, sinceMs);
-  zcodeSinceMs = 0,
-): Promise<readonly UsageRecord[] | null> {
-  if (provider === "zcode") return readZcodeUsageRecords(filePath, zcodeSinceMs);
+  if (provider === "zcode") return readZcodeUsageRecords(filePath, sinceMs);
 
   const records: UsageRecord[] = [];
   const codexState = initialCodexScanState();
