@@ -6,10 +6,12 @@
  * `~/.opencodex/usage.jsonl`) rather than relying on T3 Code's
  * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, MCode's
  * `~/.minimax/v2/sqlite/runtime-state.sqlite`) rather than relying on T3 Code's
+ * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`, and Kimi
+ * Code's `sessions/<workspace>/<session>/agents/<agent>/wire.jsonl`) rather than relying on T3 Code's
  * own orchestration projections, so usage stays complete even for turns that
  * were never driven through T3 Code. This mirrors the approach `ccusage` takes.
  *
- * Environments return pre-aggregated `(day, hourStart?, provider, model)`
+ * Environments return pre-aggregated `(day, hourStart?, provider, sourcePath?, model)`
  * buckets. Raw transcript records never cross the wire.
  *
  * @module usage
@@ -25,7 +27,13 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  */
 export const USAGE_CONTRACT_VERSION = 5 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex", "opencodex", "mcode"]);
+export const UsageProviderKind = Schema.Literals([
+  "claude",
+  "codex",
+  "opencodex",
+  "mcode",
+  "kimi",
+]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
@@ -73,7 +81,7 @@ export const UsageTokenTotals = Schema.Struct({
 export type UsageTokenTotals = typeof UsageTokenTotals.Type;
 
 /**
- * One `(day, hourStart?, provider, model)` cell. `hourStart` is the UTC start
+ * One `(day, hourStart?, provider, sourcePath?, model)` cell. `hourStart` is the UTC start
  * instant of a rolling bucket and is present only for hourly requests.
  *
  * `costUsd` is the raw API-equivalent cost of these tokens. It is not money
@@ -85,6 +93,8 @@ export const UsageBucket = Schema.Struct({
   day: UsageDay,
   hourStart: Schema.optional(TrimmedNonEmptyString),
   provider: UsageProviderKind,
+  /** Resolved provider store that produced this bucket, for cross-environment de-duplication. */
+  sourcePath: Schema.optional(TrimmedNonEmptyString),
   model: TrimmedNonEmptyString,
   totals: UsageTokenTotals,
   costUsd: Schema.Number,
@@ -167,6 +177,7 @@ export const UsageSummaryInput = Schema.Struct({
    * Highest response contract the client can decode. Omitted clients receive
    * the pre-OpenCodex v4 shape so rolling upgrades remain wire-compatible.
    * the pre-MCode v4 shape so rolling upgrades remain wire-compatible.
+   * the pre-Kimi Code v4 shape so rolling upgrades remain wire-compatible.
    */
   contractVersion: Schema.optional(Schema.Number),
   /** Inclusive first day of the window, in `timeZone`. */

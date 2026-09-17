@@ -113,6 +113,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --workspace-titlebar-control-gap: 0.75rem;
   --usage-provider-opencodex: #8b2be2;
   --usage-provider-mcode: #2563eb;
+  --usage-provider-kimi: #5b4fd6;
 
   @variant dark {
     --appearance-contrast-target: white;
@@ -122,6 +123,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --glass-saturation: 1.08;
     --usage-provider-opencodex: #d39cff;
     --usage-provider-mcode: #7dc6ff;
+    --usage-provider-kimi: #a89cff;
   }
 }
 

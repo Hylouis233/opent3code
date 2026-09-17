@@ -501,7 +501,7 @@ function UsageCoverageNotice({
         </span>
       ))}
       {incompleteSources.map((source) => (
-        <span key={`${source.environmentId}:${source.provider}`}>
+        <span key={`${source.environmentId}:${source.provider}:${source.sourcePath}`}>
           {source.environmentLabel}&apos;s {PROVIDER_PRESENTATION[source.provider].label} usage{" "}
           {source.status === "failed" ? "could not be read." : "is incomplete."}
         </span>

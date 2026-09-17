@@ -83,6 +83,8 @@ export function mightCarryUsage(line: string, provider: UsageProviderKind): bool
       // MCode usage is read from its SQLite accounting table, never parsed as
       // transcript lines.
       return false;
+    case "kimi":
+      return line.includes('"usage.record"');
   }
 }
 
@@ -429,6 +431,46 @@ export function parseMcodeUsageRow(row: Record<string, unknown>): UsageRecord | 
       (typeof rowId === "string" && rowId.length > 0)
         ? `mcode:${String(rowId)}`
         : null,
+/* Kimi Code                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** Parses one turn-scoped `usage.record` from a Kimi Code wire transcript. */
+export function parseKimiLine(line: string, sessionId: string): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record["type"] !== "usage.record" || record["usageScope"] !== "turn") return null;
+
+  const timestampMs = int(record["time"]);
+  const model = typeof record["model"] === "string" ? record["model"].trim() : "";
+  const usage = record["usage"];
+  if (timestampMs === 0 || model.length === 0 || typeof usage !== "object" || usage === null) {
+    return null;
+  }
+  const usageRecord = usage as Record<string, unknown>;
+  const totals: UsageTokenTotals = {
+    uncachedInputTokens: int(usageRecord["inputOther"]),
+    cachedInputTokens: int(usageRecord["inputCacheRead"]),
+    cacheCreationTokens: int(usageRecord["inputCacheCreation"]),
+    outputTokens: int(usageRecord["output"]),
+    // Kimi Code does not currently break thinking tokens out from output.
+    reasoningTokens: 0,
+  };
+  if (totalTokens(totals) === 0) return null;
+
+  return {
+    provider: "kimi",
+    timestampMs,
+    model,
+    sessionId,
+    totals,
+    reportedCostUsd: null,
+    dedupeKey: null,
   };
 }
 

@@ -22,6 +22,7 @@ import {
   UsageReadError,
 } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -48,6 +49,7 @@ import {
   readTranscriptRecords,
   statUsageFile,
   statSqliteUsageStore,
+  resolveKimiDesktopDataDir,
 } from "./usageTranscriptReader.ts";
 import {
   decodeScanCache,
@@ -74,6 +76,8 @@ const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** Clients predating a provider-specific response contract. */
 const PRE_OPENCODEX_USAGE_CONTRACT_VERSION = 4 as const;
+/** Clients predating Kimi Code omit their supported response contract. */
+const PRE_KIMI_USAGE_CONTRACT_VERSION = 4 as const;
 
 /** Longest window the UI offers, plus slack. Older entries are pruned. */
 const CACHE_RETENTION_DAYS = 90;
@@ -88,6 +92,7 @@ interface TranscriptSource {
   readonly provider: UsageProviderKind;
   readonly dir: string;
   readonly file?: string;
+  readonly inspectionFailed?: boolean;
 }
 const decodeRatesCache = Schema.decodeUnknownEffect(
   Schema.fromJsonString(RatesCacheFile as unknown as Schema.Codec<typeof RatesCacheFile.Type>),
@@ -134,6 +139,13 @@ export function chooseMcodeUsageStore(
 ): string {
   if (primaryProbe !== "absent") return primaryPath;
   return alternateProbe === "absent" ? primaryPath : alternatePath;
+}
+
+export function resolveKimiCodeHome(
+  environment: Readonly<Record<string, string | undefined>>,
+  defaultHome: string,
+): string {
+  return environment["KIMI_CODE_HOME"]?.trim() || defaultHome;
 }
 
 export function negotiateUsageContractVersion(
@@ -192,6 +204,7 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const hostEnvironment = yield* HostProcessEnvironment;
+  const hostPlatform = yield* HostProcessPlatform;
 
   const fileCache: ScanCache = new Map();
   let cacheDirty = false;
@@ -305,14 +318,53 @@ export const make = Effect.gen(function* () {
       alternateMcodeDb,
       alternateProbe,
     );
+    const homeDir = NodeOS.homedir();
+    const kimiCodeHome = resolveKimiCodeHome(hostEnvironment, path.join(homeDir, ".kimi-code"));
+    const kimiDesktopDataDir = resolveKimiDesktopDataDir(hostEnvironment, hostPlatform, homeDir);
 
     const sources: readonly TranscriptSource[] = [
       { provider: "claude", dir: claudeDir },
       { provider: "codex", dir: path.join(codexLayout.sharedHomePath, "sessions") },
       { provider: "opencodex", dir: opencodexHome, file: opencodexUsageLog },
       { provider: "mcode", dir: path.dirname(mcodeDb), file: mcodeDb },
+      { provider: "kimi", dir: path.join(kimiCodeHome, "sessions") },
+      {
+        provider: "kimi",
+        dir: path.join(
+          kimiDesktopDataDir,
+          "daimon-share",
+          "daimon",
+          "runtime",
+          "kimi-code",
+          "home",
+          "sessions",
+        ),
+      },
     ];
-    return sources;
+    const canonicalSources = yield* Effect.forEach(sources, (source) =>
+      source.provider === "kimi"
+        ? fileSystem.realPath(source.dir).pipe(
+            Effect.map((dir) => ({ ...source, dir })),
+            Effect.catch((error) =>
+              Effect.succeed({
+                ...source,
+                dir: path.resolve(source.dir),
+                inspectionFailed: error.reason._tag !== "NotFound",
+              }),
+            ),
+          )
+        : Effect.succeed(source),
+    );
+    const seenKimiDirs = new Set<string>();
+    return canonicalSources.filter((source) => {
+      if (source.provider !== "kimi") return true;
+
+      const resolvedDir = path.resolve(source.dir);
+      if (seenKimiDirs.has(resolvedDir)) return false;
+
+      seenKimiDirs.add(resolvedDir);
+      return true;
+    });
   });
 
   /**
@@ -355,13 +407,20 @@ export const make = Effect.gen(function* () {
     provider: UsageProviderKind,
     opencodexSinceMs: number,
     mcodeSinceMs: number,
+    kimiSinceMs: number,
   ): Effect.Effect<readonly UsageRecord[] | null> =>
     Effect.gen(function* () {
       const cached = fileCache.get(filePath);
       // Provider is part of the identity: if both providers were ever pointed
       // at one directory, a hit parsed by the other parser must not be reused.
       const providerSinceMs =
-        provider === "opencodex" ? opencodexSinceMs : provider === "mcode" ? mcodeSinceMs : 0;
+        provider === "opencodex"
+          ? opencodexSinceMs
+          : provider === "mcode"
+            ? mcodeSinceMs
+            : provider === "kimi"
+              ? kimiSinceMs
+              : 0;
       if (cached && isReusableCachedFile(cached, { size, mtimeMs, provider }, providerSinceMs)) {
         return cached.records;
       }
@@ -381,7 +440,13 @@ export const make = Effect.gen(function* () {
         mtimeMs,
         provider,
         completeFromMs:
-          provider === "opencodex" ? opencodexSinceMs : provider === "mcode" ? mcodeSinceMs : null,
+          provider === "opencodex"
+            ? opencodexSinceMs
+            : provider === "mcode"
+              ? mcodeSinceMs
+              : provider === "kimi"
+                ? kimiSinceMs
+                : null,
         records,
       });
       cacheDirty = true;
@@ -436,7 +501,10 @@ export const make = Effect.gen(function* () {
       contractVersion >= USAGE_CONTRACT_VERSION
         ? resolvedDirs
         : resolvedDirs.filter(
-            (source) => source.provider !== "opencodex" && source.provider !== "mcode",
+            (source) =>
+              source.provider !== "opencodex" &&
+              source.provider !== "mcode" &&
+              source.provider !== "kimi",
           );
     const windowStart = DateTime.make(`${input.sinceDay}T00:00:00Z`);
     if (Option.isNone(windowStart)) {
@@ -464,21 +532,22 @@ export const make = Effect.gen(function* () {
     for (const source of dirs) {
       const { provider, dir } = source;
       const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
-      const exists = yield* fileSystem
-        .exists(source.file ?? dir)
-        .pipe(Effect.catchCause(() => Effect.succeed(null)));
-      const existence = classifyUsageSourceExistence(exists);
+      const exists = source.inspectionFailed
+        ? null
+        : yield* fileSystem
+            .exists(source.file ?? dir)
+            .pipe(Effect.catchCause(() => Effect.succeed(null)));
 
-      if (existence !== "present") {
+      if (exists !== true) {
         sources.push({
           fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
-          status: existence,
+          status: exists === null ? "failed" : "missing",
           scannedFiles: 0,
           skippedFiles: 0,
           malformedRecords: 0,
           distinctSessions: 0,
           message:
-            existence === "failed"
+            exists === null
               ? source.file === undefined
                 ? "Transcript directory could not be inspected."
                 : "Usage store could not be inspected."
@@ -517,6 +586,7 @@ export const make = Effect.gen(function* () {
           provider,
           windowStartMs,
           windowStartMs,
+          windowStartMs,
         );
         if (records === null) {
           failedFiles += 1;
@@ -530,7 +600,7 @@ export const make = Effect.gen(function* () {
         for (const record of records) {
           // Only sessions that contributed in-window count: the mtime slack
           // admits boundary files whose records fall outside the range.
-          if (aggregator.add(record) && record.sessionId.length > 0) {
+          if (aggregator.add(record, dir) && record.sessionId.length > 0) {
             sessionIds.add(record.sessionId);
           }
         }

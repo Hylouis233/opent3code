@@ -7,6 +7,7 @@ import {
   parseCodexLine,
   parseOpenCodexUsageEntry,
   parseMcodeUsageRow,
+  parseKimiLine,
   totalTokens,
 } from "./usageTranscripts.ts";
 
@@ -295,6 +296,28 @@ describe("parseMcodeUsageRow", () => {
       provider: "mcode",
       timestampMs: 1_786_000_000_000,
       model: "minimax/MiniMax-M3",
+describe("parseKimiLine", () => {
+  it("keeps uncached input separate from both cache categories", () => {
+    expect(
+      parseKimiLine(
+        JSON.stringify({
+          type: "usage.record",
+          model: "kimi-code/k3",
+          usage: {
+            inputOther: 120,
+            output: 45,
+            inputCacheRead: 900,
+            inputCacheCreation: 30,
+          },
+          usageScope: "turn",
+          time: 1_786_000_000_000,
+        }),
+        "session-a",
+      ),
+    ).toEqual({
+      provider: "kimi",
+      timestampMs: 1_786_000_000_000,
+      model: "kimi-code/k3",
       sessionId: "session-a",
       totals: {
         uncachedInputTokens: 120,
@@ -416,6 +439,27 @@ describe("parseMcodeUsageRow supplementary", () => {
         cost_usd: 0.5,
       })?.reportedCostUsd,
     ).toBe(0.5);
+        reasoningTokens: 0,
+      },
+      reportedCostUsd: null,
+      dedupeKey: null,
+    });
+  });
+
+  it("rejects cumulative, malformed, and empty usage records", () => {
+    const valid = {
+      type: "usage.record",
+      model: "kimi-code/k3",
+      usage: { inputOther: 0, output: 0, inputCacheRead: 0, inputCacheCreation: 0 },
+      usageScope: "turn",
+      time: 1_786_000_002_000,
+    };
+    expect(
+      parseKimiLine(JSON.stringify({ ...valid, usageScope: "session" }), "session-b"),
+    ).toBeNull();
+    expect(parseKimiLine(JSON.stringify({ ...valid, model: "" }), "session-b")).toBeNull();
+    expect(parseKimiLine(JSON.stringify(valid), "session-b")).toBeNull();
+    expect(parseKimiLine("not-json", "session-b")).toBeNull();
   });
 });
 

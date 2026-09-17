@@ -87,6 +87,7 @@ describe("buildDayColumns", () => {
       { provider: "claude", value: 20 },
       { provider: "opencodex", value: 0 },
       { provider: "mcode", value: 0 },
+      { provider: "kimi", value: 0 },
     ]);
   });
 

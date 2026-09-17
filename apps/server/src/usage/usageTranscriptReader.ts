@@ -27,6 +27,7 @@ import {
   parseCodexLine,
   parseMcodeUsageRow,
   parseOpenCodexUsageEntry,
+  parseKimiLine,
   type UsageRecord,
 } from "./usageTranscripts.ts";
 
@@ -299,6 +300,28 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
+export function resolveKimiDesktopDataDir(
+  environment: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform,
+  homeDir: string,
+): string {
+  const override = environment["KIMI_DESKTOP_DATA_DIR"]?.trim();
+  if (override) return override;
+  if (platform === "win32") {
+    return NodePath.join(
+      environment["APPDATA"]?.trim() || NodePath.join(homeDir, "AppData", "Roaming"),
+      "kimi-desktop",
+    );
+  }
+  if (platform === "darwin") {
+    return NodePath.join(homeDir, "Library", "Application Support", "kimi-desktop");
+  }
+  return NodePath.join(
+    environment["XDG_CONFIG_HOME"]?.trim() || NodePath.join(homeDir, ".config"),
+    "kimi-desktop",
+  );
+}
+
 /**
  * Lists `.jsonl` transcripts under `root` last modified at or after `sinceMs`.
  *
@@ -456,6 +479,10 @@ async function readMcodeUsageRecords(
     if (record !== null) records.push(record);
   }
   return records;
+export function kimiSessionIdFromTranscriptPath(filePath: string): string {
+  const parts = NodePath.normalize(filePath).split(NodePath.sep);
+  const sessionsIndex = parts.lastIndexOf("sessions");
+  return sessionsIndex >= 0 ? (parts[sessionsIndex + 2] ?? "") : "";
 }
 
 /**
@@ -475,12 +502,14 @@ export async function readTranscriptRecords(
   filePath: string,
   provider: UsageProviderKind,
   sinceMs = 0,
+  kimiSinceMs = 0,
 ): Promise<readonly UsageRecord[] | null> {
   if (provider === "opencodex") return readOpenCodexUsageRecords(filePath, sinceMs);
   if (provider === "mcode") return readMcodeUsageRecords(filePath, sinceMs);
 
   const records: UsageRecord[] = [];
   const codexState = initialCodexScanState();
+  const kimiSessionId = provider === "kimi" ? kimiSessionIdFromTranscriptPath(filePath) : "";
 
   try {
     const lines = NodeReadline.createInterface({
@@ -499,6 +528,13 @@ export async function readTranscriptRecords(
         }
         const record = parseCodexLine(line, codexState);
         if (record !== null) records.push(record);
+        continue;
+      }
+
+      if (provider === "kimi") {
+        if (!mightCarryUsage(line, provider)) continue;
+        const record = parseKimiLine(line, kimiSessionId);
+        if (record !== null && record.timestampMs >= kimiSinceMs) records.push(record);
         continue;
       }
 

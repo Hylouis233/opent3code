@@ -116,6 +116,31 @@ describe("scan cache round trip", () => {
     );
   });
 
+  it("round-trips a Kimi Code wire transcript with its coverage bound", () => {
+    const kimiRecord = record({
+      provider: "kimi",
+      model: "kimi-code/k3",
+      sessionId: "kimi-session",
+      dedupeKey: null,
+    });
+    const original: ScanCache = new Map([
+      [
+        "/home/user/.kimi-code/sessions/wd_demo/session-a/agents/main/wire.jsonl",
+        {
+          size: 42,
+          mtimeMs: 200,
+          provider: "kimi",
+          completeFromMs: 1_786_000_000_000,
+          records: [kimiRecord],
+        },
+      ],
+    ]);
+
+    expect(decodeScanCache(JSON.parse(JSON.stringify(encodeScanCache(original))))).toEqual(
+      original,
+    );
+  });
+
   it("treats a corrupt or foreign document as an empty cache", () => {
     // A bad cache should cost one cold scan, never a broken page.
     expect(decodeScanCache(null).size).toBe(0);
@@ -203,6 +228,26 @@ describe("isReusableCachedFile", () => {
   it("rejects a narrow MCode scan for a broader request", () => {
     expect(
       isReusableCachedFile(mcodeEntry, { size: 42, mtimeMs: 100, provider: "mcode" }, 500),
+    ).toBe(false);
+  });
+
+  const kimiEntry = {
+    size: 42,
+    mtimeMs: 100,
+    provider: "kimi" as const,
+    completeFromMs: 1_000,
+    records: [record({ provider: "kimi" })],
+  };
+
+  it("reuses a broad Kimi Code scan for a narrower request", () => {
+    expect(
+      isReusableCachedFile(kimiEntry, { size: 42, mtimeMs: 100, provider: "kimi" }, 2_000),
+    ).toBe(true);
+  });
+
+  it("rejects a narrow Kimi Code scan for a broader request", () => {
+    expect(
+      isReusableCachedFile(kimiEntry, { size: 42, mtimeMs: 100, provider: "kimi" }, 500),
     ).toBe(false);
   });
 });

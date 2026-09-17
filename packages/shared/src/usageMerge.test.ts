@@ -181,6 +181,7 @@ describe("mergeUsage", () => {
             [
               bucket({ provider: "opencodex", model: "openai/gpt-5.4", costUsd: 7 }),
               bucket({ provider: "mcode", model: "minimax/MiniMax-M3", costUsd: 7 }),
+              bucket({ provider: "kimi", model: "kimi-code/k3", costUsd: 7 }),
               bucket({ provider: "claude", costUsd: 3 }),
             ],
             [
@@ -195,6 +196,13 @@ describe("mergeUsage", () => {
                 provider: "mcode",
                 hostId: "mac",
                 homePath: "/a/.minimax/v2/sqlite",
+                status: "failed",
+                message: "1 usage file could not be read.",
+              },
+              {
+                provider: "kimi",
+                hostId: "mac",
+                homePath: "/a/.kimi-code/sessions",
                 status: "failed",
                 message: "1 usage file could not be read.",
               },
@@ -215,7 +223,353 @@ describe("mergeUsage", () => {
     expect(merged.incompleteSources.map((source) => source.provider)).toEqual([
       "opencodex",
       "mcode",
+      "kimi",
       "claude",
+    ]);
+  });
+
+  it("prefers a complete OpenCodex duplicate without a false coverage gap", () => {
+    const shared = {
+      provider: "opencodex" as const,
+      hostId: "mac",
+      homePath: "/a/.opencodex",
+      volumeId: "16777220:1234",
+    };
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [bucket({ provider: "opencodex", model: "openai/gpt-5.4", costUsd: 3 })],
+            [{ ...shared, status: "partial" }],
+          ),
+        ),
+        environment(
+          "env-b",
+          summary(
+            [bucket({ provider: "opencodex", model: "openai/gpt-5.4", costUsd: 7 })],
+            [{ ...shared, status: "ok" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(7);
+    expect(merged.contributingEnvironments).toEqual(["env-b"]);
+    expect(merged.incompleteSources).toEqual([]);
+  });
+
+  it("rolls multiple Kimi stores into one provider-level coverage status", () => {
+    const mixed = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [bucket({ provider: "kimi", model: "kimi-code/k3", costUsd: 4 })],
+            [
+              {
+                provider: "kimi",
+                hostId: "mac",
+                homePath: "/a/.kimi-code/sessions",
+                status: "ok",
+              },
+              {
+                provider: "kimi",
+                hostId: "mac",
+                homePath: "/a/kimi-desktop/sessions",
+                volumeId: "desktop-volume",
+                status: "failed",
+                message: "1 usage file could not be read.",
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(mixed.incompleteSources).toEqual([
+      expect.objectContaining({ provider: "kimi", status: "partial" }),
+    ]);
+
+    const failed = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [],
+            [
+              {
+                provider: "kimi",
+                hostId: "mac",
+                homePath: "/a/.kimi-code/sessions",
+                status: "failed",
+              },
+              {
+                provider: "kimi",
+                hostId: "mac",
+                homePath: "/a/kimi-desktop/sessions",
+                volumeId: "desktop-volume",
+                status: "failed",
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(failed.incompleteSources).toEqual([
+      expect.objectContaining({ provider: "kimi", status: "failed" }),
+    ]);
+  });
+
+  it("keeps split Kimi source winners without double counting attributed buckets", () => {
+    const tui = {
+      provider: "kimi" as const,
+      hostId: "mac",
+      homePath: "/a/.kimi-code/sessions",
+      volumeId: "tui-volume",
+    };
+    const desktop = {
+      provider: "kimi" as const,
+      hostId: "mac",
+      homePath: "/a/kimi-desktop/sessions",
+      volumeId: "desktop-volume",
+    };
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({
+                provider: "kimi",
+                sourcePath: tui.homePath,
+                model: "kimi-code/k3",
+                costUsd: 1,
+              }),
+              bucket({
+                provider: "kimi",
+                sourcePath: desktop.homePath,
+                model: "kimi-code/k3",
+                costUsd: 2,
+              }),
+            ],
+            [tui, { ...desktop, status: "partial" }],
+          ),
+        ),
+        environment(
+          "env-b",
+          summary(
+            [
+              bucket({
+                provider: "kimi",
+                sourcePath: tui.homePath,
+                model: "kimi-code/k3",
+                costUsd: 1,
+              }),
+              bucket({
+                provider: "kimi",
+                sourcePath: desktop.homePath,
+                model: "kimi-code/k3",
+                costUsd: 2,
+              }),
+            ],
+            [{ ...tui, status: "partial" }, desktop],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(3);
+    expect(merged.contributingEnvironments).toEqual(["env-a", "env-b"]);
+    expect(merged.providers.find((provider) => provider.provider === "kimi")?.sessions).toBe(2);
+  });
+
+  it("does not connect missing Kimi homes across same-named machines", () => {
+    const missing = {
+      provider: "kimi" as const,
+      hostId: "same-hostname",
+      homePath: "/home/user/.kimi-code/sessions",
+      volumeId: "",
+      status: "missing" as const,
+    };
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [bucket({ provider: "kimi", model: "kimi-code/k3", costUsd: 3 })],
+            [
+              missing,
+              {
+                provider: "kimi",
+                hostId: "same-hostname",
+                homePath: "/machine-a/kimi-desktop",
+                volumeId: "machine-a-volume",
+              },
+            ],
+          ),
+        ),
+        environment(
+          "env-b",
+          summary(
+            [bucket({ provider: "kimi", model: "kimi-code/k3", costUsd: 7 })],
+            [
+              missing,
+              {
+                provider: "kimi",
+                hostId: "same-hostname",
+                homePath: "/machine-b/kimi-desktop",
+                volumeId: "machine-b-volume",
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(10);
+    expect(merged.contributingEnvironments).toEqual(["env-a", "env-b"]);
+    expect(merged.duplicateSources).toEqual([]);
+  });
+
+  it("retains unique stores while de-duplicating one shared Kimi store", () => {
+    const sharedTui = {
+      provider: "kimi" as const,
+      hostId: "mac",
+      homePath: "/shared/.kimi-code/sessions",
+      volumeId: "shared-tui",
+    };
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({
+                provider: "kimi",
+                sourcePath: sharedTui.homePath,
+                model: "kimi-code/k3",
+                costUsd: 2,
+              }),
+              bucket({
+                provider: "kimi",
+                sourcePath: "/machine-a/kimi-desktop",
+                model: "kimi-code/k3",
+                costUsd: 3,
+              }),
+            ],
+            [
+              sharedTui,
+              {
+                provider: "kimi",
+                hostId: "mac",
+                homePath: "/machine-a/kimi-desktop",
+                volumeId: "desktop-a",
+              },
+            ],
+          ),
+        ),
+        environment(
+          "env-b",
+          summary(
+            [
+              bucket({
+                provider: "kimi",
+                sourcePath: sharedTui.homePath,
+                model: "kimi-code/k3",
+                costUsd: 2,
+              }),
+              bucket({
+                provider: "kimi",
+                sourcePath: "/machine-b/kimi-desktop",
+                model: "kimi-code/k3",
+                costUsd: 7,
+              }),
+            ],
+            [
+              { ...sharedTui, status: "partial" },
+              {
+                provider: "kimi",
+                hostId: "mac",
+                homePath: "/machine-b/kimi-desktop",
+                volumeId: "desktop-b",
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(12);
+    expect(merged.duplicateSources).toEqual(["env-b: /shared/.kimi-code/sessions"]);
+  });
+
+  it("reports a losing environment's unique failed Kimi store", () => {
+    const sharedTui = {
+      provider: "kimi" as const,
+      hostId: "mac",
+      homePath: "/shared/.kimi-code/sessions",
+      volumeId: "shared-tui",
+    };
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({
+                provider: "kimi",
+                sourcePath: sharedTui.homePath,
+                model: "kimi-code/k3",
+                costUsd: 2,
+              }),
+            ],
+            [sharedTui],
+          ),
+        ),
+        environment(
+          "env-b",
+          summary(
+            [
+              bucket({
+                provider: "kimi",
+                sourcePath: sharedTui.homePath,
+                model: "kimi-code/k3",
+                costUsd: 2,
+              }),
+            ],
+            [
+              { ...sharedTui, status: "partial" },
+              {
+                provider: "kimi",
+                hostId: "mac",
+                homePath: "/machine-b/kimi-desktop",
+                volumeId: "desktop-b",
+                status: "failed",
+                message: "1 usage file could not be read.",
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(2);
+    expect(merged.incompleteSources).toEqual([
+      expect.objectContaining({
+        environmentId: "env-b",
+        provider: "kimi",
+        sourcePath: "/machine-b/kimi-desktop",
+        status: "failed",
+      }),
     ]);
   });
 
@@ -271,6 +625,38 @@ describe("mergeUsage", () => {
           "env-b",
           summary(
             [bucket({ provider: "mcode", model: "minimax/MiniMax-M3", costUsd: 7 })],
+            [{ ...shared, status: "ok" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.costUsd).toBe(7);
+    expect(merged.contributingEnvironments).toEqual(["env-b"]);
+    expect(merged.incompleteSources).toEqual([]);
+  });
+
+  it("prefers a complete Kimi Code duplicate without a false coverage gap", () => {
+    const shared = {
+      provider: "kimi" as const,
+      hostId: "mac",
+      homePath: "/a/.kimi-code/sessions",
+      volumeId: "16777220:1234",
+    };
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [bucket({ provider: "kimi", model: "kimi-code/k3", costUsd: 3 })],
+            [{ ...shared, status: "partial" }],
+          ),
+        ),
+        environment(
+          "env-b",
+          summary(
+            [bucket({ provider: "kimi", model: "kimi-code/k3", costUsd: 7 })],
             [{ ...shared, status: "ok" }],
           ),
         ),

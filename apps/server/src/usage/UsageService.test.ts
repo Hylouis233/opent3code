@@ -4,6 +4,7 @@ import {
   chooseMcodeUsageStore,
   classifyUsageSourceExistence,
   negotiateUsageContractVersion,
+  resolveKimiCodeHome,
   resolveMcodeDataDir,
   resolveOpenCodexHome,
   summarizeSourceReadFailures,
@@ -70,6 +71,18 @@ describe("chooseMcodeUsageStore", () => {
   });
 });
 
+describe("resolveKimiCodeHome", () => {
+  it("prefers KIMI_CODE_HOME", () => {
+    expect(resolveKimiCodeHome({ KIMI_CODE_HOME: "/custom/kimi" }, "/home/user/.kimi-code")).toBe(
+      "/custom/kimi",
+    );
+  });
+
+  it("uses the standard TUI home by default", () => {
+    expect(resolveKimiCodeHome({}, "/home/user/.kimi-code")).toBe("/home/user/.kimi-code");
+  });
+});
+
 describe("negotiateUsageContractVersion", () => {
   it("keeps v4 responses decodable for legacy clients", () => {
     expect(negotiateUsageContractVersion(undefined)).toBe(4);
@@ -82,6 +95,11 @@ describe("negotiateUsageContractVersion", () => {
   });
 
   it("serves MCode only to compatible clients", () => {
+    expect(negotiateUsageContractVersion(5)).toBe(5);
+    expect(negotiateUsageContractVersion(6)).toBe(5);
+  });
+
+  it("serves Kimi Code only to compatible clients", () => {
     expect(negotiateUsageContractVersion(5)).toBe(5);
     expect(negotiateUsageContractVersion(6)).toBe(5);
   });
