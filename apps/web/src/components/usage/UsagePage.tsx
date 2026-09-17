@@ -32,7 +32,7 @@ import {
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
-import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
+import { PROVIDER_ORDER, PROVIDER_PRESENTATION, providersWithUsage } from "./usageProviders";
 
 const WINDOW_OPTIONS = [
   { days: 1, label: "Past 24h" },
@@ -68,6 +68,7 @@ export function UsagePage() {
         : enumerateHourStarts(window.sinceTime, window.untilTime),
     [window.sinceTime, window.untilTime],
   );
+  const activeProviders = useMemo(() => providersWithUsage(merged.providers), [merged.providers]);
   // Newest first: the window can run 90 periods, so the interesting end
   // belongs at the top of the table.
   const breakdownPeriods = useMemo<readonly (DailyTotals | HourlyTotals)[]>(
@@ -277,6 +278,7 @@ export function UsagePage() {
                       {metric === "tokens" ? "processed tokens" : "cost"}
                     </h2>
                     <UsageProviderChart
+                      providers={activeProviders}
                       days={days}
                       daily={merged.daily}
                       hours={hours}

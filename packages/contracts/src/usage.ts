@@ -31,9 +31,19 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  */
 export const USAGE_CONTRACT_VERSION = 5 as const;
 
+/**
+ * Oldest summary version whose buckets can still merge into the current one.
+ *
+ * v5 only adds providers to {@link UsageProviderKind}; v4 Claude/Codex buckets
+ * remain valid, so mixed-version environments keep those totals instead of
+ * treating every older server as stale.
+ */
+export const USAGE_MERGE_COMPATIBLE_SINCE = 4 as const;
+
 export const UsageProviderKind = Schema.Literals([
   "claude",
   "codex",
+  "grok",
   "opencodex",
   "mcode",
   "kimi",
@@ -218,7 +228,7 @@ export const UsageSummary = Schema.Struct({
 });
 export type UsageSummary = typeof UsageSummary.Type;
 
-export class UsageReadError extends Schema.TaggedErrorClass<UsageReadError>()("UsageReadError", {
+export class UsageReadError extends Schema.TaggedError<UsageReadError>()("UsageReadError", {
   reason: Schema.Literals(["scanFailed", "invalidWindow"]),
   /** Stable, bounded description. The underlying failure travels in `cause`. */
   detail: TrimmedNonEmptyString,
