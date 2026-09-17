@@ -5,8 +5,12 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
  * Series and table order. The chart stacks providers from the bottom in this
  * order, so it also fixes which band sits on top of the bars.
  */
-export const PROVIDER_ORDER: readonly UsageProviderKind[] = ["codex", "claude", "opencodex"];
-export const PROVIDER_ORDER: readonly UsageProviderKind[] = ["codex", "claude", "mcode"];
+export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
+  "codex",
+  "claude",
+  "opencodex",
+  "mcode",
+];
 
 export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   claude: "Claude Code",
@@ -18,9 +22,7 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
 /**
  * Claude's brand orange holds in both themes; Codex is neutral and must flip
  * with the theme or its bars vanish against the matching background. OpenCodex's
- * purple accent remains legible in both themes.
- * with the theme or its bars vanish against the matching background. MCode's
- * official sky blue remains legible in both themes.
+ * purple accent and MCode's official sky blue remain legible in both themes.
  */
 export function useProviderColors(): Record<UsageProviderKind, string> {
   const { themeAppearance: scheme } = useAppearancePreferences();
