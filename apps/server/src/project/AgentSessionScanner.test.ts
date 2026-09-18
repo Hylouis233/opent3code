@@ -9,6 +9,7 @@ import {
   type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -77,6 +78,12 @@ interface ScannerTestInput {
   /** Base dir for the test ServerConfig; worktreesDir derives from it. */
   readonly configBaseDir?: string;
   readonly providerInstances?: ContractServerSettings["providerInstances"];
+  /**
+   * SQLite store overrides. Defaults point both stores at nonexistent paths so
+   * the machine's real mcode/zcode homes never leak into tests.
+   */
+  readonly mcodeDbPath?: string;
+  readonly zcodeDbPath?: string;
 }
 
 const makeScannerTestLayer = (input: ScannerTestInput) =>
@@ -97,6 +104,10 @@ const makeScannerTestLayer = (input: ScannerTestInput) =>
           input.configBaseDir ?? { prefix: "t3code-scanner-config-" },
         ),
         makeProjectionSnapshotQueryLayer(input.importedWorkspaceRoots ?? []),
+        Layer.succeed(HostProcessEnvironment, {
+          MCODE_DB_PATH: input.mcodeDbPath ?? `${input.claudeHomePath}/no-mcode-store.sqlite`,
+          ZCODE_DB_PATH: input.zcodeDbPath ?? `${input.claudeHomePath}/no-zcode-store.sqlite`,
+        }),
       ),
     ),
   );
@@ -127,6 +138,110 @@ const makeTempDir = Effect.fn("AgentSessionScanner.test.makeTempDir")(function* 
   const fileSystem = yield* FileSystem.FileSystem;
   return yield* fileSystem.makeTempDirectoryScoped({ prefix });
 });
+
+/**
+ * Writes a minimal mcode- or zcode-shaped SQLite store with one session in
+ * `cwd` and a single user/assistant exchange. Plain statements only; the
+ * stores are tiny and shared with the importer's read path.
+ */
+const writeSqliteStore = (
+  dbPath: string,
+  kind: "mcode" | "zcode",
+  cwd: string,
+  updatedAtMs: number,
+): void => {
+  const NodeFS = require("node:fs") as typeof import("node:fs");
+  const NodePath = require("node:path") as typeof import("node:path");
+  const NodeSqlite = require("node:sqlite") as typeof import("node:sqlite");
+  NodeFS.mkdirSync(NodePath.dirname(dbPath), { recursive: true });
+  const db = new NodeSqlite.DatabaseSync(dbPath);
+  try {
+    if (kind === "mcode") {
+      db
+        .prepare(
+          "CREATE TABLE local_runtime_sessions (session_id TEXT PRIMARY KEY, title TEXT," +
+            " workspace_dir TEXT, created_at_ms INTEGER, updated_at_ms INTEGER," +
+            " archived INTEGER NOT NULL DEFAULT 0)",
+        )
+        .run();
+      db
+        .prepare(
+          "CREATE TABLE local_runtime_pi_history_rows (id INTEGER PRIMARY KEY AUTOINCREMENT," +
+            " session_id TEXT NOT NULL, role TEXT, created_at_ms INTEGER, data_json TEXT NOT NULL)",
+        )
+        .run();
+      db
+        .prepare(
+          "INSERT INTO local_runtime_sessions (session_id, title, workspace_dir," +
+            " created_at_ms, updated_at_ms, archived) VALUES (?, ?, ?, ?, ?, 0)",
+        )
+        .run("mvs_test", "SQLite 扫描会话", cwd, updatedAtMs - 1_000, updatedAtMs);
+      db
+        .prepare(
+          "INSERT INTO local_runtime_pi_history_rows (session_id, role, created_at_ms, data_json)" +
+            " VALUES (?, ?, ?, ?)",
+        )
+        .run("mvs_test", "user", updatedAtMs - 900, JSON.stringify({ role: "user", content: "检查扫描" }));
+      db
+        .prepare(
+          "INSERT INTO local_runtime_pi_history_rows (session_id, role, created_at_ms, data_json)" +
+            " VALUES (?, ?, ?, ?)",
+        )
+        .run(
+          "mvs_test",
+          "assistant",
+          updatedAtMs - 800,
+          JSON.stringify({ role: "assistant", content: [{ type: "text", text: "扫描正常" }] }),
+        );
+    } else {
+      db
+        .prepare(
+          "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT," +
+            " time_created INTEGER, time_updated INTEGER, time_archived INTEGER)",
+        )
+        .run();
+      db
+        .prepare(
+          "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL," +
+            " time_created INTEGER, sequence INTEGER, data TEXT NOT NULL)",
+        )
+        .run();
+      db
+        .prepare(
+          "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL," +
+            " sequence INTEGER, data TEXT NOT NULL)",
+        )
+        .run();
+      db
+        .prepare(
+          "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived)" +
+            " VALUES (?, ?, ?, ?, ?, NULL)",
+        )
+        .run("sess_zc", cwd, "ZCode 扫描会话", updatedAtMs - 1_000, updatedAtMs);
+      db
+        .prepare("INSERT INTO message (id, session_id, time_created, sequence, data) VALUES (?, ?, ?, ?, ?)")
+        .run(
+          "msg_zc_1",
+          "sess_zc",
+          updatedAtMs - 900,
+          1,
+          JSON.stringify({
+            role: "user",
+            semantics: { origin: "real_user" },
+            metadata: { inputIntent: { text: "检查 zcode 扫描" } },
+          }),
+        );
+      db
+        .prepare("INSERT INTO message (id, session_id, time_created, sequence, data) VALUES (?, ?, ?, ?, ?)")
+        .run("msg_zc_2", "sess_zc", updatedAtMs - 800, 2, JSON.stringify({ role: "assistant" }));
+      db
+        .prepare("INSERT INTO part (id, message_id, session_id, sequence, data) VALUES (?, ?, ?, ?, ?)")
+        .run("part_zc", "msg_zc_2", "sess_zc", 1, JSON.stringify({ type: "text", text: "zcode 扫描正常" }));
+    }
+  } finally {
+    db.close();
+  }
+};
 
 const writeTranscript = Effect.fn("AgentSessionScanner.test.writeTranscript")(function* (input: {
   readonly filePath: string;
@@ -1368,6 +1483,47 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
 
         expect(result.candidates).toEqual([]);
         expect(result.scannedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      }),
+    );
+
+    it.effect("discovers mcode and zcode sessions from their SQLite stores", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const root = yield* makeTempDir("t3code-sqlite-homes-");
+        const workspace = yield* makeTempDir("t3code-sqlite-project-");
+        const mcodeHome = yield* makeTempDir("t3code-sqlite-mcode-home-");
+
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        writeSqliteStore(path.join(root, "zcode.sqlite"), "zcode", workspace, nowMs - 1_000);
+        writeSqliteStore(
+          path.join(mcodeHome, "v2", "sqlite", "runtime-state.sqlite"),
+          "mcode",
+          workspace,
+          nowMs - 2_000,
+        );
+
+        const result = yield* runScan({
+          claudeHomePath: path.join(root, "no-claude"),
+          codexHomePath: path.join(root, "no-codex"),
+          zcodeDbPath: path.join(root, "zcode.sqlite"),
+          mcodeDbPath: path.join(mcodeHome, "v2", "sqlite", "runtime-state.sqlite"),
+          providerInstances: {
+            [ProviderInstanceId.make("mcode")]: {
+              driver: ProviderDriverKind.make("mcode"),
+              enabled: true,
+              config: { homePath: mcodeHome },
+            },
+          },
+        });
+
+        const sqliteCandidate = result.candidates.find((candidate) =>
+          candidate.path.includes("t3code-sqlite-project"),
+        );
+        expect(sqliteCandidate?.path).toBe(workspace);
+        expect([...new Set(sqliteCandidate?.sources ?? [])].sort()).toEqual(["mcode", "zcode"]);
+        expect(sqliteCandidate?.threadCount).toBe(2);
+        expect(sqliteCandidate?.lastActiveAt).toBe("2026-08-24T11:59:59.000Z");
       }),
     );
   });

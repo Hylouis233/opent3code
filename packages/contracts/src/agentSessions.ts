@@ -2,8 +2,18 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
-/** Coding agent home directories the scanner knows how to read. */
-export const AgentSessionSource = Schema.Literals(["claudeAgent", "codex"]);
+/**
+ * Coding agent stores the scanner knows how to read. `claudeAgent` and `codex`
+ * are JSONL transcript homes; `mcode` and `zcode` are SQLite stores read by
+ * `project/SqliteAgentSessions.ts` (imported history only — zcode has no ACP
+ * driver and mcode resume cursors are not reconstructed on import).
+ */
+export const AgentSessionSource = Schema.Literals([
+  "claudeAgent",
+  "codex",
+  "mcode",
+  "zcode",
+]);
 export type AgentSessionSource = typeof AgentSessionSource.Type;
 
 /** File identity saved with an imported session so bounded retries can skip unchanged history. */

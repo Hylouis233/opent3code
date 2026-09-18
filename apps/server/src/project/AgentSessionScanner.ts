@@ -19,6 +19,7 @@ import {
   AgentSessionScanError,
   ClaudeSettings,
   CodexSettings,
+  MCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
@@ -57,6 +58,14 @@ import {
   createTranscriptJsonSelector,
   TranscriptJsonLimitError,
 } from "./AgentSessionJson.ts";
+import {
+  MCODE_DEFAULT_DB,
+  ZCODE_DEFAULT_DB,
+  readMcodeCandidates,
+  readMcodeThread,
+  readZcodeCandidates,
+  readZcodeThread,
+} from "./SqliteAgentSessions.ts";
 
 /** Chunk size for full transcript reads. */
 const TRANSCRIPT_PREFIX_BYTES = 32 * 1024;
@@ -94,6 +103,16 @@ const MAX_IMPORT_HISTORY_BYTES = 32 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_IMPORT_TRANSCRIPTS = 100;
 const MAX_IMPORT_RECORDS = 100_000;
+/**
+ * Nominal budget charge for one SQLite-sourced session. The shared store file
+ * is far larger than any single session's history, so byte accounting for
+ * mcode/zcode imports uses this placeholder instead of the store's size.
+ */
+const SQLITE_SESSION_NOMINAL_BYTES = 256 * 1024;
+
+function formatEpochMs(ms: number): string {
+  return DateTime.formatIso(DateTime.makeUnsafe(ms > 0 ? ms : 0));
+}
 
 const TranscriptContentBlock = Schema.Struct({
   type: Schema.optional(Schema.String),
@@ -137,6 +156,7 @@ const TranscriptRecord = Schema.Struct({
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
+const decodeMcodeSettings = Schema.decodeUnknownOption(MCodeSettings);
 const decodeTranscriptRecord = Schema.decodeUnknownOption(Schema.fromJsonString(TranscriptRecord));
 const decodeTranscriptValue = Schema.decodeUnknownOption(TranscriptRecord);
 const selectTranscriptPath = createTranscriptJsonSelector(TranscriptRecord);
@@ -208,6 +228,8 @@ interface RawCandidate {
   readonly transcripts: ReadonlyArray<{
     readonly filePath: string;
     readonly mtimeMs: number | null;
+    /** SQLite sources only: which session row this entry imports. */
+    readonly providerSessionId?: string;
   }>;
 }
 
@@ -1090,7 +1112,7 @@ export const make = Effect.gen(function* () {
     const raw: Array<RawCandidate> = [];
     let truncated = false;
 
-    for (const source of ["claudeAgent", "codex"] as const) {
+    for (const source of ["claudeAgent", "codex", "mcode", "zcode"] as const) {
       const instances: Array<{
         readonly instanceId: ProviderInstanceId;
         readonly config: ProviderInstanceConfig;
@@ -1102,7 +1124,10 @@ export const make = Effect.gen(function* () {
           instanceId: ProviderInstanceId.make(instanceId),
           config,
         }));
-      if (!Object.hasOwn(settings.providerInstances, source)) {
+      if (
+        (source === "claudeAgent" || source === "codex") &&
+        !Object.hasOwn(settings.providerInstances, source)
+      ) {
         const legacyInstance = {
           instanceId: ProviderInstanceId.make(source),
           config: {
@@ -1113,6 +1138,69 @@ export const make = Effect.gen(function* () {
         if (resolveProviderInstanceEnabled(legacyInstance.config)) {
           instances.push(legacyInstance);
         }
+      }
+
+      // SQLite-backed sources (mcode, zcode) carry no JSONL transcripts; their
+      // sessions are discovered straight from the store and grouped by the
+      // workspace the CLI recorded.
+      if (source === "mcode" || source === "zcode") {
+        const homeDir = NodeOS.homedir();
+        const homes: Array<{ homePath: string; providerInstanceId: ProviderInstanceId }> = [];
+        if (source === "zcode") {
+          // Not a driver anywhere; a fixed pseudo-instance owns every import.
+          homes.push({ homePath: homeDir, providerInstanceId: ProviderInstanceId.make("zcode") });
+        } else {
+          const seen = new Set<string>();
+          for (const { instanceId, config: instance } of instances) {
+            const config = decodeMcodeSettings(instance.config ?? {});
+            if (Option.isNone(config)) continue;
+            const envHome =
+              instance.environment?.findLast(
+                (variable) =>
+                  variable.name === "MINIMAX_DATA_DIR" || variable.name === "MAVIS_DATA_DIR",
+              )?.value ??
+              hostEnvironment["MINIMAX_DATA_DIR"] ??
+              hostEnvironment["MAVIS_DATA_DIR"];
+            const homePath =
+              config.value.homePath.trim().length > 0
+                ? config.value.homePath
+                : envHome !== undefined && envHome.trim().length > 0
+                  ? envHome
+                  : path.join(homeDir, ".minimax");
+            if (seen.has(homePath)) continue;
+            seen.add(homePath);
+            homes.push({ homePath, providerInstanceId: instanceId });
+          }
+        }
+        for (const home of homes) {
+          // Host-level overrides keep scans testable: point the store
+          // elsewhere (or nowhere) without touching the real CLI homes.
+          const dbPath =
+            source === "mcode"
+              ? (hostEnvironment["MCODE_DB_PATH"] ?? MCODE_DEFAULT_DB(home.homePath))
+              : (hostEnvironment["ZCODE_DB_PATH"] ?? ZCODE_DEFAULT_DB(home.homePath));
+          const sessions =
+            source === "mcode" ? readMcodeCandidates(dbPath) : readZcodeCandidates(dbPath);
+          const byCwd = Map.groupBy(sessions, (session) => session.cwd);
+          for (const [cwd, group] of byCwd) {
+            raw.push({
+              cwd,
+              source,
+              providerInstanceId: home.providerInstanceId,
+              threadCount: group.length,
+              lastActiveAtMs: group.reduce(
+                (latest, session) => Math.max(latest, session.updatedAtMs),
+                0,
+              ),
+              transcripts: group.map((session) => ({
+                filePath: dbPath,
+                mtimeMs: session.updatedAtMs,
+                providerSessionId: session.providerSessionId,
+              })),
+            });
+          }
+        }
+        continue;
       }
 
       // A shared home contains one copy of each session. Prefer the built-in
@@ -1382,6 +1470,7 @@ export const make = Effect.gen(function* () {
     return Stream.fromIteratorSucceed(eligibleTranscripts.values(), 1).pipe(
       Stream.mapEffect(({ candidate, transcript }) =>
         Effect.gen(function* () {
+          const isSqliteSource = candidate.source === "mcode" || candidate.source === "zcode";
           const completed = completedByFile.get(
             `${candidate.providerInstanceId}\0${transcript.filePath}`,
           );
@@ -1396,9 +1485,15 @@ export const make = Effect.gen(function* () {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
           const identity = transcriptIdentity(transcript.filePath, stats.value);
+          // SQLite sources share one file per home; the session's own update
+          // time, not the store file's mtime, says whether history changed.
+          const sessionIdentity = isSqliteSource
+            ? { ...identity, mtimeMs: transcript.mtimeMs }
+            : identity;
           const completedSource = completed?.find(
             (source) =>
-              source.provider === candidate.source && sameTranscriptIdentity(source, identity),
+              source.provider === candidate.source &&
+              sameTranscriptIdentity(source, sessionIdentity),
           );
           if (completedSource !== undefined) {
             const sessionKey = `${completedSource.providerInstanceId}\0${completedSource.providerSessionId}`;
@@ -1409,60 +1504,105 @@ export const make = Effect.gen(function* () {
               source: completedSource,
             });
           }
+          // A SQLite session is charged a nominal byte cost: charging the whole
+          // shared store would exhaust the import budget after a few sessions.
+          const importByteCost = isSqliteSource ? SQLITE_SESSION_NOMINAL_BYTES : identity.size;
           if (
             transcriptsRemaining === 0 ||
             recordsRemaining === 0 ||
-            identity.size > MAX_IMPORTED_TRANSCRIPT_BYTES ||
-            identity.size > bytesRemaining
+            (!isSqliteSource && identity.size > MAX_IMPORTED_TRANSCRIPT_BYTES) ||
+            importByteCost > bytesRemaining
           ) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
           // Reserve the whole file even if its read or parse fails.
           transcriptsRemaining -= 1;
-          bytesRemaining -= identity.size;
-          const snapshot = yield* readTranscript(
-            transcript.filePath,
-            identity,
-            recordsRemaining,
-            candidate.source,
-          );
-          if (snapshot === null) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
-          }
-          recordsRemaining -= snapshot.recordCount;
+          bytesRemaining -= importByteCost;
 
-          // A stable replacement file can belong to a different project than the cached candidate.
-          let snapshotCwd: string | null = null;
-          for (const record of snapshot.records) {
-            snapshotCwd = extractDecodedCwd(record);
-            if (snapshotCwd !== null) break;
-          }
-          if (snapshotCwd === null) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
-          }
-          const expandedCwd = expandHomePath(snapshotCwd.trim());
-          if (
-            !path.isAbsolute(expandedCwd) ||
-            (yield* directoryIdentity(path.resolve(expandedCwd))) !== rootIdentity
-          ) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
-          }
-
-          const parsedThread = parseAgentSessionRecords(
-            {
+          let parsedThread: AgentSessionThread | null = null;
+          if (isSqliteSource) {
+            const sessionId = transcript.providerSessionId;
+            if (sessionId === undefined) {
+              return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            }
+            const sqliteThread =
+              candidate.source === "mcode"
+                ? readMcodeThread(transcript.filePath, sessionId)
+                : readZcodeThread(transcript.filePath, sessionId);
+            recordsRemaining -= 1;
+            if (sqliteThread === null) {
+              return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            }
+            const expandedSqliteCwd = expandHomePath(sqliteThread.cwd.trim());
+            if (
+              !path.isAbsolute(expandedSqliteCwd) ||
+              (yield* directoryIdentity(path.resolve(expandedSqliteCwd))) !== rootIdentity
+            ) {
+              return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            }
+            parsedThread = {
               source: candidate.source,
               providerInstanceId: candidate.providerInstanceId,
-              fallbackSessionId: path.basename(transcript.filePath, ".jsonl"),
-              lastActiveAtMs: transcript.mtimeMs,
-            },
-            snapshot.records,
-          );
+              providerSessionId: sqliteThread.providerSessionId,
+              title: sqliteThread.title,
+              model: null,
+              createdAt: formatEpochMs(
+                sqliteThread.createdAtMs > 0
+                  ? sqliteThread.createdAtMs
+                  : sqliteThread.updatedAtMs,
+              ),
+              updatedAt: formatEpochMs(sqliteThread.updatedAtMs),
+              messages: sqliteThread.messages.map((message) => ({
+                role: message.role,
+                text: message.text,
+                createdAt: formatEpochMs(message.createdAtMs),
+              })),
+            };
+          } else {
+            const snapshot = yield* readTranscript(
+              transcript.filePath,
+              identity,
+              recordsRemaining,
+              candidate.source,
+            );
+            if (snapshot === null) {
+              return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            }
+            recordsRemaining -= snapshot.recordCount;
+
+            // A stable replacement file can belong to a different project than the cached candidate.
+            let snapshotCwd: string | null = null;
+            for (const record of snapshot.records) {
+              snapshotCwd = extractDecodedCwd(record);
+              if (snapshotCwd !== null) break;
+            }
+            if (snapshotCwd === null) {
+              return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            }
+            const expandedCwd = expandHomePath(snapshotCwd.trim());
+            if (
+              !path.isAbsolute(expandedCwd) ||
+              (yield* directoryIdentity(path.resolve(expandedCwd))) !== rootIdentity
+            ) {
+              return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
+            }
+
+            parsedThread = parseAgentSessionRecords(
+              {
+                source: candidate.source,
+                providerInstanceId: candidate.providerInstanceId,
+                fallbackSessionId: path.basename(transcript.filePath, ".jsonl"),
+                lastActiveAtMs: transcript.mtimeMs,
+              },
+              snapshot.records,
+            );
+          }
           if (parsedThread === null) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
 
           const source: AgentSessionImportSource = {
-            ...identity,
+            ...sessionIdentity,
             provider: parsedThread.source,
             providerInstanceId: parsedThread.providerInstanceId,
             providerSessionId: parsedThread.providerSessionId,
