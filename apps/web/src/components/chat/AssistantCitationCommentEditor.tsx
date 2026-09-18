@@ -89,7 +89,7 @@ export function AssistantCitationCommentEditor({
           onPointerDown={(event) => event.preventDefault()}
           onClick={submit}
         >
-          {commentTooLong ? "Shorten comment" : "Save"}
+          {commentTooLong ? "Shorten comment" : "保存"}
         </Button>
       </div>
     </div>

@@ -398,7 +398,7 @@ export function PreviewView({
                   actionProps: revealAction,
                   data: {
                     secondaryActionProps: {
-                      children: pathCopied ? "Copied!" : "Copy path",
+                      children: pathCopied ? "Copied!" : "复制路径",
                       disabled: pathCopied,
                       onClick: copyPath,
                     },
@@ -415,7 +415,7 @@ export function PreviewView({
                 actionProps: revealAction,
                 data: {
                   secondaryActionProps: {
-                    children: "Copy path",
+                    children: "复制路径",
                     onClick: copyPath,
                   },
                   secondaryActionVariant: "outline",
@@ -476,7 +476,7 @@ export function PreviewView({
                     {
                       id: "copy-path",
                       props: {
-                        children: pathCopied ? "Copied!" : "Copy path",
+                        children: pathCopied ? "Copied!" : "复制路径",
                         disabled: pathCopied,
                         onClick: copyPath,
                       },
@@ -553,7 +553,7 @@ export function PreviewView({
                   {
                     id: "copy-path",
                     props: {
-                      children: "Copy path",
+                      children: "复制路径",
                       onClick: copyPath,
                     },
                   },

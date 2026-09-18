@@ -142,7 +142,7 @@ export function PairingRouteSurface({
 
           <div className="flex flex-wrap gap-2">
             <Button disabled={isSubmitting} size="sm" type="submit">
-              {isSubmitting ? "Pairing..." : "Continue"}
+              {isSubmitting ? "配对中…" : "继续"}
             </Button>
             <Button
               disabled={isSubmitting}

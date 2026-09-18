@@ -72,16 +72,16 @@ export interface SettingsSearchAvailability {
  * subtitles both render from this record, so each label exists once.
  */
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
-  "/settings/projects": "Project",
-  "/settings/general": "General",
-  "/settings/appearance": "Appearance",
-  "/settings/keybindings": "Keybindings",
-  "/settings/snap-shot": "SnapShots",
-  "/settings/providers": "Providers",
-  "/settings/integrations": "Integrations",
-  "/settings/source-control": "Source Control",
-  "/settings/connections": "Connections",
-  "/settings/archived": "Archive",
+  "/settings/projects": "项目",
+  "/settings/general": "通用",
+  "/settings/appearance": "外观",
+  "/settings/keybindings": "快捷键",
+  "/settings/snap-shot": "快照",
+  "/settings/providers": "模型服务",
+  "/settings/integrations": "集成",
+  "/settings/source-control": "源代码管理",
+  "/settings/connections": "连接",
+  "/settings/archived": "归档",
 };
 
 /**
@@ -407,13 +407,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "keybindings",
-    title: "Keybindings",
+    title: "快捷键",
     to: "/settings/keybindings",
     searchTerms: ["keyboard shortcuts hotkeys commands bindings json"],
   },
   {
     id: "snap-shot-enabled",
-    title: "SnapShots",
+    title: "快照",
     searchTerms: ["window capture screenshot"],
     to: "/settings/snap-shot",
   },
@@ -452,7 +452,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "providers",
-    title: "Providers",
+    title: "模型服务",
     to: "/settings/providers",
     searchTerms: [
       "agents cli codex claude cursor grok opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
@@ -616,7 +616,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "project-actions",
-    title: "Actions",
+    title: "操作",
     to: "/settings/projects",
     searchTerms: ["commands scripts setup run dev server checkout worktree t3.json import"],
   },

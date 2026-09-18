@@ -20,7 +20,7 @@ interface ComposerPendingApprovalActionsProps {
 
 const APPROVAL_ACTION_CLASS_NAME = "font-normal";
 const DEFAULT_APPROVAL_OPTIONS = [
-  { decision: "cancel", label: "Cancel" },
+  { decision: "cancel", label: "取消" },
   { decision: "decline", label: "Decline" },
   { decision: "acceptForSession", label: "Always allow this session" },
   { decision: "accept", label: "Approve" },

@@ -454,7 +454,7 @@ export function SnapShotSetupDialog({
             </Button>
           ) : null}
           <Button variant="ghost" disabled={busy} onClick={() => void onClose(false)}>
-            {wasEnabled ? "Close" : "Finish later"}
+            {wasEnabled ? "关闭" : "Finish later"}
           </Button>
           {step === "access" ? (
             helperBackend && !accessReady && helper?.status !== "ready" ? (
@@ -493,7 +493,7 @@ export function SnapShotSetupDialog({
                     ? install
                       ? "Installing…"
                       : enable
-                        ? "Enabling…"
+                        ? "正在启用…"
                         : "Working…"
                     : install
                       ? extension?.status === "update-required"
@@ -519,7 +519,7 @@ export function SnapShotSetupDialog({
                       ? "Allow capture"
                       : !accessReady && !macPermissions
                         ? "Try again"
-                        : "Continue"}
+                        : "继续"}
               </PermissionContinueButton>
             )
           ) : !configShortcut ? (

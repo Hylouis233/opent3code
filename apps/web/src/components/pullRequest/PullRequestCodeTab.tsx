@@ -1439,7 +1439,7 @@ function PullRequestCodeTab({
                       onClick={diffQuery.error !== null ? () => diffQuery.refresh() : loadNextSlice}
                     >
                       {diffQuery.error !== null
-                        ? "Retry"
+                        ? "重试"
                         : diffQuery.isPending
                           ? "Loading more files..."
                           : "Load more files"}

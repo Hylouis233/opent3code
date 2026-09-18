@@ -447,7 +447,7 @@ export function ProjectScriptEditorDialog({
               Cancel
             </Button>
             <Button form={formId} type="submit" disabled={isSaving}>
-              {isSaving ? "Saving…" : isEditing ? "Save changes" : "Save action"}
+              {isSaving ? "Saving…" : isEditing ? "保存更改" : "Save action"}
             </Button>
           </DialogFooter>
         </DialogPopup>

@@ -184,7 +184,7 @@ it.each(["direct", "gnome-extension", "kde"] as const)(
     await finish(bridge.checkSnapShotShortcut.mock.results[0]!.value);
     expect(recorder(render()).size).toBe("xs");
     expect(recorder(render())["aria-label"]).toBe("Record snapshot shortcut, currently Ctrl+Alt+Y");
-    button(render(), "Save").onClick();
+    button(render(), "保存").onClick();
     await finish(settingsStore.update.mock.results[0]!.value);
     expect(settingsStore.update).toHaveBeenCalledWith({
       snapShotShortcut: expect.objectContaining({ key: "y", modKey: true, altKey: true }),

@@ -226,7 +226,7 @@ const SKILL_SOURCE_ICON_BY_KIND: Record<ProviderSkillSourceKind, LucideIcon> = {
 const SKILL_SOURCE_LABEL_BY_KIND: Record<ProviderSkillSourceKind, string> = {
   app: "App",
   repo: "Repo",
-  project: "Project",
+  project: "项目",
   personal: "Personal",
   system: "System",
   other: "Provider",

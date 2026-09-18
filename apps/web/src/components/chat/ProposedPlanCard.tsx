@@ -250,7 +250,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
               onClick={() => void handleSaveToWorkspace()}
               disabled={isSavingToWorkspace}
             >
-              {isSavingToWorkspace ? "Saving..." : "Save"}
+              {isSavingToWorkspace ? "Saving..." : "保存"}
             </Button>
           </DialogFooter>
         </DialogPopup>

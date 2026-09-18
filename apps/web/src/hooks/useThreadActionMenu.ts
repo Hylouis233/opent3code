@@ -63,7 +63,7 @@ function failureToast(title: string, error: unknown) {
  */
 export function useThreadActionMenu(input: {
   readonly threadRef: ScopedThreadRef | null;
-  /** Fallback for "Copy path" when the thread has no worktree. */
+  /** Fallback for "复制路径" when the thread has no worktree. */
   readonly projectCwd: string | null;
   readonly onStartRename: () => void;
 }) {

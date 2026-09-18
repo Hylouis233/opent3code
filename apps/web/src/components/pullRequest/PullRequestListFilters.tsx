@@ -591,7 +591,7 @@ export function PullRequestFiltersMenu({
         ) : null}
         <MenuSeparator />
         <PullRequestFilterRadioSubmenu
-          label="Project"
+          label="项目"
           value={projectValue}
           options={projectOptions}
           onChange={(next) => {

@@ -2761,7 +2761,7 @@ export default function ChatView(props: ChatViewProps) {
             desktopAppUpdate={versionMismatchDesktopAppUpdate}
             threadContinuation={versionMismatchThreadContinuation}
             targetVersion={versionMismatch.clientVersion}
-            label={updateFailed ? "Retry" : "Update"}
+            label={updateFailed ? "重试" : "更新"}
             variant="ghost"
           />
         ),
@@ -6139,7 +6139,7 @@ export default function ChatView(props: ChatViewProps) {
     !isWorking && activeThread ? (activeThreadShell?.backgroundLiveness ?? null) : null;
   const [isStoppingBackgroundWork, setIsStoppingBackgroundWork] = useState(false);
   useEffect(() => {
-    // "Stopping..." holds until the liveness clears; the interrupt command
+    // "正在停止…" holds until the liveness clears; the interrupt command
     // returning only means the request was accepted.
     if (activeBackgroundLiveness === null) {
       setIsStoppingBackgroundWork(false);
@@ -6159,7 +6159,7 @@ export default function ChatView(props: ChatViewProps) {
     });
     if (result._tag === "Failure") {
       // Every failure clears the pending state — an interrupted command
-      // never reached the server, so liveness would hold "Stopping..."
+      // never reached the server, so liveness would hold "正在停止…"
       // forever. Only real failures toast.
       setIsStoppingBackgroundWork(false);
       if (!isAtomCommandInterrupted(result)) {
@@ -6199,7 +6199,7 @@ export default function ChatView(props: ChatViewProps) {
           disabled={isStoppingBackgroundWork}
           onClick={() => void handleStopBackgroundWork()}
         >
-          {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
+          {isStoppingBackgroundWork ? "正在停止…" : "停止"}
         </Button>
       ),
     };
@@ -6222,8 +6222,8 @@ export default function ChatView(props: ChatViewProps) {
       variant: "info",
       icon: <AlarmClockIcon />,
       title: "Thread woke from snooze",
-      description: "Send a message to continue",
-      dismissLabel: "Dismiss Woke notification",
+      description: "发送消息继续",
+      dismissLabel: "关闭唤醒通知",
       onDismiss: acknowledgeActiveThreadWoke,
     };
   }, [acknowledgeActiveThreadWoke, activeThread?.id, activeThreadWokeVisible]);
@@ -6341,7 +6341,7 @@ export default function ChatView(props: ChatViewProps) {
       id: `resume-compaction:${resumeCompactionKey}`,
       variant: "info",
       icon: <Minimize2Icon />,
-      title: "Resume with less context",
+      title: "以更少上下文恢复",
       description: `${formatContextWindowTokens(activeContextWindow.usedTokens)} tokens from earlier`,
       actions: compactDisabledReason ? (
         <Tooltip>
@@ -7839,7 +7839,7 @@ export default function ChatView(props: ChatViewProps) {
       } else if (composerPreviewAnnotationsSnapshot.length > 0) {
         titleSeed = previewAnnotationContextLabel(composerPreviewAnnotationsSnapshot[0]!);
       } else {
-        titleSeed = "New thread";
+        titleSeed = "新建对话";
       }
     }
     const title = truncate(titleSeed);

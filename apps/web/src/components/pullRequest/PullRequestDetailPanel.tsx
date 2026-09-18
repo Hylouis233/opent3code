@@ -2363,7 +2363,7 @@ export function PullRequestDetailPanel({
                         disabled={titleSaving || titleDraft.trim().length === 0}
                         onClick={() => void saveTitle(titleDraft)}
                       >
-                        {titleSaving ? "Saving..." : "Save"}
+                        {titleSaving ? "Saving..." : "保存"}
                       </Button>
                     </div>
                   </div>
@@ -2796,7 +2796,7 @@ export function PullRequestDetailPanel({
                     ? "Create revert PR"
                     : confirmAction === "approve-workflows"
                       ? "Approve and run"
-                      : "Close"}
+                      : "关闭"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

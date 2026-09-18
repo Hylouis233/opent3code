@@ -211,7 +211,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ) : null}
           <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
-            label="Usage"
+            label="用量"
             onClick={handleUsageClick}
           />
         </>

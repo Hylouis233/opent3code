@@ -193,7 +193,7 @@ export function ServerUpdateAction({
   desktopAppUpdate = false,
   threadContinuation = false,
   targetVersion,
-  label = "Update",
+  label = "更新",
   variant = "outline",
   size = "xs",
   className,

@@ -134,7 +134,7 @@ export function useAutoBalanceUpdateBanner(
           variant="ghost"
           label={
             failed > 0
-              ? "Retry"
+              ? "重试"
               : targets.length === machines.length
                 ? "Update all"
                 : `Update ${targets.length} ${targets.length === 1 ? "machine" : "machines"}`

@@ -406,7 +406,7 @@ function ProjectDetail({
   return (
     <>
       <SettingsPageContainer className="gap-6">
-        <SettingsSection id="project-overview" title="Project" hideTitle>
+        <SettingsSection id="project-overview" title="项目" hideTitle>
           <SettingsRow
             title="Name"
             description="The shared name for this project group in the sidebar and thread lists."

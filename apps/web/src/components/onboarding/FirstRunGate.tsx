@@ -230,7 +230,7 @@ function FirstRunRecovery({
           }}
         >
           <RefreshIcon refreshing={retrying} />
-          {settingsReadFailed ? "Retry" : "Reload"}
+          {settingsReadFailed ? "重试" : "Reload"}
         </Button>
       </div>
     </main>

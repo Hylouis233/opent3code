@@ -369,7 +369,7 @@ export function ThemeSearchSection({
               const isInstalled = getCustomThemes().some(
                 (theme) => theme.collection?.id === extension.collectionId,
               );
-              const action = isInstalled ? "Update" : "Install";
+              const action = isInstalled ? "更新" : "Install";
               const progressAction = isInstalled ? "Updating" : "Installing";
               return (
                 <article

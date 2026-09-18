@@ -89,7 +89,7 @@ export function settingInheritanceLayers(
   if (target.projectId !== null && isProjectScopedSettingKey(key)) {
     layers.push({
       key: "project",
-      label: "Project",
+      label: "项目",
       value: projectSource === "project" ? formatValue(key, target.settings[key]) : "Inherits",
       effective: projectSource === "project",
       set: projectSource === "project",

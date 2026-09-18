@@ -264,7 +264,7 @@ function ConfiguredConnectOnboardingDialog() {
                 disabled={isApplying || (controller.linkState.isPending && linkStateData === null)}
                 onClick={() => void applyPublishSelection()}
               >
-                {isApplying ? "Enabling…" : "Continue"}
+                {isApplying ? "正在启用…" : "继续"}
               </Button>
             </>
           ) : (

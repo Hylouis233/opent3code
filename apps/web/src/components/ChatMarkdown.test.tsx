@@ -275,7 +275,7 @@ describe("ChatMarkdown streaming", () => {
       const codeBlock = mounted.root.findByProps({ "data-language": "text" });
       const initialWrap = codeBlock.props["data-wrap"] === "true";
       const wrap = codeButton(mounted, initialWrap ? "Disable line wrap" : "Wrap lines");
-      const copy = codeButton(mounted, "Copy code");
+      const copy = codeButton(mounted, "复制代码");
       await act(async () => {
         wrap.onClick?.({} as Parameters<NonNullable<typeof wrap.onClick>>[0]);
         copy.onClick?.({} as Parameters<NonNullable<typeof copy.onClick>>[0]);

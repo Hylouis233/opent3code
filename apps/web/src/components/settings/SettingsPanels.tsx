@@ -3166,7 +3166,7 @@ export function ArchivedThreadsPanel() {
       const clicked = await api.contextMenu.show(
         [
           { id: "unarchive", label: "Unarchive" },
-          { id: "delete", label: "Delete", destructive: true },
+          { id: "delete", label: "删除", destructive: true },
         ],
         position,
       );

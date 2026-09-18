@@ -201,7 +201,7 @@ export function DevicePanel(props: {
             {activeDevice.platform === "android" ? (
               <>
                 <DeviceButton
-                  label="Back"
+                  label="返回"
                   onClick={() => handle?.pressButton("back")}
                   disabled={!handle?.inputConnected}
                 >
@@ -239,7 +239,7 @@ export function DevicePanel(props: {
             <DeviceButton label="Power off" onClick={() => closeActive(true)}>
               <Power />
             </DeviceButton>
-            <DeviceButton label="Close" onClick={() => closeActive(false)}>
+            <DeviceButton label="关闭" onClick={() => closeActive(false)}>
               <X />
             </DeviceButton>
           </>

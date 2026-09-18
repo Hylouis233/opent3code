@@ -76,7 +76,7 @@ export function SidebarThreadHeader({
   const activeResultExists = resultsVisible && activeSearchResultIndex < searchResultCount;
   const newThreadLabel = newThreadShortcutLabel
     ? `New thread (${newThreadShortcutLabel})`
-    : "New thread";
+    : "新建对话";
 
   return (
     <div className="flex items-center gap-1">
@@ -134,7 +134,7 @@ export function SidebarThreadHeader({
           </>
         ) : null}
         <SidebarHeaderIconButton
-          label="New thread"
+          label="新建对话"
           tooltip={
             showNewThreadInProjectHint ? (
               <span className="flex flex-col gap-0.5">

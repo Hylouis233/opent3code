@@ -127,7 +127,7 @@ describe("pull request filters menu", () => {
       projectEnvironmentId: environmentId,
       onProject,
     });
-    const radioGroup = findValueChange(findLabeledGroup(view, "Project"));
+    const radioGroup = findValueChange(findLabeledGroup(view, "项目"));
     expect(radioGroup).toBeDefined();
 
     radioGroup?.props.onValueChange(pullRequestProjectKey({ id: projectId, environmentId }));
@@ -157,7 +157,7 @@ describe("pull request filters menu", () => {
       ],
       onProject,
     });
-    const radioGroup = findValueChange(findLabeledGroup(view, "Project"));
+    const radioGroup = findValueChange(findLabeledGroup(view, "项目"));
     expect(radioGroup).toBeDefined();
 
     radioGroup?.props.onValueChange(

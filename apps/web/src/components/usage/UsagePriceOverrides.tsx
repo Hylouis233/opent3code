@@ -544,7 +544,7 @@ export function UsagePriceOverrides({
                 ? "Saving…"
                 : failedDestinations.length > 0
                   ? "Retry failed saves"
-                  : "Save changes"}
+                  : "保存更改"}
             </Button>
           </div>
         </DialogFooter>

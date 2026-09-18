@@ -1211,7 +1211,7 @@ export function ThemeEditorPanel({
                 }}
               >
                 <MousePointer2Icon />
-                {isInspecting ? "Cancel" : "Inspect"}
+                {isInspecting ? "取消" : "Inspect"}
               </Button>
             }
           />
@@ -1263,7 +1263,7 @@ export function ThemeEditorPanel({
                 mergeTarget ? (
                   `Merge into “${mergeTarget.label}”`
                 ) : (
-                  "Save changes"
+                  "保存更改"
                 )
               ) : mergeTarget ? (
                 <>

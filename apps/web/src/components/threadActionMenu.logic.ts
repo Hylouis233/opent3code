@@ -65,7 +65,7 @@ export function buildThreadActionMenuItems(
     ...(state.supports.pinning
       ? [
           state.isPinned
-            ? { id: "unpin" as const, label: "Unpin thread", icon: "pin-off" }
+            ? { id: "unpin" as const, label: "取消置顶", icon: "pin-off" }
             : { id: "pin" as const, label: "Pin thread", icon: "pin" },
         ]
       : []),
@@ -75,8 +75,8 @@ export function buildThreadActionMenuItems(
     ...(state.supports.settlement
       ? [
           state.isSettled
-            ? { id: "unsettle" as const, label: "Un-settle thread", icon: "circle-check" }
-            : { id: "settle" as const, label: "Settle thread", icon: "circle-check" },
+            ? { id: "unsettle" as const, label: "取消收尾", icon: "circle-check" }
+            : { id: "settle" as const, label: "收尾对话", icon: "circle-check" },
         ]
       : []),
     ...(state.supports.snooze
@@ -98,7 +98,7 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
-    { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
+    { id: "rename", label: "重命名对话", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [
           {
@@ -112,7 +112,7 @@ export function buildThreadActionMenuItems(
     { id: "mark-unread", label: "Mark unread", icon: "mail-open" },
     {
       id: "copy",
-      label: "Copy",
+      label: "复制",
       icon: "copy",
       separatorBefore: true,
       children: [
@@ -138,7 +138,7 @@ export function buildThreadActionMenuItems(
     },
     {
       id: "delete",
-      label: "Delete",
+      label: "删除",
       destructive: true,
       icon: "trash",
     },

@@ -23,7 +23,7 @@ type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children
  */
 export function CommandPaletteContent({
   children,
-  escapeLabel = "Close",
+  escapeLabel = "关闭",
   footerActionLabel,
   footerTrailing,
   inputAccessory,

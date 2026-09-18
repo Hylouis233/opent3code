@@ -274,7 +274,7 @@ export function ProviderUpdatePrimaryNotification() {
         actionProps:
           oneClickProviders.length > 0
             ? {
-                children: "Update",
+                children: "更新",
                 onClick: runUpdates,
               }
             : {
