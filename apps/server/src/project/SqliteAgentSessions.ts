@@ -101,13 +101,16 @@ function mcodeText(content: unknown): string {
 /**
  * mcode prepends a `<system-reminder>` agent-context blob to the user's turn;
  * the human's prompt follows the closing tag. Strip the injection and keep
- * only the real prompt; rows that carry nothing else are not user prose.
+ * only the real prompt; rows that carry nothing else (including an unclosed
+ * reminder) are not user prose.
  */
 function stripMcodeSystemReminder(text: string): string {
-  const marker = "</system-reminder>";
-  const index = text.lastIndexOf(marker);
-  const stripped = index === -1 ? text : text.slice(index + marker.length);
-  return stripped.trim();
+  const open = "<system-reminder>";
+  const close = "</system-reminder>";
+  if (!text.startsWith(open)) return text.trim();
+  const index = text.lastIndexOf(close);
+  if (index === -1) return "";
+  return text.slice(index + close.length).trim();
 }
 
 export function mcodeRowToMessage(
@@ -138,6 +141,11 @@ export function mcodeRowToMessage(
 export function readMcodeCandidates(dbPath: string): ReadonlyArray<SqliteSessionCandidate> {
   const db = openReadOnly(dbPath);
   if (db === null) return [];
+  // mcode (and its mavis-era data) gives automated sessions a synthetic
+  // per-session workspace under `<any data home>/sessions/mvs_*/workspace`.
+  // Those are not user projects; drop them so discovery does not offer dozens
+  // of machine-named directories regardless of which home they came from.
+  const syntheticWorkspace = /\/sessions\/mvs_[0-9a-f]+\/workspace$/;
   try {
     const rows = db
       .prepare(
@@ -151,6 +159,7 @@ export function readMcodeCandidates(dbPath: string): ReadonlyArray<SqliteSession
       const id = row["session_id"];
       const cwd = row["workspace_dir"];
       if (typeof id !== "string" || id.length === 0 || typeof cwd !== "string") return [];
+      if (syntheticWorkspace.test(cwd)) return [];
       return [
         {
           providerSessionId: id,

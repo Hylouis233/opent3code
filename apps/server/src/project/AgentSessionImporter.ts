@@ -231,16 +231,13 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreads")(fu
               status: "stopped",
               runtimeMode: DEFAULT_RUNTIME_MODE,
               resumeCursor:
-                // mcode/zcode imports are read-only history: zcode has no ACP
-                // driver at all, and the mcode ExternalAcp resume cursor needs
-                // instance/home context the importer does not hold.
-                // TODO(resume): reconstruct the mcode ExternalAcpResume
-                // envelope {version, driver, instanceId, cwd, home, sessionId}.
                 thread.source === "codex"
                   ? { threadId: thread.providerSessionId }
                   : thread.source === "claudeAgent"
                     ? { threadId, resume: thread.providerSessionId }
-                    : null,
+                    : // mcode carries a driver-shaped ExternalAcpResume
+                      // envelope from the scanner; zcode is read-only history.
+                      (thread.resumeCursor ?? null),
               runtimePayload: { cwd: workspaceRoot },
             },
             { onConflict: "ignore" },

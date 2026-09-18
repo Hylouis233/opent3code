@@ -1526,6 +1526,57 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         expect(sqliteCandidate?.lastActiveAt).toBe("2026-08-24T11:59:59.000Z");
       }),
     );
+
+    it.effect("imports mcode sessions with a resume envelope and zcode without one", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const root = yield* makeTempDir("t3code-sqlite-recent-");
+        const workspace = yield* makeTempDir("t3code-sqlite-recent-project-");
+        const mcodeHome = yield* makeTempDir("t3code-sqlite-recent-mcode-");
+
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        writeSqliteStore(path.join(root, "zcode.sqlite"), "zcode", workspace, nowMs - 1_000);
+        writeSqliteStore(
+          path.join(mcodeHome, "v2", "sqlite", "runtime-state.sqlite"),
+          "mcode",
+          workspace,
+          nowMs - 2_000,
+        );
+
+        const threads = yield* runRecentThreads({
+          claudeHomePath: path.join(root, "no-claude"),
+          codexHomePath: path.join(root, "no-codex"),
+          workspaceRoot: workspace,
+          zcodeDbPath: path.join(root, "zcode.sqlite"),
+          mcodeDbPath: path.join(mcodeHome, "v2", "sqlite", "runtime-state.sqlite"),
+          providerInstances: {
+            [ProviderInstanceId.make("mcode")]: {
+              driver: ProviderDriverKind.make("mcode"),
+              enabled: true,
+              config: { homePath: mcodeHome },
+            },
+          },
+        });
+
+        const mcodeThread = threads.find((thread) => thread.source === "mcode");
+        expect(mcodeThread?.resumeCursor).toEqual({
+          version: 1,
+          driver: "mcode",
+          instanceId: "mcode",
+          cwd: workspace,
+          // The configured homePath becomes MINIMAX_DATA_DIR in the envelope.
+          home: mcodeHome,
+          sessionId: "mvs_test",
+        });
+        const zcodeThread = threads.find((thread) => thread.source === "zcode");
+        expect(zcodeThread?.messages).toEqual([
+          { role: "user", text: "检查 zcode 扫描", createdAt: "2026-08-24T11:59:58.100Z" },
+          { role: "assistant", text: "zcode 扫描正常", createdAt: "2026-08-24T11:59:58.200Z" },
+        ]);
+        expect(zcodeThread?.resumeCursor).toBeUndefined();
+      }),
+    );
   });
 
   describe("recentThreads", () => {

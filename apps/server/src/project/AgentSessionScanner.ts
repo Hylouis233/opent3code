@@ -66,6 +66,7 @@ import {
   readZcodeCandidates,
   readZcodeThread,
 } from "./SqliteAgentSessions.ts";
+import type { ExternalAcpResume } from "../provider/acp/ExternalAcpPolicy.ts";
 
 /** Chunk size for full transcript reads. */
 const TRANSCRIPT_PREFIX_BYTES = 32 * 1024;
@@ -186,6 +187,12 @@ export interface AgentSessionThread {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly messages: ReadonlyArray<AgentSessionThreadMessage>;
+  /**
+   * Resume envelope for providers whose adapter can continue the imported
+   * session natively (mcode's ExternalAcpResume). Absent for read-only
+   * sources like zcode.
+   */
+  readonly resumeCursor?: ExternalAcpResume;
 }
 
 export type AgentSessionRecentThread =
@@ -231,6 +238,11 @@ interface RawCandidate {
     /** SQLite sources only: which session row this entry imports. */
     readonly providerSessionId?: string;
   }>;
+  /**
+   * mcode only: the data-directory identity the driver bakes into its resume
+   * envelope (config homePath, else MINIMAX/MAVIS_DATA_DIR, else $HOME).
+   */
+  readonly providerHome?: string;
 }
 
 interface TranscriptCandidate {
@@ -649,6 +661,16 @@ export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const baseDir = path.resolve(serverConfig.baseDir);
   const worktreesDir = path.resolve(serverConfig.worktreesDir);
+  // macOS reports temp paths as `/var/folders/...` while `realpath` resolves
+  // them to `/private/var/folders/...`. A symlink into the worktrees dir only
+  // reveals itself after resolution, so exclusion prefixes must be compared
+  // in both spellings.
+  const baseDirReal = yield* fileSystem
+    .realPath(baseDir)
+    .pipe(Effect.orElseSucceed(() => baseDir));
+  const worktreesDirReal = yield* fileSystem
+    .realPath(worktreesDir)
+    .pipe(Effect.orElseSucceed(() => worktreesDir));
   // Windows filesystems are case-insensitive, so path prefix checks there
   // must case fold.
   const foldWorktreeCase = (yield* HostProcessPlatform) === "win32";
@@ -675,10 +697,13 @@ export const make = Effect.gen(function* () {
         normalizeForWorktreeMatch(ancestor, foldWorktreeCase),
       ),
     ) ||
-    normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
-      normalizeForWorktreeMatch(baseDir, foldWorktreeCase),
+    [baseDir, baseDirReal].some((dir) =>
+      normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
+        normalizeForWorktreeMatch(dir, foldWorktreeCase),
+      ),
     ) ||
-    isT3ManagedWorktree(candidatePath, worktreesDir, foldWorktreeCase);
+    isT3ManagedWorktree(candidatePath, worktreesDir, foldWorktreeCase) ||
+    isT3ManagedWorktree(candidatePath, worktreesDirReal, foldWorktreeCase);
 
   const listDirectory = (directory: string) =>
     fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
@@ -1145,7 +1170,11 @@ export const make = Effect.gen(function* () {
       // workspace the CLI recorded.
       if (source === "mcode" || source === "zcode") {
         const homeDir = NodeOS.homedir();
-        const homes: Array<{ homePath: string; providerInstanceId: ProviderInstanceId }> = [];
+        const homes: Array<{
+          homePath: string;
+          providerInstanceId: ProviderInstanceId;
+          configHomePath?: string;
+        }> = [];
         if (source === "zcode") {
           // Not a driver anywhere; a fixed pseudo-instance owns every import.
           homes.push({ homePath: homeDir, providerInstanceId: ProviderInstanceId.make("zcode") });
@@ -1169,7 +1198,19 @@ export const make = Effect.gen(function* () {
                   : path.join(homeDir, ".minimax");
             if (seen.has(homePath)) continue;
             seen.add(homePath);
-            homes.push({ homePath, providerInstanceId: instanceId });
+            const instanceEnvHome = instance.environment?.findLast(
+              (variable) =>
+                variable.name === "MINIMAX_DATA_DIR" || variable.name === "MAVIS_DATA_DIR",
+            )?.value;
+            // The driver turns a configured homePath into MINIMAX_DATA_DIR;
+            // an instance-level override wins over the host environment.
+            const homeOverride =
+              config.value.homePath.trim().length > 0 ? config.value.homePath : instanceEnvHome;
+            homes.push({
+              homePath,
+              providerInstanceId: instanceId,
+              ...(homeOverride !== undefined ? { configHomePath: homeOverride } : {}),
+            });
           }
         }
         for (const home of homes) {
@@ -1197,6 +1238,19 @@ export const make = Effect.gen(function* () {
                 mtimeMs: session.updatedAtMs,
                 providerSessionId: session.providerSessionId,
               })),
+              // Mirror ExternalAcpDriver's home resolution so the resume
+              // envelope built later matches the driver's expectation.
+              ...(source === "mcode"
+                ? {
+                    providerHome:
+                      home.configHomePath ??
+                      hostEnvironment["MINIMAX_DATA_DIR"] ??
+                      hostEnvironment["MAVIS_DATA_DIR"] ??
+                      hostEnvironment["HOME"] ??
+                      hostEnvironment["USERPROFILE"] ??
+                      "",
+                  }
+                : {}),
             });
           }
         }
@@ -1557,6 +1611,18 @@ export const make = Effect.gen(function* () {
                 text: message.text,
                 createdAt: formatEpochMs(message.createdAtMs),
               })),
+              ...(candidate.source === "mcode"
+                ? {
+                    resumeCursor: {
+                      version: 1 as const,
+                      driver: "mcode",
+                      instanceId: candidate.providerInstanceId,
+                      cwd: sqliteThread.cwd,
+                      home: candidate.providerHome ?? "",
+                      sessionId: sqliteThread.providerSessionId,
+                    } satisfies ExternalAcpResume,
+                  }
+                : {}),
             };
           } else {
             const snapshot = yield* readTranscript(
