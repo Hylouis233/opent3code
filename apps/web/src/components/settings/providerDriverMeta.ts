@@ -8,6 +8,7 @@ import {
   GrokSettings,
   OpenCodeSettings,
   ProviderDriverKind,
+  ZcodeSettings,
 } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
 import {
@@ -19,6 +20,7 @@ import {
   type Icon,
   OpenAI,
   OpenCodeIcon,
+  ZCode,
 } from "../Icons";
 
 type ProviderSettingsSchema = {
@@ -59,6 +61,13 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     label: "DeepSeek Harness",
     icon: ACPRegistryIcon,
     settingsSchema: DshSettings,
+    badgeLabel: "Preview",
+  },
+  {
+    value: ProviderDriverKind.make("zcode"),
+    label: "ZCode",
+    icon: ZCode,
+    settingsSchema: ZcodeSettings,
     badgeLabel: "Preview",
   },
   {

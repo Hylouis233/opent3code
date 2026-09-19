@@ -700,6 +700,9 @@ export const MCodeSettings = makeExternalAcpSettings("mcode");
 export type MCodeSettings = typeof MCodeSettings.Type;
 export const DshSettings = makeExternalAcpSettings("dsh");
 export type DshSettings = typeof DshSettings.Type;
+/** ZCode speaks its own stdio protocol (see ZcodeDriver), not ACP; only the settings shape is shared. */
+export const ZcodeSettings = makeExternalAcpSettings("zcode.cjs");
+export type ZcodeSettings = typeof ZcodeSettings.Type;
 
 export const CursorSettings = makeProviderSettingsSchema(
   {

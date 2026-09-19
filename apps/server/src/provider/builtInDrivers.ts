@@ -27,6 +27,7 @@ import { GrokDriver, type GrokDriverEnv } from "./Drivers/GrokDriver.ts";
 import { OpenCodeDriver, type OpenCodeDriverEnv } from "./Drivers/OpenCodeDriver.ts";
 import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
 import { MCodeDriver, DshDriver, type ExternalAcpDriverEnv } from "./Drivers/ExternalAcpDriver.ts";
+import { ZcodeDriver, type ZcodeDriverEnv } from "./Drivers/ZcodeDriver.ts";
 import type { AnyProviderDriver } from "./ProviderDriver.ts";
 
 /**
@@ -36,6 +37,7 @@ import type { AnyProviderDriver } from "./ProviderDriver.ts";
  */
 export type BuiltInDriversEnv =
   | ExternalAcpDriverEnv
+  | ZcodeDriverEnv
   | ClaudeDriverEnv
   | CodexDriverEnv
   | CursorDriverEnv
@@ -51,6 +53,7 @@ export type BuiltInDriversEnv =
 export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
   MCodeDriver,
   DshDriver,
+  ZcodeDriver,
   CodexDriver,
   ClaudeDriver,
   CursorDriver,
