@@ -287,7 +287,7 @@ describe("captureAssistantTextSelection", () => {
 
   it("accepts a control endpoint only when none of its text is selected", () => {
     const quote = textNode("A paragraph.");
-    const control = textNode("Copy");
+    const control = textNode("复制");
     const source = assistantSource(
       new SelectionNode("P").append(quote),
       new SelectionNode("BUTTON").append(control),
@@ -317,7 +317,7 @@ describe("captureAssistantTextSelection", () => {
     const code = textNode("first line\r\n  second line\t🚀");
     const source = assistantSource(
       new SelectionNode("P").append(first, new SelectionNode("EM").append(textNode("cafe\u0301"))),
-      new SelectionNode("BUTTON").append(textNode("Copy")),
+      new SelectionNode("BUTTON").append(textNode("复制")),
       new SelectionNode("SPAN", "", { hidden: "" }).append(textNode("Hidden")),
       new SelectionNode("PRE").append(new SelectionNode("CODE").append(code)),
     );

@@ -194,7 +194,7 @@ export function buildCommandPaletteProjectMetadata(input: {
   const environmentLabels = new Set<string>();
 
   for (const project of input.projects) {
-    const label = input.locationByEnvironmentId.get(project.environmentId)?.label ?? "Remote";
+    const label = input.locationByEnvironmentId.get(project.environmentId)?.label ?? "远程";
     searchTerms.push(project.title, project.workspaceRoot, label);
     environmentLabels.add(label);
   }

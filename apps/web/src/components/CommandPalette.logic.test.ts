@@ -169,8 +169,8 @@ describe("buildCommandPaletteProjectMetadata", () => {
       locationByEnvironmentId: new Map(),
     });
 
-    expect(metadata.searchTerms).toContain("Remote");
-    expect(metadata.environmentLabels).toEqual(["Remote"]);
+    expect(metadata.searchTerms).toContain("远程");
+    expect(metadata.environmentLabels).toEqual(["远程"]);
   });
 });
 
@@ -515,7 +515,7 @@ describe("buildThreadActionItems", () => {
         {
           kind: "action",
           value: "setting:theme",
-          searchTerms: ["Themes", "Appearance"],
+          searchTerms: ["Themes", "外观"],
           title: "Themes",
           icon: null,
           run: async () => undefined,

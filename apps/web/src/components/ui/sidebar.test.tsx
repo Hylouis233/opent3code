@@ -90,7 +90,7 @@ describe("sidebar interactive cursors", () => {
 
   it("uses a pointer cursor for submenu buttons", () => {
     const html = renderToStaticMarkup(
-      <SidebarMenuSubButton render={<button type="button" />}>Show more</SidebarMenuSubButton>,
+      <SidebarMenuSubButton render={<button type="button" />}>显示更多</SidebarMenuSubButton>,
     );
 
     expect(html).toContain('data-slot="sidebar-menu-sub-button"');

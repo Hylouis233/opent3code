@@ -32,7 +32,7 @@ describe("timeline minimap previews", () => {
   it("previews the last assistant response before the next prompt and retains jump targets", () => {
     const source = rows([
       ["user", "  Inspect\n this  "],
-      ["assistant", "Working"],
+      ["assistant", "运行中"],
       ["assistant", " Done\t now "],
       ["user", "Next"],
       ["assistant", "Second answer"],

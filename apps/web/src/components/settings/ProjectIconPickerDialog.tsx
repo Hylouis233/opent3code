@@ -96,8 +96,8 @@ export function ProjectIconPickerDialog({
               if (value === "lucide" || value === "emoji") setMode(value);
             }}
           >
-            <Toggle value="lucide">Icons</Toggle>
-            <Toggle value="emoji">Emoji</Toggle>
+            <Toggle value="lucide">图标</Toggle>
+            <Toggle value="emoji">表情</Toggle>
           </ToggleGroup>
 
           {mode === "lucide" ? (

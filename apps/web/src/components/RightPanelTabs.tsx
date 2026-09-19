@@ -222,7 +222,7 @@ export function tabMuteMenuItem(input: {
 }): { label: string; disabled: boolean } {
   const muted = input.overlay?.audioMuted ?? false;
   return {
-    label: muted ? "Unmute tab" : "Mute tab",
+    label: muted ? "取消静音" : "静音标签页",
     disabled: input.overlay === null || !input.canResolveRuntimeTabId,
   };
 }
@@ -336,7 +336,7 @@ function RightPanelEmptyState(props: {
 
   const actions = [
     {
-      label: "Browser",
+      label: "浏览器",
       icon: Globe2,
       shortcut: "B",
       available: props.browserAvailable,
@@ -345,7 +345,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
-      label: "Terminal",
+      label: "终端",
       icon: TerminalSquare,
       shortcut: "T",
       available: props.terminalAvailable,
@@ -354,7 +354,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
-      label: "Files",
+      label: "文件",
       icon: Files,
       shortcut: "F",
       available: props.filesAvailable,
@@ -372,7 +372,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
-      label: "Pull request",
+      label: "拉取请求",
       icon: GitPullRequest,
       shortcut: "P",
       available: props.pullRequestAvailable,
@@ -381,7 +381,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
-      label: "Linked pull requests",
+      label: "关联的拉取请求",
       icon: GitPullRequestArrow,
       shortcut: "L",
       available: props.pullRequestsAvailable,
@@ -399,7 +399,7 @@ function RightPanelEmptyState(props: {
       badgeCount: props.liveAgentCount,
     },
     {
-      label: "Device",
+      label: "设备",
       description: "Watch an iOS Simulator or Android Emulator.",
       icon: Smartphone,
       shortcut: "M",
@@ -537,7 +537,7 @@ function RightPanelEmptyState(props: {
                   <span
                     className={cn(
                       "min-w-0 flex-1 truncate",
-                      action.label === "Browser" && props.browserProfiles.length > 1 && "pr-7",
+                      action.label === "浏览器" && props.browserProfiles.length > 1 && "pr-7",
                     )}
                   >
                     {action.label}
@@ -549,7 +549,7 @@ function RightPanelEmptyState(props: {
                   default profile, the chevron picks another. Only worth showing
                   once there is something to choose between.
                 */}
-                {action.label === "Browser" && props.browserProfiles.length > 1 ? (
+                {action.label === "浏览器" && props.browserProfiles.length > 1 ? (
                   <Menu>
                     <MenuTrigger
                       render={
@@ -614,7 +614,7 @@ function surfaceTitle(
     case "diff":
       return "Diff";
     case "files":
-      return "Files";
+      return "文件";
     case "file":
       return surface.relativePath.slice(
         Math.max(surface.relativePath.lastIndexOf("/"), surface.relativePath.lastIndexOf("\\")) + 1,
@@ -631,15 +631,15 @@ function surfaceTitle(
     case "agents":
       return "Agents";
     case "device":
-      return surface.title ?? surface.target?.name ?? "Device";
+      return surface.title ?? surface.target?.name ?? "设备";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
       if (snapshot.navStatus.title.trim().length > 0) return snapshot.navStatus.title;
       try {
-        return new URL(snapshot.navStatus.url).host || "Browser";
+        return new URL(snapshot.navStatus.url).host || "浏览器";
       } catch {
-        return "Browser";
+        return "浏览器";
       }
     }
   }
@@ -862,7 +862,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
 
   const addSurfaceActions = [
     {
-      label: "Browser",
+      label: "浏览器",
       icon: Globe2,
       shortcut: "B",
       available: props.browserAvailable,
@@ -870,7 +870,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddBrowser,
     },
     {
-      label: "Terminal",
+      label: "终端",
       icon: TerminalSquare,
       shortcut: "T",
       available: props.terminalAvailable,
@@ -878,7 +878,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddTerminal,
     },
     {
-      label: "Files",
+      label: "文件",
       icon: Files,
       shortcut: "F",
       available: props.filesAvailable,
@@ -894,7 +894,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddDiff,
     },
     {
-      label: "Pull request",
+      label: "拉取请求",
       icon: GitPullRequest,
       shortcut: "P",
       available: props.pullRequestAvailable,
@@ -902,7 +902,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddPullRequest,
     },
     {
-      label: "Linked pull requests",
+      label: "关联的拉取请求",
       icon: GitPullRequestArrow,
       shortcut: "L",
       available: props.pullRequestsAvailable,
@@ -918,7 +918,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddAgents,
     },
     {
-      label: "Device",
+      label: "设备",
       icon: Smartphone,
       shortcut: "M",
       available: props.deviceAvailable,
@@ -1151,7 +1151,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   )}
                 >
                   <PanelTabCloseButton
-                    label={`Close ${title}`}
+                    label={`关闭 ${title}`}
                     onClick={() => props.onCloseSurface(surface)}
                   >
                     <SurfaceIcon
@@ -1176,7 +1176,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                           <button
                             type="button"
                             className="cursor-pointer flex size-4 shrink-0 items-center justify-center rounded-sm hover:bg-muted"
-                            aria-label={audio === "muted" ? `Unmute ${title}` : `Mute ${title}`}
+                            aria-label={audio === "muted" ? `取消静音 ${title}` : `静音 ${title}`}
                             onClick={(event) => {
                               // Sibling of the close button, inside a tab that
                               // activates on click: keep this to the toggle.
@@ -1194,7 +1194,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                           </button>
                         }
                       />
-                      <TooltipPopup>{audio === "muted" ? "Unmute tab" : "Mute tab"}</TooltipPopup>
+                      <TooltipPopup>{audio === "muted" ? "取消静音" : "静音标签页"}</TooltipPopup>
                     </Tooltip>
                   )}
                   {renamingDevice === surface.id ? (
@@ -1270,7 +1270,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     // while hover or arrow reveals the profiles. The choice
                     // lives at open time because a tab's profile is fixed then —
                     // Electron only honours a partition before attach.
-                    if (action.label === "Browser" && action.available) {
+                    if (action.label === "浏览器" && action.available) {
                       return (
                         <MenuSub key={action.label}>
                           <MenuSubTrigger

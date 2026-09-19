@@ -192,7 +192,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         <SidebarMenuItem className="min-w-0 flex-1">
           <SidebarMenuButton onClick={handleBackClick}>
             <ArrowLeftIcon />
-            <span>Back</span>
+            <span>返回</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
       ) : (

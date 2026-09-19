@@ -54,7 +54,7 @@ export function PreviewEmptyState({
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <History className="size-4 shrink-0" />
-              <h2 className="font-medium">Recently used</h2>
+              <h2 className="font-medium">最近使用</h2>
             </div>
             <DiscoveryList>
               {recents.map((entry) => (
@@ -73,7 +73,7 @@ export function PreviewEmptyState({
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <RadioTower className="size-4 shrink-0" />
-              <h2 className="font-medium">Local servers</h2>
+              <h2 className="font-medium">本地服务器</h2>
             </div>
             <DiscoveryList>
               {servers.map((server) => (
@@ -86,7 +86,7 @@ export function PreviewEmptyState({
               ))}
             </DiscoveryList>
             <p className="px-1 text-xs text-muted-foreground">
-              Select a live local server to open it in this browser tab.
+              选择一个在线的本地服务器，在此浏览器标签页中打开。
             </p>
           </div>
         ) : null}

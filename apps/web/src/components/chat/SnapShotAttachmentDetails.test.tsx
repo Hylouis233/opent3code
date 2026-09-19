@@ -36,7 +36,7 @@ describe("SnapShotAttachmentDetails", () => {
           children: [
             {
               role: "button",
-              name: "Save",
+              name: "保存",
               bounds: { x: 10, y: 10, width: 80, height: 24 },
               children: [],
             },
@@ -83,7 +83,7 @@ describe("SnapShotAttachmentDetails", () => {
     const source = {
       kind: "snap-shot" as const,
       capturedAt: "2026-08-27T00:00:00.000Z",
-      appName: "Terminal",
+      appName: "终端",
       windowTitle: "Logs",
       accessibleText: "legacy duplicate",
       accessibility: {

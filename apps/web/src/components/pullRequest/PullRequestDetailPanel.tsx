@@ -243,8 +243,8 @@ const UPDATE_BRANCH_REBASE_FAILURE_HINT =
   "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.";
 
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
-  { value: "summary", label: "Summary" },
-  { value: "timeline", label: "Timeline" },
+  { value: "summary", label: "摘要" },
+  { value: "timeline", label: "时间线" },
   { value: "code", label: "Code" },
 ];
 
@@ -1021,7 +1021,7 @@ export function PullRequestDetailPanel({
     });
     if (commentResult._tag === "Failure") {
       setPendingAction(null);
-      toastManager.add({ type: "error", title: "Could not post the comment" });
+      toastManager.add({ type: "error", title: "无法发表评论" });
       return { commentPosted: false };
     }
     const actionSucceeded = await finishAction(action);
@@ -1141,7 +1141,7 @@ export function PullRequestDetailPanel({
       writeTaskToComposer(attachTarget, task);
       toastManager.add({
         type: "success",
-        title: "Added to the composer",
+        title: "已添加到输入框",
         description:
           task.prompt.length > 0
             ? "The question is in the composer — read it over, then send."
@@ -1189,7 +1189,7 @@ export function PullRequestDetailPanel({
       writeTaskToComposer(attachTarget, task);
       toastManager.add({
         type: "success",
-        title: "Added to the composer",
+        title: "已添加到输入框",
         description: "The task is in the composer — read it over, then send.",
       });
       return;
@@ -1569,7 +1569,7 @@ export function PullRequestDetailPanel({
                         </Button>
                       }
                     />
-                    <TooltipPopup side="top">Back to pull requests</TooltipPopup>
+                    <TooltipPopup side="top">返回拉取请求列表</TooltipPopup>
                   </Tooltip>
                 ) : null}
                 <Tooltip>
@@ -1645,7 +1645,7 @@ export function PullRequestDetailPanel({
                         </Button>
                       }
                     />
-                    <TooltipPopup side="top">Back to pull requests</TooltipPopup>
+                    <TooltipPopup side="top">返回拉取请求列表</TooltipPopup>
                   </Tooltip>
                 ) : null}
                 <Tooltip>
@@ -1850,7 +1850,7 @@ export function PullRequestDetailPanel({
                           variant="default"
                           disabled={actionPending}
                           onClick={() => void perform("ready")}
-                          aria-label="Ready for review"
+                          aria-label="待审查"
                         >
                           <GitPullRequestIcon aria-hidden className="size-3.5" />
                           <span className="@max-[30rem]/pr-header:hidden">Ready for review</span>
@@ -1858,7 +1858,7 @@ export function PullRequestDetailPanel({
                       </span>
                     }
                   />
-                  <TooltipPopup side="top">Ready for review</TooltipPopup>
+                  <TooltipPopup side="top">待审查</TooltipPopup>
                 </Tooltip>
               ) : primaryAction === "enable-auto-merge" ? (
                 <Tooltip>
@@ -2022,7 +2022,7 @@ export function PullRequestDetailPanel({
                   <MenuSeparator />
                   {detail.state === "open" ? (
                     <>
-                      {/* Only where the button row could not take it: "Ready for review" on a
+                      {/* Only where the button row could not take it: "待审查" on a
                           draft is the primary header button, so offering it here as well would
                           show the same action twice. */}
                       {showsDraftToggle ? (
@@ -2035,7 +2035,7 @@ export function PullRequestDetailPanel({
                           ) : (
                             <GitPullRequestDraftIcon className="size-3.5" />
                           )}
-                          {detail.isDraft ? "Ready for review" : "Convert to draft"}
+                          {detail.isDraft ? "待审查" : "Convert to draft"}
                         </MenuItem>
                       ) : null}
                       {showsMergeNow ? (

@@ -62,7 +62,7 @@ describe("streaming row projection", () => {
       {
         id: MessageId.make("history-assistant"),
         role: "assistant",
-        text: "Done",
+        text: "完成",
         turnId: historyTurnId,
         createdAt: time(3),
         updatedAt: time(4),
@@ -71,7 +71,7 @@ describe("streaming row projection", () => {
       {
         id: MessageId.make("live-user"),
         role: "user",
-        text: "Continue",
+        text: "继续",
         turnId: null,
         createdAt: time(5),
         updatedAt: time(5),
@@ -92,7 +92,7 @@ describe("streaming row projection", () => {
         id: "history-work",
         turnId: historyTurnId,
         createdAt: time(1),
-        label: "Ran command",
+        label: "已运行命令",
         tone: "tool",
         command: "vp test",
         toolCallId: "history-tool",
@@ -744,25 +744,25 @@ describe("work entry labels", () => {
 
   it("keeps command summaries compact without replacing the full command in expanded rows", () => {
     const commandEntry = { ...entry, command: "vp test run", detail: "All tests passed" };
-    expect(liveWorkEntryLabel(commandEntry, undefined, true)).toBe("Running vp");
-    expect(liveWorkEntryLabel(commandEntry, undefined, false)).toBe("Ran vp");
+    expect(liveWorkEntryLabel(commandEntry, undefined, true)).toBe("正在运行 vp");
+    expect(liveWorkEntryLabel(commandEntry, undefined, false)).toBe("已运行 vp");
     expect(workEntryDisplayLabel(commandEntry, undefined)).toBe("vp test run");
   });
 
   it("summarizes the program inside a shell wrapper while preserving the expanded command", () => {
     const command = "/bin/zsh -lc 'vp test run apps/web/src/session-logic.test.ts'";
     const commandEntry = { ...entry, command };
-    expect(liveWorkEntryLabel(commandEntry, undefined, true)).toBe("Running vp");
-    expect(liveWorkEntryLabel(commandEntry, undefined, false)).toBe("Ran vp");
+    expect(liveWorkEntryLabel(commandEntry, undefined, true)).toBe("正在运行 vp");
+    expect(liveWorkEntryLabel(commandEntry, undefined, false)).toBe("已运行 vp");
     expect(workEntryDisplayLabel(commandEntry, undefined)).toBe(command);
   });
 
   it.each([
-    ["inProgress", "Running vp", "Running vp"],
-    ["completed", "Running vp", "Ran vp"],
-    ["failed", "Failed vp", "Failed vp"],
-    ["declined", "Declined vp", "Declined vp"],
-    ["stopped", "Stopped vp", "Stopped vp"],
+    ["inProgress", "正在运行 vp", "正在运行 vp"],
+    ["completed", "正在运行 vp", "已运行 vp"],
+    ["failed", "失败 vp", "失败 vp"],
+    ["declined", "已拒绝 vp", "已拒绝 vp"],
+    ["stopped", "已停止 vp", "已停止 vp"],
   ] as const)(
     "uses present tense for a live %s command and the outcome once it is no longer live",
     (toolLifecycleStatus, liveLabel, settledLabel) => {
@@ -1580,7 +1580,7 @@ describe("deriveMessagesTimelineRows", () => {
           message: {
             id: "assistant-1" as never,
             role: "assistant",
-            text: "Done",
+            text: "完成",
             turnId: "turn-1" as never,
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:30Z",
@@ -1645,7 +1645,7 @@ describe("deriveMessagesTimelineRows", () => {
           id: "work-1",
           createdAt: "2026-01-01T00:00:08Z",
           turnId: "turn-1" as never,
-          label: "Ran command",
+          label: "已运行命令",
           tone: "tool" as const,
         },
       },
@@ -1656,7 +1656,7 @@ describe("deriveMessagesTimelineRows", () => {
         message: {
           id: "assistant-final" as never,
           role: "assistant" as const,
-          text: "Done",
+          text: "完成",
           turnId: "turn-1" as never,
           createdAt: "2026-01-01T00:00:20Z",
           updatedAt: "2026-01-01T00:00:22Z",
@@ -1719,7 +1719,7 @@ describe("deriveMessagesTimelineRows", () => {
           id: "work-before-text",
           createdAt: "2026-01-01T00:00:01Z",
           turnId,
-          label: "Status updated",
+          label: "状态已更新",
           tone: "info" as const,
         },
       },
@@ -1745,7 +1745,7 @@ describe("deriveMessagesTimelineRows", () => {
           id: `work-after-text-${index}`,
           createdAt: `2026-01-01T00:00:0${index + 7}Z`,
           turnId,
-          label: "Ran command",
+          label: "已运行命令",
           tone: "tool" as const,
           itemType: "command_execution" as const,
           toolLifecycleStatus: "completed" as const,
@@ -1881,7 +1881,7 @@ describe("deriveMessagesTimelineRows", () => {
             id: "work-before-message",
             createdAt: "2026-01-01T00:00:07Z",
             turnId: "turn-1" as never,
-            label: "Status updated",
+            label: "状态已更新",
             tone: "info" as const,
           },
         },
@@ -1907,7 +1907,7 @@ describe("deriveMessagesTimelineRows", () => {
             id: "work-1",
             createdAt: "2026-01-01T00:00:12Z",
             turnId: "turn-1" as never,
-            label: "Ran command",
+            label: "已运行命令",
             tone: "tool" as const,
           },
         },
@@ -1972,7 +1972,7 @@ describe("deriveMessagesTimelineRows", () => {
             id: "work-1",
             createdAt: "2026-01-01T00:00:05Z",
             turnId: "turn-1" as never,
-            label: "Ran command",
+            label: "已运行命令",
             tone: "tool" as const,
           },
         },
@@ -2012,7 +2012,7 @@ describe("deriveMessagesTimelineRows", () => {
             id: "work-1",
             createdAt: "2026-01-01T00:00:05Z",
             turnId: "turn-1" as never,
-            label: "Ran command",
+            label: "已运行命令",
             tone: "tool" as const,
           },
         },
@@ -2023,7 +2023,7 @@ describe("deriveMessagesTimelineRows", () => {
           message: {
             id: "assistant-final" as never,
             role: "assistant",
-            text: "Done",
+            text: "完成",
             turnId: "turn-1" as never,
             createdAt: "2026-01-01T00:00:20Z",
             updatedAt: "2026-01-01T00:00:22Z",
@@ -2094,7 +2094,7 @@ describe("deriveMessagesTimelineRows", () => {
             id: "work-1",
             createdAt: "2026-01-01T00:00:08Z",
             turnId: "turn-1" as never,
-            label: "Ran command",
+            label: "已运行命令",
             tone: "tool" as const,
           },
         },
@@ -2875,7 +2875,7 @@ describe("deriveMessagesTimelineRows", () => {
         entry: {
           id: "work-2",
           createdAt: "2026-01-01T00:00:02Z",
-          label: "Status updated",
+          label: "状态已更新",
           detail: "Editing MessagesTimeline.tsx",
           tone: middleTone,
           toolSurface: "computer" as const,
@@ -2954,7 +2954,7 @@ describe("deriveMessagesTimelineRows", () => {
       createdAt: time(second),
       turnId,
       tone: "tool",
-      label: "Ran command",
+      label: "已运行命令",
       command: "git status",
       toolCallId: `call-${second}`,
       toolLifecycleStatus: "completed",
@@ -3062,7 +3062,7 @@ describe("deriveMessagesTimelineRows", () => {
         entry: {
           id: "command-1",
           createdAt: "2026-01-01T00:00:03Z",
-          label: "Ran command",
+          label: "已运行命令",
           command: "git status",
           itemType: "command_execution" as const,
           tone: "tool" as const,
@@ -3144,7 +3144,7 @@ describe("deriveMessagesTimelineRows", () => {
       entry: {
         id: `work-${index}`,
         createdAt: `2026-01-01T00:00:0${index}Z`,
-        label: "Ran command",
+        label: "已运行命令",
         tone: "tool" as const,
         itemType: "command_execution" as const,
         toolLifecycleStatus: status,
@@ -3185,13 +3185,13 @@ describe("deriveMessagesTimelineRows", () => {
           createdAt,
           entry:
             status === "info"
-              ? { id, createdAt, label: "Status updated", tone: "info" as const }
+              ? { id, createdAt, label: "状态已更新", tone: "info" as const }
               : status === "error"
                 ? { id, createdAt, label: "Command failed", tone: "error" as const }
                 : {
                     id,
                     createdAt,
-                    label: "Ran command",
+                    label: "已运行命令",
                     tone: "tool" as const,
                     toolLifecycleStatus: status,
                   },

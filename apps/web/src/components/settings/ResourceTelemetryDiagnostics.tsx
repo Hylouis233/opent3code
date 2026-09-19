@@ -124,7 +124,7 @@ function categoryLabel(category: ResourceTelemetryProcessCategory): string {
     case "provider-root":
       return "Provider";
     case "terminal-root":
-      return "Terminal";
+      return "终端";
     case "electron-main":
       return "Electron main";
     case "electron-renderer":
@@ -292,9 +292,9 @@ function AggregateCard({
       </div>
       <div className="mt-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
         <MetricPair label="CPU" value={`${aggregate.currentCpuPercent.toFixed(1)}%`} />
-        <MetricPair label="Memory" value={formatBytes(aggregate.currentRssBytes)} />
+        <MetricPair label="内存" value={formatBytes(aggregate.currentRssBytes)} />
         <MetricPair label="Read" value={formatRate(aggregate.ioReadBytesPerSecond)} />
-        <MetricPair label="Write" value={formatRate(aggregate.ioWriteBytesPerSecond)} />
+        <MetricPair label="写入" value={formatRate(aggregate.ioWriteBytesPerSecond)} />
       </div>
     </div>
   );
@@ -891,7 +891,7 @@ export function ResourceTelemetryDiagnostics({
           clearSignaling();
           toastManager.add({
             type: "error",
-            title: "Could not confirm signal",
+            title: "无法确认信号",
             description: error instanceof Error ? error.message : `Failed to send ${signal}.`,
           });
           return;

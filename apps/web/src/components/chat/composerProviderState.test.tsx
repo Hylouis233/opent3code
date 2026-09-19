@@ -168,7 +168,7 @@ describe("getComposerProviderState", () => {
         ]),
         selectDescriptor("agent", [
           { id: "build", label: "Build", isDefault: true },
-          { id: "plan", label: "Plan" },
+          { id: "plan", label: "计划" },
         ]),
       ]),
       modelOptions: selections(["agent", "plan"]),
@@ -186,7 +186,7 @@ describe("getComposerProviderState", () => {
       models: modelWith([
         selectDescriptor("agent", [
           { id: "build", label: "Build", isDefault: true },
-          { id: "plan", label: "Plan" },
+          { id: "plan", label: "计划" },
         ]),
       ]),
       modelOptions: selections(["agent", "plan"]),
@@ -201,7 +201,7 @@ describe("getComposerProviderState", () => {
       provider: PROVIDER,
       model: MODEL,
       models: modelWith([
-        selectDescriptor("agent", [{ id: "plan", label: "Plan", isDefault: true }]),
+        selectDescriptor("agent", [{ id: "plan", label: "计划", isDefault: true }]),
       ]),
       modelOptions: selections(["agent", "plan"]),
       planModeEnabled: false,
@@ -220,7 +220,7 @@ describe("getComposerProviderState", () => {
       model: MODEL,
       models: modelWith([
         selectDescriptor("agent", [
-          { id: "plan", label: "Plan", isDefault: true },
+          { id: "plan", label: "计划", isDefault: true },
           { id: "research", label: "Research" },
         ]),
       ]),

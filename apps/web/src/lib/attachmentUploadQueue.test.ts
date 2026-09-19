@@ -189,7 +189,7 @@ describe("attachmentUploadQueue", () => {
       source: {
         kind: "snap-shot" as const,
         capturedAt: "2026-08-24T11:00:00.000Z",
-        appName: "Terminal",
+        appName: "终端",
         windowTitle: "Tests",
       },
     };
@@ -218,7 +218,7 @@ describe("attachmentUploadQueue", () => {
         source: {
           kind: "snap-shot",
           capturedAt: "2026-08-24T11:00:00.000Z",
-          appName: "Terminal",
+          appName: "终端",
           windowTitle: "Tests",
         },
       },

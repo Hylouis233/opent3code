@@ -174,7 +174,7 @@ import { PanelAnimationsPreview } from "./PanelAnimationsPreview";
 const ENVIRONMENT_IDENTIFICATION_LABELS: Record<EnvironmentIdentificationMode, string> = {
   artwork: "Artwork",
   pill: "Version pill",
-  none: "None",
+  none: "无",
 };
 
 const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
@@ -216,7 +216,7 @@ type BackgroundActivityProfileOption = BackgroundActivityProfile | "advanced";
 
 const BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS: Record<BackgroundActivityProfileOption, string> = {
   ...BACKGROUND_ACTIVITY_PROFILE_LABELS,
-  advanced: "Advanced",
+  advanced: "高级",
 };
 
 const BACKGROUND_ACTIVITY_PROFILE_DESCRIPTIONS: Record<BackgroundActivityProfile, string> = {
@@ -317,7 +317,7 @@ function AboutVersionSection() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not download update",
+            title: "无法下载更新",
             description: error instanceof Error ? error.message : "Download failed.",
           }),
         );
@@ -340,7 +340,7 @@ function AboutVersionSection() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not confirm update",
+            title: "无法确认更新",
             description: error instanceof Error ? error.message : "Update confirmation failed.",
           }),
         );
@@ -356,7 +356,7 @@ function AboutVersionSection() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not install update",
+              title: "无法安装更新",
               description: error instanceof Error ? error.message : "Install failed.",
             }),
           );
@@ -373,7 +373,7 @@ function AboutVersionSection() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not check for updates",
+              title: "无法检查更新",
               description:
                 result.state.message ?? "Automatic updates are not available in this build.",
             }),
@@ -384,7 +384,7 @@ function AboutVersionSection() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not check for updates",
+            title: "无法检查更新",
             description: error instanceof Error ? error.message : "Update check failed.",
           }),
         );
@@ -708,7 +708,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         stackedThreadToast({
           type: "error",
           title: "Couldn’t restore theme settings",
-          description: "Try again.",
+          description: "请重试。",
         }),
       );
     };
@@ -839,7 +839,7 @@ function TokenStreamingWarningDialog({
           <Button variant="ghost-muted" className="sm:mr-auto" onClick={onConfirm}>
             Use token by token
           </Button>
-          <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+          <AlertDialogClose render={<Button variant="outline" />}>取消</AlertDialogClose>
           <Button onClick={onUseParagraphs}>Use paragraphs</Button>
         </AlertDialogFooter>
       </AlertDialogPopup>
@@ -1112,7 +1112,7 @@ function BackgroundActivityAdvancedDialog({
           >
             Reset all
           </Button>
-          <Button onClick={() => onOpenChange(false)}>Done</Button>
+          <Button onClick={() => onOpenChange(false)}>完成</Button>
         </DialogFooter>
       </DialogPopup>
     </Dialog>
@@ -1568,7 +1568,7 @@ function TerminalFontRow() {
       }
       requireMonospace
       size={{
-        label: "Terminal font size",
+        label: "终端字号",
         min: MIN_TERMINAL_FONT_SIZE,
         max: MAX_TERMINAL_FONT_SIZE,
         value: settings.fontSizeTerminal,
@@ -3165,7 +3165,7 @@ export function ArchivedThreadsPanel() {
       if (!api) return;
       const clicked = await api.contextMenu.show(
         [
-          { id: "unarchive", label: "Unarchive" },
+          { id: "unarchive", label: "取消归档" },
           { id: "delete", label: "删除", destructive: true },
         ],
         position,
@@ -3180,7 +3180,7 @@ export function ArchivedThreadsPanel() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to unarchive thread",
+              title: "取消归档失败",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -3197,7 +3197,7 @@ export function ArchivedThreadsPanel() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to delete thread",
+              title: "删除对话失败",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -3300,7 +3300,7 @@ export function ArchivedThreadsPanel() {
                           toastManager.add(
                             stackedThreadToast({
                               type: "error",
-                              title: "Failed to unarchive thread",
+                              title: "取消归档失败",
                               description:
                                 error instanceof Error ? error.message : "An error occurred.",
                             }),
@@ -3310,7 +3310,7 @@ export function ArchivedThreadsPanel() {
                     }}
                   >
                     <ArchiveX className="size-3.5" />
-                    <span>Unarchive</span>
+                    <span>取消归档</span>
                   </Button>
                 }
               />

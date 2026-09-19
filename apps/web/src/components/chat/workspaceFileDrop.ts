@@ -17,7 +17,7 @@ export interface WorkspaceFileDropHost {
 }
 
 function isFileDrag(event: WorkspaceFileDragEvent): boolean {
-  return event.dataTransfer.types.includes("Files");
+  return event.dataTransfer.types.includes("文件");
 }
 
 function movedWithinDropTarget(event: WorkspaceFileDragEvent): boolean {

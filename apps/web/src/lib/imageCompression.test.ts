@@ -539,7 +539,7 @@ describe("snapshot coordinates after compression", () => {
         children: [
           {
             role: "button",
-            name: "Save",
+            name: "保存",
             bounds: { x: 2400, y: 1400, width: 100, height: 100 },
             children: [],
           },

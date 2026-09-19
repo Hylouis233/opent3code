@@ -36,7 +36,7 @@ describe("composerContextRecordsFromDraft", () => {
       id,
       threadId: ThreadId.make("t1"),
       terminalId: "default",
-      terminalLabel: "Terminal",
+      terminalLabel: "终端",
       lineStart: 1,
       lineEnd: 1,
       text: "output",

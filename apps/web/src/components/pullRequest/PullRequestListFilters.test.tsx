@@ -48,7 +48,7 @@ function menu(overrides: Partial<Parameters<typeof PullRequestFiltersMenu>[0]>) 
     state: "open",
     stateOptions: [
       { value: "open", label: "Open", Icon: CircleIcon },
-      { value: "closed", label: "Closed", Icon: CircleIcon },
+      { value: "closed", label: "已关闭", Icon: CircleIcon },
     ],
     onState: () => undefined,
     involvement: "all",

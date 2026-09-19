@@ -83,14 +83,14 @@ export function liveWorkEntryLabel(
   if (command) {
     const verb =
       status === "inProgress"
-        ? "Running"
+        ? "正在运行"
         : status === "failed"
-          ? "Failed"
+          ? "失败"
           : status === "declined"
-            ? "Declined"
+            ? "已拒绝"
             : status === "stopped"
-              ? "Stopped"
-              : "Ran";
+              ? "已停止"
+              : "已运行";
     return `${verb} ${commandProgramName(command) ?? "command"}`;
   }
   return workEntryDisplayLabel(entry, workspaceRoot);

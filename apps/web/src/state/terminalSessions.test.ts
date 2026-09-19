@@ -26,7 +26,7 @@ function summary(
     exitCode: null,
     exitSignal: null,
     hasRunningSubprocess: true,
-    label: "Terminal",
+    label: "终端",
     updatedAt: "2026-09-04T00:00:00.000Z",
     ...changes,
   };
@@ -107,7 +107,7 @@ describe("selectKnownTerminalSessions", () => {
     expect(beforeA[1]?.state).toMatchObject({
       status: "running",
       hasRunningSubprocess: true,
-      summary: { label: "Terminal", pid: 123 },
+      summary: { label: "终端", pid: 123 },
     });
     expect(selectKnownTerminalSessions(metadata, environmentA, threadA)).toBe(beforeA);
 

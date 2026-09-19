@@ -152,7 +152,7 @@ function authPresentation(auth: SourceControlProviderAuth): {
   if (auth.status === "unauthenticated") {
     return { label: "Not authenticated", badge: "warning" };
   }
-  return { label: "Status unknown", badge: null };
+  return { label: "状态未知", badge: null };
 }
 
 function RedactedAccount(props: { readonly account: string | null }) {

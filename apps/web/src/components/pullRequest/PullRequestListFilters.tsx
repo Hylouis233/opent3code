@@ -149,8 +149,8 @@ const DRAFT_OPTIONS = [
 
 const REVIEW_OPTIONS = [
   { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
-  { value: "approved", label: "Approved", Icon: CircleCheckIcon },
-  { value: "changes-requested", label: "Changes requested", Icon: CircleXIcon },
+  { value: "approved", label: "已批准", Icon: CircleCheckIcon },
+  { value: "changes-requested", label: "要求修改", Icon: CircleXIcon },
   { value: "review-required", label: "Review required", Icon: CircleDashedIcon },
   { value: "none", label: "No reviews", Icon: CircleSlashIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
@@ -484,7 +484,7 @@ export function PullRequestFiltersMenu({
       ? ALL_PROJECTS_VALUE
       : pullRequestProjectKey({ id: projectId, environmentId: projectEnvironmentId });
   const projectOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
-    { value: ALL_PROJECTS_VALUE, label: "All projects", Icon: LayersIcon },
+    { value: ALL_PROJECTS_VALUE, label: "全部项目", Icon: LayersIcon },
     ...projects
       .toSorted(
         (left, right) =>

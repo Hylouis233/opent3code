@@ -57,7 +57,7 @@ describe("linked pull request snapshots", () => {
       ...link,
       snapshot: {
         state: "merged",
-        title: "Change",
+        title: "更改",
         headBranch: "feature",
         baseBranch: "main",
         isDraft: false,
@@ -69,7 +69,7 @@ describe("linked pull request snapshots", () => {
       pr: {
         number: 42,
         url: link.url,
-        title: "Change",
+        title: "更改",
         state: "merged",
         isDraft: false,
         headRef: "feature",

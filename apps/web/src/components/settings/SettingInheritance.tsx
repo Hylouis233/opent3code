@@ -104,7 +104,7 @@ export function settingInheritanceLayers(
   });
   layers.push({
     key: "built-in",
-    label: "Default",
+    label: "默认",
     value: formatValue(key, builtIn),
     effective: projectSource !== "project" && !environmentSet,
     set: true,

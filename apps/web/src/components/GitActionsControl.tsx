@@ -180,7 +180,7 @@ const PUBLISH_PROVIDER_OPTIONS = [
   {
     value: "forgejo",
     label: "Forgejo / Gitea",
-    description: "Your signed-in server",
+    description: "你登录的服务器",
     host: "your server",
     pathPlaceholder: "owner/repo",
     Icon: ForgejoIcon,
@@ -501,7 +501,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
       : currentPublishProvider.host;
   const publishPathPlaceholder = currentPublishProvider.pathPlaceholder;
   const publishProviderLabel = currentPublishProvider.label;
-  const publishWizardSteps = ["Provider", "Repository", "Summary"] as const;
+  const publishWizardSteps = ["Provider", "Repository", "摘要"] as const;
   const publishWizardStepSummaries = [
     publishProviderLabel,
     publishResult?.repository.nameWithOwner ?? null,
@@ -900,7 +900,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
 
         <WizardFooter>
           {publishWizardStep === 2 ? (
-            <Button onClick={() => handleOpenChange(false)}>Done</Button>
+            <Button onClick={() => handleOpenChange(false)}>完成</Button>
           ) : (
             <>
               <Button
@@ -1215,7 +1215,7 @@ export default function GitActionsControl({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Unable to open pull request link",
+          title: "无法打开拉取请求链接",
           description: err instanceof Error ? err.message : "An error occurred.",
           ...(threadToastData !== undefined ? { data: threadToastData } : {}),
         }),
@@ -1284,7 +1284,7 @@ export default function GitActionsControl({
         toastManager.add({
           type: "loading",
           title: progressStages[0] ?? "Running git action...",
-          description: "Waiting for Git...",
+          description: "等待 Git…",
           timeout: 0,
           data: scopedToastData,
         });
@@ -1305,7 +1305,7 @@ export default function GitActionsControl({
         toastManager.update(progressToastId, {
           type: "loading",
           title: progressStages[0] ?? "Running git action...",
-          description: "Waiting for Git...",
+          description: "等待 Git…",
           timeout: 0,
           data: scopedToastData,
         });
@@ -1620,7 +1620,7 @@ export default function GitActionsControl({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to open file",
+            title: "无法打开文件",
             description: error instanceof Error ? error.message : "An error occurred.",
             ...(threadToastData !== undefined ? { data: threadToastData } : {}),
           }),
@@ -1851,7 +1851,7 @@ export default function GitActionsControl({
                       size="xs"
                       onClick={() => setIsEditingFiles((prev) => !prev)}
                     >
-                      {isEditingFiles ? "Done" : "Edit"}
+                      {isEditingFiles ? "完成" : "编辑"}
                     </Button>
                   )}
                 </div>

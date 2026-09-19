@@ -83,8 +83,8 @@ describe("ServerUpdateAction", () => {
     });
     expect(testState.toast).toHaveBeenCalledWith({
       type: "success",
-      title: "Test server updated",
-      description: "Reconnected on t3@0.0.31.",
+      title: "Test server 已更新",
+      description: "已在 t3@0.0.31 重新连接。",
     });
   });
 
@@ -157,8 +157,8 @@ describe("ServerUpdateAction", () => {
     });
     expect(testState.toast).toHaveBeenCalledWith({
       type: "success",
-      title: "Test server updated",
-      description: "Desktop app relaunched on 0.0.34.",
+      title: "Test server 已更新",
+      description: "桌面应用已重启到 0.0.34。",
     });
   });
 
@@ -271,8 +271,8 @@ describe("ServerUpdatesAction", () => {
       { environmentId: "batch-b", input: { targetVersion: "0.0.31" } },
     ]);
     expect(testState.toast.mock.calls.map(([toast]) => toast.title)).toEqual([
-      "Laptop updated",
-      "Office updated",
+      "Laptop 已更新",
+      "Office 已更新",
     ]);
   });
 
@@ -288,11 +288,11 @@ describe("ServerUpdatesAction", () => {
     expect(testState.updateServer).toHaveBeenCalledTimes(2);
     expect(testState.toast).toHaveBeenCalledWith({
       type: "error",
-      title: "Laptop update failed",
+      title: "Laptop 更新失败",
       description: "Download failed",
     });
     expect(testState.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "success", title: "Office updated" }),
+      expect.objectContaining({ type: "success", title: "Office 已更新" }),
     );
     expect(button.props.disabled).toBe(false);
   });

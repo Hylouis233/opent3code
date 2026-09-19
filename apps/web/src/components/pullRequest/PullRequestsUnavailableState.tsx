@@ -12,7 +12,7 @@ import {
 } from "../ui/empty";
 
 export function PullRequestsUnavailableState({
-  title = "Could not load pull requests",
+  title = "无法加载拉取请求",
   error,
   onRetry,
   refreshing = false,
@@ -46,7 +46,7 @@ export function PullRequestsUnavailableState({
               aria-busy={refreshing}
             >
               <RefreshIcon className="size-3.5" refreshing={refreshing} />
-              Retry
+              重试
             </Button>
           ) : null}
           {gitHubUrl ? (
@@ -56,7 +56,7 @@ export function PullRequestsUnavailableState({
               render={<a href={gitHubUrl} target="_blank" rel="noopener noreferrer" />}
             >
               <ExternalLinkIcon aria-hidden className="size-3.5" />
-              Open on GitHub
+              在 GitHub 上打开
             </Button>
           ) : null}
         </EmptyContent>

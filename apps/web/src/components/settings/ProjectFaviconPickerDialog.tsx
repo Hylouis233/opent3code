@@ -94,7 +94,7 @@ export function ProjectFaviconPickerDialog(props: {
                       .catch((error: unknown) => {
                         toastManager.add({
                           type: "error",
-                          title: "Could not open image picker",
+                          title: "无法打开图片选择器",
                           description:
                             error instanceof Error ? error.message : "An error occurred.",
                         });

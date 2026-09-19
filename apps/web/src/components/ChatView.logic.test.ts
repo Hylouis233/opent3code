@@ -830,7 +830,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
       id: "active-tool",
       createdAt: now,
       turnId: activeTurnId,
-      label: "Run command",
+      label: "运行命令",
       tone: "tool" as const,
       command: "git status",
     },

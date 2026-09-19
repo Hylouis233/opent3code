@@ -59,7 +59,7 @@ class TestNotification extends EventTarget {
 
 const thread = {
   id: "thread",
-  title: "Test thread",
+  title: "测试对话",
   archivedAt: null as string | null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,

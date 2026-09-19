@@ -74,7 +74,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
             data-composer-label-motion
             className="block w-full min-w-0 max-w-[240px] truncate transition-opacity duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transition-none"
           >
-            {activeEnvironment?.label ?? "Run on"}
+            {activeEnvironment?.label ?? "运行于"}
           </span>
         </span>
       </span>
@@ -94,7 +94,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         variant="ghost"
         size="xs"
         className="min-w-0 max-w-full font-normal text-xs!"
-        aria-label="Run on"
+        aria-label="运行于"
         data-composer-shortcut="composer.host"
         data-composer-context-control
       >
@@ -120,7 +120,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
       </SelectTrigger>
       <SelectPopup alignItemWithTrigger={false} {...composerFloatingLayerProps}>
         <SelectGroup>
-          <SelectGroupLabel>Run on</SelectGroupLabel>
+          <SelectGroupLabel>运行于</SelectGroupLabel>
           {onAutoEnvironment && (
             <SelectItem
               value="auto"

@@ -63,14 +63,14 @@ export function CommandPaletteContent({
             </KbdGroup>
             {footerActionLabel !== undefined ? (
               <KbdGroup className="items-center gap-1.5">
-                <Kbd>Enter</Kbd>
+                <Kbd>回车</Kbd>
                 <span>{footerActionLabel}</span>
               </KbdGroup>
             ) : null}
             {showBackHint ? (
               <KbdGroup className="items-center gap-1.5">
-                <Kbd>Backspace</Kbd>
-                <span>Back</span>
+                <Kbd>退格</Kbd>
+                <span>返回</span>
               </KbdGroup>
             ) : null}
             <KbdGroup className="items-center gap-1.5">

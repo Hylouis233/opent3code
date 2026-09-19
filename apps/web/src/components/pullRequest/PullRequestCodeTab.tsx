@@ -99,7 +99,7 @@ interface ReviewAnnotationGroup {
 
 type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
 
-/** Commits per press of "Show more" in the scope menu. */
+/** Commits per press of "显示更多" in the scope menu. */
 const COMMIT_PAGE_SIZE = 10;
 
 const PULL_REQUEST_FILE_TREE_STORAGE_KEY = "t3code.pullRequestFileTreeOpen";
@@ -907,11 +907,11 @@ function PullRequestCodeTab({
             kind="draft"
             rangeLabel={`${draft.path}:${getReviewPositionAnchor(draft.position).line}`}
             text=""
-            submitLabel="Add to review"
+            submitLabel="加入审查"
             {...(onAddToAgentSelection
               ? {
                   secondaryAction: {
-                    label: "Add to agent",
+                    label: "添加给 agent",
                     onAction: (text: string) =>
                       finishSelection(draft, text, (comment) =>
                         onAddToAgentSelection({ comment, request: text }),

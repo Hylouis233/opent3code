@@ -34,14 +34,14 @@ const VERDICTS: ReadonlyArray<{
   },
   {
     value: "approve",
-    label: "Approve",
+    label: "批准",
     sent: "Pull request approved",
     icon: <CheckIcon className="size-3" />,
   },
   {
     value: "request-changes",
     label: "Request changes",
-    sent: "Changes requested",
+    sent: "要求修改",
     icon: <XCircleIcon className="size-3" />,
   },
 ];

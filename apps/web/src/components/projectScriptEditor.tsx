@@ -311,7 +311,7 @@ export function ProjectScriptEditorDialog({
             <form id={formId} onSubmit={submit}>
               <fieldset className="space-y-4" disabled={isSaving}>
                 <div className="space-y-1.5">
-                  <Label htmlFor="script-name">Name</Label>
+                  <Label htmlFor="script-name">名称</Label>
                   <div className="flex items-center gap-2">
                     <Popover onOpenChange={setIconPickerOpen} open={iconPickerOpen}>
                       <PopoverTrigger
@@ -371,12 +371,12 @@ export function ProjectScriptEditorDialog({
                     onKeyDown={captureKeybinding}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Press a shortcut. Use <code>Backspace</code> to clear. Shortcuts are
+                    Press a shortcut. Use <code>退格</code> to clear. Shortcuts are
                     environment-wide. Projects using the same action share its shortcut.
                   </p>
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="script-command">Command</Label>
+                  <Label htmlFor="script-command">命令</Label>
                   <Textarea
                     id="script-command"
                     placeholder="bun test"
@@ -444,7 +444,7 @@ export function ProjectScriptEditorDialog({
               </Button>
             )}
             <Button type="button" variant="outline" onClick={close}>
-              Cancel
+              取消
             </Button>
             <Button form={formId} type="submit" disabled={isSaving}>
               {isSaving ? "Saving…" : isEditing ? "保存更改" : "Save action"}
@@ -460,7 +460,7 @@ export function ProjectScriptEditorDialog({
             <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>取消</AlertDialogClose>
             <Button
               variant="destructive"
               disabled={isSaving}

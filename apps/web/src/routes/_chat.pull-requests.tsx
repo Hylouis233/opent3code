@@ -197,7 +197,7 @@ const INVOLVEMENT_TABS = [
 const STATE_TABS = [
   { value: "all", label: "All", Icon: LayersIcon },
   { value: "open", label: "Open", Icon: GitPullRequestIcon },
-  { value: "closed", label: "Closed", Icon: GitPullRequestClosedIcon },
+  { value: "closed", label: "已关闭", Icon: GitPullRequestClosedIcon },
   { value: "merged", label: "Merged", Icon: GitMergeIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
 
@@ -1802,7 +1802,7 @@ function PullRequestsRouteView() {
       projectEnvironmentId={scopedProject?.environmentId}
       unavailable={unavailableProjects}
       // The environment comes along with the project it belongs to, so a duplicate id on
-      // another server never gets narrowed to by mistake; picking "All projects" leaves the
+      // another server never gets narrowed to by mistake; picking "全部项目" leaves the
       // server scope as it was rather than clearing it.
       onProject={(projectId, environmentId) =>
         updateListScope(environmentId === undefined ? { projectId } : { projectId, environmentId })

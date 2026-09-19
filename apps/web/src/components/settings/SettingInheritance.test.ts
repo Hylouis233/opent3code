@@ -17,7 +17,7 @@ describe("settingInheritanceLayers", () => {
     );
     expect(layers.map((layer) => [layer.label, layer.value, layer.effective])).toEqual([
       ["Laptop", "Inherits", false],
-      ["Default", "Off", true],
+      ["默认", "Off", true],
     ]);
   });
 
@@ -36,7 +36,7 @@ describe("settingInheritanceLayers", () => {
     expect(layers.map((layer) => [layer.label, layer.value, layer.effective])).toEqual([
       ["项目", "Off", true],
       ["Laptop", "On", false],
-      ["Default", "Off", false],
+      ["默认", "Off", false],
     ]);
     const inherited = settingInheritanceLayers(
       {

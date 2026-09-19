@@ -19,7 +19,7 @@ const detail: PullRequestDetailView = {
   workspaceRoot: "/workspace",
   repository: "owner/repo",
   number: 1,
-  title: "Test pull request",
+  title: "测试拉取请求",
   body: "Original description",
   url: "https://github.com/owner/repo/pull/1",
   author: { login: "author", name: null, avatarUrl: null },

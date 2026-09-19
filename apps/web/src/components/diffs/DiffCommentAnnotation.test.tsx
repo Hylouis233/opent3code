@@ -38,18 +38,18 @@ describe("DiffCommentAnnotation", () => {
         rangeLabel="src/app.ts:4"
         text=""
         {...callbacks}
-        submitLabel="Add to review"
+        submitLabel="加入审查"
         secondaryAction={{
-          label: "Add to agent",
+          label: "添加给 agent",
           onAction: vi.fn(),
         }}
       />,
     );
 
     expect(markup).toContain("Add a comment…");
-    expect(markup).toContain(">Add to review</button>");
-    expect(markup.match(/<button[^>]*disabled[^>]*>Add to review<\/button>/)).not.toBeNull();
-    expect(markup.match(/<button[^>]*disabled[^>]*>Add to agent<\/button>/)).not.toBeNull();
+    expect(markup).toContain(">加入审查</button>");
+    expect(markup.match(/<button[^>]*disabled[^>]*>加入审查<\/button>/)).not.toBeNull();
+    expect(markup.match(/<button[^>]*disabled[^>]*>添加给 agent<\/button>/)).not.toBeNull();
   });
 
   it("renders a saved comment without a nested card or redundant range label", () => {

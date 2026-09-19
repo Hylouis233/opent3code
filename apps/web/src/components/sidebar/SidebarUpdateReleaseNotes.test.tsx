@@ -65,7 +65,7 @@ function renderNotes(state: DesktopUpdateState, openExternal = vi.fn().mockResol
   return SidebarUpdateReleaseNotes({
     shell: { openExternal },
     state,
-    tooltip: "Update available",
+    tooltip: "有可用更新",
   });
 }
 
@@ -145,7 +145,7 @@ describe("SidebarUpdateReleaseNotes", () => {
       );
       expect(testState.addToast).toHaveBeenCalledWith({
         type: "error",
-        title: "Unable to open release notes",
+        title: "无法打开更新日志",
       });
     });
   });

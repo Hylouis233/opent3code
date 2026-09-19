@@ -206,11 +206,11 @@ export function CaptureShortcutConfig({
                     ? preview.operation === "install"
                       ? "Save shortcut"
                       : "Remove shortcut"
-                    : "Done"}
+                    : "完成"}
               </Button>
             ) : null}
             <Button variant="ghost" disabled={actionBusy} onClick={() => setPreview(null)}>
-              Cancel
+              取消
             </Button>
           </div>
         </>

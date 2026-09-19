@@ -13,7 +13,7 @@ function makeDragEvent(options?: {
   const preventDefault = vi.fn();
   const event = {
     dataTransfer: {
-      types: options?.types ?? ["Files"],
+      types: options?.types ?? ["文件"],
       files: options?.files ?? [],
       dropEffect: "none",
     },

@@ -430,7 +430,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const isDesktopLocalThread =
     environment !== null && isDesktopLocalConnectionTarget(environment.entry.target);
   const threadEnvironmentLabel = isRemoteThread
-    ? (remoteEnvLabel ?? (isDesktopLocalThread ? "Local" : "Remote"))
+    ? (remoteEnvLabel ?? (isDesktopLocalThread ? "Local" : "远程"))
     : null;
   const isHighlighted = isActive || isSelected;
   const handleOpenDiscoveredPort = useCallback(
@@ -449,7 +449,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to open preview",
+            title: "无法打开预览",
             description:
               error instanceof Error ? error.message : "The preview could not be opened.",
           }),
@@ -553,7 +553,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Thread action failed",
+                title: "对话操作失败",
                 description: error instanceof Error ? error.message : "An error occurred.",
               }),
             );
@@ -577,7 +577,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Thread action failed",
+              title: "对话操作失败",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -882,7 +882,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </div>
                     }
                   />
-                  <TooltipPopup side="top">Archive</TooltipPopup>
+                  <TooltipPopup side="top">归档</TooltipPopup>
                 </Tooltip>
               )
             ) : null}
@@ -893,7 +893,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     <TooltipTrigger
                       render={
                         <span
-                          aria-label={threadEnvironmentLabel ?? "Remote"}
+                          aria-label={threadEnvironmentLabel ?? "远程"}
                           className="inline-flex items-center justify-center"
                         />
                       }
@@ -1099,7 +1099,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
           >
             <span className="flex min-w-0 flex-1 items-center gap-2">
               {hiddenThreadStatus && <ThreadStatusLabel status={hiddenThreadStatus} compact />}
-              <span>Show more</span>
+              <span>显示更多</span>
             </span>
           </SidebarMenuSubButton>
         </SidebarMenuSubItem>
@@ -1208,7 +1208,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     onCopy: (ctx) => {
       toastManager.add({
         type: "success",
-        title: "Thread ID copied",
+        title: "对话 ID 已复制",
         description: ctx.threadId,
       });
     },
@@ -1216,7 +1216,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy thread ID",
+          title: "复制对话 ID 失败",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -1228,7 +1228,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     onCopy: (ctx) => {
       toastManager.add({
         type: "success",
-        title: "Path copied",
+        title: "路径已复制",
         description: ctx.path,
       });
     },
@@ -1236,7 +1236,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy path",
+          title: "复制路径失败",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -1756,7 +1756,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("rename", "重命名"),
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "复制路径"),
-            { id: "project-settings", label: "Project settings", icon: "settings" },
+            { id: "project-settings", label: "项目设置", icon: "settings" },
             buildTargetedItem("delete", "Remove", {
               destructive: true,
             }),
@@ -1927,7 +1927,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Thread archived, but navigation failed",
+              title: "对话已归档，但导航失败",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -1973,7 +1973,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to delete threads",
+            title: "删除对话失败",
             description: firstError instanceof Error ? firstError.message : "An error occurred.",
           }),
         );
@@ -2012,7 +2012,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not create thread",
+              title: "无法创建对话",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -2119,7 +2119,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (trimmed.length === 0) {
         toastManager.add({
           type: "warning",
-          title: "Thread title cannot be empty",
+          title: "对话标题不能为空",
         });
         finishRename();
         return;
@@ -2140,7 +2140,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to rename thread",
+            title: "重命名对话失败",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -2164,7 +2164,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     if (trimmed.length === 0) {
       toastManager.add({
         type: "warning",
-        title: "Project title cannot be empty",
+        title: "项目标题不能为空",
       });
       return;
     }
@@ -2247,7 +2247,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "复制路径" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
-          { id: "project-settings", label: "Project settings" },
+          { id: "project-settings", label: "项目设置" },
           { id: "delete", label: "删除", destructive: true, icon: "trash" },
         ],
         position,
@@ -2278,7 +2278,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not create thread",
+              title: "无法创建对话",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -2300,7 +2300,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Path unavailable",
+              title: "路径不可用",
               description: "This thread does not have a workspace path to copy.",
             }),
           );
@@ -2332,7 +2332,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to delete thread",
+            title: "删除对话失败",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -2540,7 +2540,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             <Button variant="outline" onClick={closeProjectRenameDialog}>
               Cancel
             </Button>
-            <Button onClick={() => void submitProjectRename()}>Save</Button>
+            <Button onClick={() => void submitProjectRename()}>保存</Button>
           </DialogFooter>
         </DialogPopup>
       </Dialog>
@@ -2611,7 +2611,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             <Button variant="outline" onClick={closeProjectGroupingDialog}>
               Cancel
             </Button>
-            <Button onClick={saveProjectGroupingPreference}>Save</Button>
+            <Button onClick={saveProjectGroupingPreference}>保存</Button>
           </DialogFooter>
         </DialogPopup>
       </Dialog>
@@ -2999,7 +2999,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         <SidebarGroup className="px-2 pt-2 pb-0">
           <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
             <TriangleAlertIcon />
-            <AlertTitle>Intel build on Apple Silicon</AlertTitle>
+            <AlertTitle>Apple Silicon 上的 Intel 构建</AlertTitle>
             <AlertDescription>{arm64IntelBuildWarningDescription}</AlertDescription>
             {desktopUpdateButtonAction !== "none" ? (
               <AlertAction>
@@ -3682,7 +3682,7 @@ export default function LegacySidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not download update",
+              title: "无法下载更新",
               description: actionError,
             }),
           );
@@ -3691,7 +3691,7 @@ export default function LegacySidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not start update download",
+              title: "无法开始下载更新",
               description: error instanceof Error ? error.message : "An unexpected error occurred.",
             }),
           );
@@ -3711,7 +3711,7 @@ export default function LegacySidebar() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not confirm update",
+            title: "无法确认更新",
             description: error instanceof Error ? error.message : "Update confirmation failed.",
           }),
         );
@@ -3730,7 +3730,7 @@ export default function LegacySidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not install update",
+              title: "无法安装更新",
               description: actionError,
             }),
           );
@@ -3739,7 +3739,7 @@ export default function LegacySidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not install update",
+              title: "无法安装更新",
               description: error instanceof Error ? error.message : "An unexpected error occurred.",
             }),
           );

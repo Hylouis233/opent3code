@@ -36,16 +36,16 @@ import { Button } from "~/components/ui/button";
  * user problem). Only settled states differentiate.
  */
 const STATUS_VISUALS: Record<RuntimeSubagent["status"], { dotClass: string; label: string }> = {
-  pending: { dotClass: "bg-info", label: "Working" },
-  running: { dotClass: "bg-info", label: "Working" },
-  waiting: { dotClass: "bg-info", label: "Working" },
+  pending: { dotClass: "bg-info", label: "运行中" },
+  running: { dotClass: "bg-info", label: "运行中" },
+  waiting: { dotClass: "bg-info", label: "运行中" },
   // Idle reads as settled (muted, not sky): a resting Codex child looks done
   // unless resumed — live-test: sky idle dots read as stuck in-progress.
   idle: { dotClass: "bg-muted-foreground/50", label: "Idle · resumable" },
   completed: { dotClass: "bg-success", label: "Completed" },
-  failed: { dotClass: "bg-destructive", label: "Failed" },
-  cancelled: { dotClass: "bg-muted-foreground/60", label: "Stopped" },
-  interrupted: { dotClass: "bg-muted-foreground/60", label: "Stopped" },
+  failed: { dotClass: "bg-destructive", label: "失败" },
+  cancelled: { dotClass: "bg-muted-foreground/60", label: "已停止" },
+  interrupted: { dotClass: "bg-muted-foreground/60", label: "已停止" },
 };
 
 function StatusDot({ status }: { status: RuntimeSubagent["status"] }) {

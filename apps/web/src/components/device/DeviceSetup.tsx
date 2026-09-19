@@ -159,7 +159,7 @@ export function DeviceSetup(props: {
 
       <WizardFooter>
         {step === 0 ? (
-          <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+          <DialogClose render={<Button variant="outline" />}>取消</DialogClose>
         ) : (
           <Button
             variant="outline"

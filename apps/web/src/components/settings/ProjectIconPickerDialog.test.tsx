@@ -45,7 +45,7 @@ describe("ProjectIconPickerDialog", () => {
     );
 
     expect(markup).toContain('data-current="lucide"');
-    expect(markup.indexOf(">Icons<")).toBeLessThan(markup.indexOf(">Emoji<"));
+    expect(markup.indexOf(">图标<")).toBeLessThan(markup.indexOf(">表情<"));
     expect(markup).toContain('aria-label="Icon color"');
   });
 });

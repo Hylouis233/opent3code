@@ -59,7 +59,7 @@ describe("composerMentionFromTreePath", () => {
 describe("dataTransferHasComposerMention", () => {
   it("detects the mention payload among drag types", () => {
     expect(dataTransferHasComposerMention([COMPOSER_MENTION_DRAG_TYPE, "text/plain"])).toBe(true);
-    expect(dataTransferHasComposerMention(["Files"])).toBe(false);
+    expect(dataTransferHasComposerMention(["文件"])).toBe(false);
     expect(dataTransferHasComposerMention([])).toBe(false);
   });
 });
@@ -68,7 +68,7 @@ describe("makeComposerMentionDragHandlers", () => {
   it("leaves drags without the mention payload alone", () => {
     const { host, log } = makeHost();
     const handlers = makeComposerMentionDragHandlers(host);
-    const { event, calls } = makeDragEvent({ types: ["Files"] });
+    const { event, calls } = makeDragEvent({ types: ["文件"] });
     handlers.onDragEnter(event);
     handlers.onDragOver(event);
     handlers.onDrop(event);

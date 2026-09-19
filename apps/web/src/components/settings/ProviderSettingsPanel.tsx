@@ -1010,18 +1010,16 @@ export function EnvironmentProviderSettings({
                         onClick={() => void refreshProviders()}
                       >
                         <RefreshIcon refreshing={isRefreshingProviders} />
-                        <span className="sr-only">Refresh provider status</span>
+                        <span className="sr-only">刷新 provider 状态</span>
                         <span className="hidden min-w-0 truncate sm:inline">
-                          {isRefreshingProviders ? (
-                            "Refreshing providers"
-                          ) : (
+                          {isRefreshingProviders ? "正在刷新 providers" : (
                             <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
                           )}
                         </span>
                       </Button>
                     }
                   />
-                  <TooltipPopup side="top">Refresh provider status</TooltipPopup>
+                  <TooltipPopup side="top">刷新 provider 状态</TooltipPopup>
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger
@@ -1089,7 +1087,7 @@ export function EnvironmentProviderSettings({
         readOnly={readOnly}
       />
 
-      <SettingsSection title="Advanced">
+      <SettingsSection title="高级">
         <SettingsRow
           id={searchableSetting("provider-health-check-interval").id}
           title={

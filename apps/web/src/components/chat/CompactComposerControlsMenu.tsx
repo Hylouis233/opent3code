@@ -66,7 +66,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
               }}
             >
               <MenuRadioItem value="default">Chat</MenuRadioItem>
-              <MenuRadioItem value="plan">Plan</MenuRadioItem>
+              <MenuRadioItem value="plan">计划</MenuRadioItem>
             </MenuRadioGroup>
             <MenuDivider />
           </>

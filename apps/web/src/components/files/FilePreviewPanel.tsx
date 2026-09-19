@@ -1068,7 +1068,7 @@ export default function FilePreviewPanel({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Unable to open file in browser",
+          title: "无法在浏览器中打开文件",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );

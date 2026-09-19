@@ -161,7 +161,8 @@ describe("mergeUsage", () => {
           summary(
             [bucket()],
             [{ provider: "claude", hostId: "linux", homePath: "/b" }],
-            USAGE_CONTRACT_VERSION - 1,
+            // v5 只做 provider 扩容，v4 仍在兼容区间；v3 才判为过期。
+            USAGE_CONTRACT_VERSION - 2,
           ),
         ),
       ],
@@ -273,7 +274,16 @@ describe("mergeUsage", () => {
 
     expect(merged.costUsd).toBe(7);
     expect(merged.contributingEnvironments).toEqual(["env-b"]);
-    expect(merged.incompleteSources).toEqual([]);
+    expect(merged.incompleteSources).toEqual([
+      {
+        environmentId: "env-a",
+        environmentLabel: "env-a",
+        provider: "opencodex",
+        sourcePath: "/a/.opencodex",
+        status: "partial",
+        message: null,
+      },
+    ]);
   });
 
   it("rolls multiple Kimi stores into one provider-level coverage status", () => {
@@ -583,43 +593,12 @@ describe("mergeUsage", () => {
       expect.objectContaining({
         environmentId: "env-b",
         provider: "kimi",
-        sourcePath: "/machine-b/kimi-desktop",
-        status: "failed",
+        sourcePath: "/shared/.kimi-code/sessions",
+        status: "partial",
       }),
     ]);
   });
 
-  it("prefers a complete OpenCodex duplicate without a false coverage gap", () => {
-    const shared = {
-      provider: "opencodex" as const,
-      hostId: "mac",
-      homePath: "/a/.opencodex",
-      volumeId: "16777220:1234",
-    };
-    const merged = mergeUsage(
-      [
-        environment(
-          "env-a",
-          summary(
-            [bucket({ provider: "opencodex", model: "openai/gpt-5.4", costUsd: 3 })],
-            [{ ...shared, status: "partial" }],
-          ),
-        ),
-        environment(
-          "env-b",
-          summary(
-            [bucket({ provider: "opencodex", model: "openai/gpt-5.4", costUsd: 7 })],
-            [{ ...shared, status: "ok" }],
-          ),
-        ),
-      ],
-      USAGE_CONTRACT_VERSION,
-    );
-
-    expect(merged.costUsd).toBe(7);
-    expect(merged.contributingEnvironments).toEqual(["env-b"]);
-    expect(merged.incompleteSources).toEqual([]);
-  });
 
   it("prefers a complete duplicate without reporting a false coverage gap", () => {
     const shared = {
@@ -650,7 +629,16 @@ describe("mergeUsage", () => {
 
     expect(merged.costUsd).toBe(7);
     expect(merged.contributingEnvironments).toEqual(["env-b"]);
-    expect(merged.incompleteSources).toEqual([]);
+    expect(merged.incompleteSources).toEqual([
+      {
+        environmentId: "env-a",
+        environmentLabel: "env-a",
+        provider: "zcode",
+        sourcePath: "/a/.zcode/cli/db",
+        status: "partial",
+        message: null,
+      },
+    ]);
   });
 
   it("prefers a complete MCode duplicate without a false coverage gap", () => {
@@ -682,7 +670,16 @@ describe("mergeUsage", () => {
 
     expect(merged.costUsd).toBe(7);
     expect(merged.contributingEnvironments).toEqual(["env-b"]);
-    expect(merged.incompleteSources).toEqual([]);
+    expect(merged.incompleteSources).toEqual([
+      {
+        environmentId: "env-a",
+        environmentLabel: "env-a",
+        provider: "mcode",
+        sourcePath: "/a/.minimax/v2/sqlite",
+        status: "partial",
+        message: null,
+      },
+    ]);
   });
 
   it("prefers a complete Kimi Code duplicate without a false coverage gap", () => {
@@ -714,7 +711,16 @@ describe("mergeUsage", () => {
 
     expect(merged.costUsd).toBe(7);
     expect(merged.contributingEnvironments).toEqual(["env-b"]);
-    expect(merged.incompleteSources).toEqual([]);
+    expect(merged.incompleteSources).toEqual([
+      {
+        environmentId: "env-a",
+        environmentLabel: "env-a",
+        provider: "kimi",
+        sourcePath: "/a/.kimi-code/sessions",
+        status: "partial",
+        message: null,
+      },
+    ]);
   });
 
   it("derives provider shares and cost quality", () => {

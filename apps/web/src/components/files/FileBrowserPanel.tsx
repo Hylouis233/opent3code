@@ -178,7 +178,7 @@ export default function FileBrowserPanel({
       const clicked = await api.contextMenu.show(
         [
           { id: "copy-mention", label: "Copy mention" },
-          { id: "add-to-chat", label: "Add to chat" },
+          { id: "add-to-chat", label: "添加到对话" },
         ],
         position,
       );
@@ -200,7 +200,7 @@ export default function FileBrowserPanel({
         if (!composer) {
           toastManager.add({
             type: "error",
-            title: "Unable to add to chat",
+            title: "无法添加到对话",
             description: "Open a chat for this project and try again.",
           });
           return;
@@ -209,7 +209,7 @@ export default function FileBrowserPanel({
         if (!inserted) {
           toastManager.add({
             type: "error",
-            title: "Unable to add to chat",
+            title: "无法添加到对话",
             description: "The chat isn't ready to accept input right now.",
           });
         }

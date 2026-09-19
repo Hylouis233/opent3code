@@ -191,7 +191,7 @@ const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
       },
       {
         id: "terminal-background",
-        label: "Terminal background",
+        label: "终端背景",
         role: "terminalBackground",
         roles: [
           "terminalBackground",
@@ -205,7 +205,7 @@ const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
   },
   {
     id: "status",
-    title: "Status",
+    title: "状态",
     families: [
       {
         id: "error",
@@ -215,7 +215,7 @@ const THEME_EDITOR_ROLE_GROUPS: ReadonlyArray<{
       },
       {
         id: "warning",
-        label: "Warning",
+        label: "警告",
         role: "warning",
         roles: ["warning", "warningForeground", "warningSurface"],
       },
@@ -1007,7 +1007,7 @@ export function ThemeEditorPanel({
           />
         ) : null}
         <label className="ml-auto flex shrink-0 cursor-pointer items-center gap-2 pt-0.5 text-sm font-medium">
-          <span>Advanced</span>
+          <span>高级</span>
           <Switch
             aria-label="Use advanced theme colors"
             checked={isAdvanced}

@@ -319,7 +319,7 @@ export function DeviceStreamView(props: {
       {status !== "streaming" ? (
         <div className="pointer-events-none absolute inset-0">
           <DeviceLoadingView
-            name={props.deviceName ?? "Device"}
+            name={props.deviceName ?? "设备"}
             description={props.deviceDescription ?? ""}
             stage="stream"
             message={status === "error" ? (detail ?? "Stream failed.") : "Connecting video…"}

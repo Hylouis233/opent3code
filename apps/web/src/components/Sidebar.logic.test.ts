@@ -818,7 +818,7 @@ describe("resolveSidebarThreadStatus", () => {
 describe("searchSidebarThreads", () => {
   const threads = [
     { id: "thread-1", title: "Fix workspace search", project: "Alpha" },
-    { id: "thread-2", title: "Review providers", project: "Workspace" },
+    { id: "thread-2", title: "Review providers", project: "工作区" },
     { id: "thread-3", title: "WORKTREE cleanup", project: "Beta" },
   ];
 
@@ -837,7 +837,7 @@ describe("searchSidebarThreads", () => {
 
 describe("filterSidebarProjectScopeItems", () => {
   const items = [
-    { value: "all", label: "All projects" },
+    { value: "all", label: "全部项目" },
     { value: "alpha", label: "Alpha workspace" },
     { value: "beta", label: "Beta tools" },
   ] as const;
@@ -1969,7 +1969,7 @@ describe("resolveThreadStatusPill", () => {
       resolveThreadStatusPill({
         thread: baseThread,
       }),
-    ).toMatchObject({ label: "Working", pulse: true });
+    ).toMatchObject({ label: "运行中", pulse: true });
   });
 
   it("shows plan ready when a settled plan turn has a proposed plan ready for follow-up", () => {
@@ -2067,7 +2067,7 @@ describe("resolveProjectStatusIndicator", () => {
           pulse: false,
         },
         {
-          label: "Working",
+          label: "运行中",
           colorClass: "text-sky-600",
           dotClass: "bg-sky-500",
           pulse: true,

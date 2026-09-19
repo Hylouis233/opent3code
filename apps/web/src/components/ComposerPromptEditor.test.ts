@@ -607,7 +607,7 @@ describe("context reference paste", () => {
         "  url: https://example.com",
         "  selector: #save",
         "  html:",
-        "    <button>Save</button>",
+        "    <button>保存</button>",
         "  styles:",
         "    color: red;",
         "</element_context>",
@@ -633,7 +633,7 @@ describe("context reference paste", () => {
     expect(text).toContain("t3-context://v1/preview-annotation/preview-annotation_imported");
     expect(annotations[0]?.elements?.[0]).toMatchObject({
       selector: "#save",
-      htmlPreview: "<button>Save</button>",
+      htmlPreview: "<button>保存</button>",
       styles: "color: red;",
     });
   });

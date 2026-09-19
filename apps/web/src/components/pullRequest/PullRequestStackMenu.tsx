@@ -146,7 +146,7 @@ export function PullRequestStackMenu({
         <MenuPopup align="start" className="w-96 max-w-[calc(100vw-2rem)]">
           <MenuGroup>
             <PullRequestStackHeader number={stack.number} notice={notice} stale={!!onRetry} />
-            {onRetry ? <MenuItem onClick={onRetry}>Retry stack refresh</MenuItem> : null}
+            {onRetry ? <MenuItem onClick={onRetry}>重试堆栈刷新</MenuItem> : null}
             <PullRequestStackLayers
               stack={stack}
               reference={reference}

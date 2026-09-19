@@ -548,7 +548,7 @@ export function ThemeLibrary({
       stackedThreadToast({
         type: "error",
         title: "Couldn’t save theme selection",
-        description: "Try again.",
+        description: "请重试。",
       }),
     );
   }, []);
@@ -558,7 +558,7 @@ export function ThemeLibrary({
       stackedThreadToast({
         type: "error",
         title: "Couldn’t remove theme",
-        description: "Try again.",
+        description: "请重试。",
       }),
     );
   }, []);
@@ -1026,7 +1026,7 @@ export function ThemeLibrary({
             </div>
           ) : null}
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>取消</AlertDialogClose>
             <Button
               disabled={themeIdsToRemove.length === 0}
               variant="destructive"

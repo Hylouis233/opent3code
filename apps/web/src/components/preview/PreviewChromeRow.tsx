@@ -134,7 +134,7 @@ export function PreviewChromeRow({
             >
               <ArrowLeft />
             </TooltipTrigger>
-            <TooltipPopup>Back</TooltipPopup>
+            <TooltipPopup>返回</TooltipPopup>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger

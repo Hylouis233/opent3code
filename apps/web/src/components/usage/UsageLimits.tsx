@@ -257,7 +257,7 @@ export function ResetCreditDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+          <AlertDialogClose render={<Button variant="outline" />}>取消</AlertDialogClose>
           <Button onClick={onConfirm}>Use credit</Button>
         </AlertDialogFooter>
       </AlertDialogPopup>

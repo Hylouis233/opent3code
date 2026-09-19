@@ -258,7 +258,7 @@ describe("ChatMarkdown streaming", () => {
       "First code block",
       "```",
       "",
-      "<details><summary>More</summary>",
+      "<details><summary>更多</summary>",
       "",
       "Details content",
       "",

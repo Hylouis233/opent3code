@@ -4007,14 +4007,14 @@ const AgentSpawnRow = memo(function AgentSpawnRow(props: {
 });
 
 const AGENT_MEMBER_STATUS_LABEL: Record<RuntimeSubagent["status"], string> = {
-  pending: "Working",
-  running: "Working",
-  waiting: "Working",
+  pending: "运行中",
+  running: "运行中",
+  waiting: "运行中",
   idle: "Idle",
   completed: "Completed",
-  failed: "Failed",
-  cancelled: "Stopped",
-  interrupted: "Stopped",
+  failed: "失败",
+  cancelled: "已停止",
+  interrupted: "已停止",
 };
 
 function AgentSpawnMemberRow({

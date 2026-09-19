@@ -253,7 +253,7 @@ function ProjectDetail({
     async (nextTitle: string, wasEdited: boolean) => {
       const title = nextTitle.trim();
       if (!title) {
-        toastManager.add({ type: "warning", title: "Project title cannot be empty" });
+        toastManager.add({ type: "warning", title: "项目标题不能为空" });
         return;
       }
       if (
@@ -408,7 +408,7 @@ function ProjectDetail({
       <SettingsPageContainer className="gap-6">
         <SettingsSection id="project-overview" title="项目" hideTitle>
           <SettingsRow
-            title="Name"
+            title="名称"
             description="The shared name for this project group in the sidebar and thread lists."
             control={
               <Input

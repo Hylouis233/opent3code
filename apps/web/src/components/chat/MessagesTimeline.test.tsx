@@ -263,7 +263,7 @@ function buildSnapShotTimelineEntry(previewUrl?: string) {
           source: {
             kind: "snap-shot" as const,
             capturedAt: "2026-03-17T19:12:28.000Z",
-            appName: "Terminal",
+            appName: "终端",
             windowTitle: "t3code — Tests",
             appIconDataUrl: "data:image/png;base64,aWNvbg==",
           },
@@ -428,7 +428,7 @@ describe("MessagesTimeline", () => {
                 entry: {
                   id: "running-tool",
                   createdAt: MESSAGE_CREATED_AT,
-                  label: "Run command",
+                  label: "运行命令",
                   tone: "tool",
                   toolLifecycleStatus,
                   detail: "Command output",
@@ -484,7 +484,7 @@ describe("MessagesTimeline", () => {
               id: "work-with-fold",
               createdAt: "2026-03-17T19:12:22.000Z",
               turnId,
-              label: "Ran command",
+              label: "已运行命令",
               tone: "tool",
               toolLifecycleStatus: "completed",
             },
@@ -694,7 +694,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-maintain-visible-content-position-data="true"');
     expect(markup).toContain('data-maintain-visible-content-position-size="true"');
     expect(markup).toContain('data-maintain-visible-content-position-restore="true"');
-    expect(markup).toContain("Terminal");
+    expect(markup).toContain("终端");
     expect(markup).toContain("t3code — Tests");
     expect(markup).toContain('src="data:image/png;base64,aWNvbg=="');
     expect(markup).toContain("h-28 w-52 max-w-full");
@@ -708,7 +708,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("screenshot.png");
-    expect(markup).not.toContain("Terminal");
+    expect(markup).not.toContain("终端");
     expect(markup).not.toContain("t3code — Tests");
     expect(markup).not.toContain('src="data:image/png;base64,aWNvbg=="');
     expect(markup).not.toContain("h-28 w-52 max-w-full");
@@ -939,7 +939,7 @@ describe("MessagesTimeline", () => {
           id: "work-settle",
           createdAt: MESSAGE_CREATED_AT,
           toolCallId: "call-settle",
-          label: "Run lint",
+          label: "运行检查",
           tone: "tool" as const,
           itemType: "command_execution" as const,
           command: "pnpm lint",
@@ -1015,7 +1015,7 @@ describe("MessagesTimeline", () => {
               createdAt: MESSAGE_CREATED_AT,
               turnId,
               toolCallId: "call-active-tool",
-              label: "Run command",
+              label: "运行命令",
               tone: "tool",
               itemType: "command_execution",
               command: "git status",
@@ -1208,13 +1208,13 @@ describe("MessagesTimeline", () => {
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
-          buildAssistantTimelineEntry("<details><summary>More</summary>Details</details>"),
+          buildAssistantTimelineEntry("<details><summary>更多</summary>Details</details>"),
         ]}
       />,
     );
 
     expect(markup).toContain('data-markdown-details=""');
-    expect(markup).toContain("More");
+    expect(markup).toContain("更多");
     expect(markup).not.toContain("&lt;details&gt;");
   });
 
@@ -1288,7 +1288,7 @@ describe("MessagesTimeline", () => {
               "  selector: button.submit",
               "  source: /repo/src/Button.tsx:12:5",
               "  html:",
-              '  <button class="submit">Save</button>',
+              '  <button class="submit">保存</button>',
               "</element_context>",
             ].join("\n"),
           ),
@@ -1349,7 +1349,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-1",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Updated files",
+              label: "已更新的文件",
               tone: "tool",
               changedFiles: ["C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts"],
             },
@@ -1375,7 +1375,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-failed",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Run search",
+              label: "运行搜索",
               tone: "tool",
               itemType: "command_execution",
               toolLifecycleStatus: "failed",
@@ -1388,7 +1388,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-completed",
               createdAt: "2026-03-17T19:12:29.000Z",
-              label: "Run tests",
+              label: "运行测试",
               tone: "tool",
               itemType: "command_execution",
               toolLifecycleStatus: "completed",
@@ -1414,7 +1414,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-completed",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Run tests",
+              label: "运行测试",
               tone: "tool",
               itemType: "command_execution",
               toolLifecycleStatus: "completed",
@@ -1427,7 +1427,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-failed",
               createdAt: "2026-03-17T19:12:29.000Z",
-              label: "Run lint",
+              label: "运行检查",
               tone: "tool",
               itemType: "command_execution",
               toolLifecycleStatus: "failed",
@@ -1480,7 +1480,7 @@ describe("MessagesTimeline", () => {
               id: "trailing-work",
               createdAt: "2026-03-17T19:12:30.000Z",
               turnId,
-              label: "Ran command",
+              label: "已运行命令",
               tone: "tool",
               itemType: "command_execution",
               toolLifecycleStatus: "failed",
@@ -1513,7 +1513,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-failed",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Run search",
+              label: "运行搜索",
               tone: "tool",
               itemType: "command_execution",
               toolLifecycleStatus: "failed",
@@ -1526,7 +1526,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-info",
               createdAt: "2026-03-17T19:12:29.000Z",
-              label: "Status updated",
+              label: "状态已更新",
               tone: "info",
             },
           },
@@ -1537,7 +1537,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-completed",
               createdAt: "2026-03-17T19:12:30.000Z",
-              label: "Run tests",
+              label: "运行测试",
               tone: "tool",
               itemType: "command_execution",
               toolLifecycleStatus: "completed",
@@ -1575,7 +1575,7 @@ describe("MessagesTimeline", () => {
               createdAt: MESSAGE_CREATED_AT,
               turnId,
               toolCallId: "call-live",
-              label: "Run tests",
+              label: "运行测试",
               tone: "tool",
               itemType: "command_execution",
               command: "pnpm test",
@@ -1587,7 +1587,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Working for");
-    expect(markup).toContain("Running pnpm");
+    expect(markup).toContain("正在运行 pnpm");
   });
 
   it("scopes a live row failure to the tool named by the row", () => {
@@ -1614,7 +1614,7 @@ describe("MessagesTimeline", () => {
               createdAt: MESSAGE_CREATED_AT,
               turnId,
               toolCallId: "call-failed",
-              label: "Run lint",
+              label: "运行检查",
               tone: "tool",
               itemType: "command_execution",
               command: "pnpm lint",
@@ -1630,7 +1630,7 @@ describe("MessagesTimeline", () => {
               createdAt: MESSAGE_CREATED_AT,
               turnId,
               toolCallId: "call-running",
-              label: "Run tests",
+              label: "运行测试",
               tone: "tool",
               itemType: "command_execution",
               command: "pnpm test",
@@ -1641,7 +1641,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Running pnpm");
+    expect(markup).toContain("正在运行 pnpm");
     expect(markup).not.toContain("tool call failed");
   });
 
@@ -1692,7 +1692,7 @@ describe("MessagesTimeline", () => {
               createdAt: MESSAGE_CREATED_AT,
               turnId,
               toolCallId: "call-completed",
-              label: "Run lint",
+              label: "运行检查",
               tone: "tool",
               itemType: "command_execution",
               command: "pnpm lint",
@@ -1703,9 +1703,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Running pnpm");
+    expect(markup).toContain("正在运行 pnpm");
     expect(markup).toContain("lucide-terminal");
-    expect(markup).not.toContain("Ran pnpm");
+    expect(markup).not.toContain("已运行 pnpm");
     expect(markup).not.toContain("Thinking");
     expect(markup).not.toContain('data-timeline-row-kind="thinking"');
   });
@@ -1998,7 +1998,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-info",
               createdAt: "2026-03-17T19:12:27.000Z",
-              label: "Status updated",
+              label: "状态已更新",
               tone: "info",
             },
           },
@@ -2036,7 +2036,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-info",
               createdAt: "2026-03-17T19:12:27.000Z",
-              label: "Status updated",
+              label: "状态已更新",
               tone: "info",
             },
           },
@@ -2079,7 +2079,7 @@ describe("MessagesTimeline", () => {
                   id: "work-standalone",
                   createdAt: MESSAGE_CREATED_AT,
                   toolCallId: "call-standalone",
-                  label: "Run lint",
+                  label: "运行检查",
                   tone: "tool",
                   itemType: "command_execution",
                   command: "pnpm lint",

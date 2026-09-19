@@ -194,7 +194,7 @@ export const ChatHeader = memo(function ChatHeader({
       setRenaming(null);
       const resolution = resolveRenameCommit({ title, originalTitle: activeThreadTitle });
       if (resolution.action === "reject-empty") {
-        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+        toastManager.add({ type: "warning", title: "对话标题不能为空" });
         return;
       }
       if (resolution.action === "noop") return;
@@ -206,7 +206,7 @@ export const ChatHeader = memo(function ChatHeader({
           const error = squashAtomCommandFailure(result);
           toastManager.add({
             type: "error",
-            title: "Failed to rename thread",
+            title: "重命名对话失败",
             description: error instanceof Error ? error.message : "An error occurred.",
           });
         }
@@ -286,7 +286,7 @@ export const ChatHeader = memo(function ChatHeader({
         const api = readLocalApi();
         if (!api) return;
         void api.contextMenu
-          .show([{ id: "project-settings", label: "Project settings", icon: "settings" }], {
+          .show([{ id: "project-settings", label: "项目设置", icon: "settings" }], {
             x: event.clientX,
             y: event.clientY,
           })

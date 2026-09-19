@@ -2295,7 +2295,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           type: "slash-command",
           command: "model",
           label: "/model",
-          description: "Switch response model for this thread",
+          description: "切换此对话的回复模型",
         },
         ...(planModeUiEnabled
           ? ([
@@ -2304,14 +2304,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 type: "slash-command",
                 command: "plan",
                 label: "/plan",
-                description: "Switch this thread into plan mode",
+                description: "将此对话切换到计划模式",
               },
               {
                 id: "slash:default",
                 type: "slash-command",
                 command: "default",
                 label: "/default",
-                description: "Switch this thread back to normal build mode",
+                description: "将此对话切回普通构建模式",
               },
             ] as const)
           : []),
@@ -5587,7 +5587,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onInsertRejected: () => {
       toastManager.add({
         type: "error",
-        title: "Unable to add to chat",
+        title: "无法添加到对话",
         description: "The composer is busy; try again once it is ready.",
       });
     },

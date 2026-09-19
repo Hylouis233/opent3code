@@ -27,6 +27,7 @@ export function getLocalFileManagerName(platform: string): string {
   if (isWindowsPlatform(platform)) {
     return "File Explorer";
   }
+  // GNOME Files 的应用名是专有名词，保留英文。
   return "Files";
 }
 

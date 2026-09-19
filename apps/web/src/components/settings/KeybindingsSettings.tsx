@@ -973,11 +973,16 @@ function KeybindingRowMenu({
   );
 }
 
+const KEYBINDING_SOURCE_LABELS: Record<Exclude<KeybindingRow["source"], "Default">, string> = {
+  Custom: "自定义",
+  Project: "项目",
+};
+
 function KeybindingSourceBadge({ source }: { source: KeybindingRow["source"] }) {
   if (source === "Default") return null;
   return (
     <Badge variant="outline" size="sm" className="font-normal text-muted-foreground">
-      {source}
+      {KEYBINDING_SOURCE_LABELS[source]}
     </Badge>
   );
 }
@@ -1151,7 +1156,7 @@ function NewKeybindingCommandSelect({
       onValueChange={(value) => draft.setCommandDraft(value as KeybindingCommand)}
     >
       <SelectTrigger size="sm" className={className}>
-        <SelectValue placeholder="Command" />
+        <SelectValue placeholder="命令" />
       </SelectTrigger>
       <SelectContent
         alignItemWithTrigger={false}
@@ -1237,7 +1242,7 @@ function NewKeybindingCancelIcon({
       >
         <XIcon className="size-3.5" />
       </TooltipTrigger>
-      <TooltipPopup side="top">Cancel</TooltipPopup>
+      <TooltipPopup side="top">取消</TooltipPopup>
     </Tooltip>
   );
 }
@@ -1394,7 +1399,7 @@ export function KeybindingsSettingsPanel() {
       }
       const error = squashAtomCommandFailure(result);
       toastManager.add({
-        title: "Unable to open keybindings file",
+        title: "无法打开快捷键文件",
         description:
           error instanceof Error ? error.message : "The keybindings file was not opened.",
         type: "error",
@@ -1427,7 +1432,7 @@ export function KeybindingsSettingsPanel() {
         if (!isAtomCommandInterrupted(failed)) {
           const error = squashAtomCommandFailure(failed);
           toastManager.add({
-            title: "Unable to save keybinding",
+            title: "无法保存快捷键",
             description: error instanceof Error ? error.message : "The keybinding was not saved.",
             type: "error",
           });
@@ -1455,7 +1460,7 @@ export function KeybindingsSettingsPanel() {
         if (result?._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
           toastManager.add({
-            title: "Unable to remove keybinding",
+            title: "无法移除快捷键",
             description: error instanceof Error ? error.message : "The keybinding was not removed.",
             type: "error",
           });

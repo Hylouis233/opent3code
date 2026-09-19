@@ -48,7 +48,7 @@ const GNOME_ACCESS_COPY = {
     description: "Enable T3 Code SnapShots to start capturing windows.",
   },
   enabled: {
-    title: "Capture is ready",
+    title: "捕获就绪",
     description: "Next, choose your shortcut.",
   },
   unsupported: {
@@ -225,7 +225,7 @@ export function SnapShotSetupDialog({
         : helperBackend
           ? helper?.status === "ready"
             ? {
-                title: "Capture is ready",
+                title: "捕获就绪",
                 description: "Next, choose your shortcut.",
               }
             : helper?.status === "error"
@@ -243,7 +243,7 @@ export function SnapShotSetupDialog({
                 }
           : backend === "niri"
             ? {
-                title: "Capture is ready",
+                title: "捕获就绪",
                 description: "Next, choose your shortcut.",
               }
             : backend === "picker"
@@ -531,7 +531,7 @@ export function SnapShotSetupDialog({
                 if (!shortcutChanged || (await onSaveShortcut())) await onClose(true);
               }}
             >
-              {busy ? "Saving…" : shortcutChanged ? "Save and finish" : "Done"}
+              {busy ? "Saving…" : shortcutChanged ? "Save and finish" : "完成"}
             </Button>
           ) : null}
         </WizardFooter>

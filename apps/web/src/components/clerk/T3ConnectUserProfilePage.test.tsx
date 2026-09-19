@@ -51,7 +51,7 @@ describe("T3 Connect environment row", () => {
     expect(markup).toContain("“Studio Mac” will be removed from this account.");
     expect(markup).toContain("Confirm deregistration of Studio Mac");
     expect(markup).toContain("Local connections on your devices are not changed.");
-    expect(markup).toContain("Cancel");
+    expect(markup).toContain("取消");
   });
 
   it("locks the confirmation actions while deregistration is pending", () => {

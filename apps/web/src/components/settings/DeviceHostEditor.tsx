@@ -74,7 +74,7 @@ export function DeviceHostEditor({
         </DialogHeader>
         <DialogPanel className="space-y-4">
           <label className="block space-y-1.5 text-sm">
-            <span>Name</span>
+            <span>名称</span>
             <Input
               autoFocus
               required
@@ -115,7 +115,7 @@ export function DeviceHostEditor({
                 />
               </label>
               <label className="block space-y-1.5">
-                <span>Port</span>
+                <span>端口</span>
                 <Input
                   type="number"
                   min={1}
@@ -128,7 +128,7 @@ export function DeviceHostEditor({
                       event.target.value ? { ...rest, port: Number(event.target.value) } : rest,
                     );
                   }}
-                  placeholder="Default"
+                  placeholder="默认"
                 />
               </label>
             </div>

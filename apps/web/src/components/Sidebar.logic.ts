@@ -508,7 +508,7 @@ export function buildBulkUnpinContextMenuItem(input: {
 
 export interface ThreadStatusPill {
   label:
-    | "Working"
+    | "运行中"
     | "Monitoring"
     | "Connecting"
     | "Completed"
@@ -526,7 +526,7 @@ export interface ThreadStatusPill {
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 6,
   "Awaiting Input": 5,
-  Working: 4,
+  运行中: 4,
   Connecting: 4,
   "Plan Ready": 3,
   Monitoring: 2,
@@ -1007,7 +1007,7 @@ export function resolveThreadStatusPill(input: {
 
   if (thread.session?.status === "running") {
     return {
-      label: "Working",
+      label: "运行中",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
@@ -1045,7 +1045,7 @@ export function resolveThreadStatusPill(input: {
   // live work. Same recede treatment as Working per inbox-zero.
   if (thread.backgroundLiveness === "working") {
     return {
-      label: "Working",
+      label: "运行中",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,

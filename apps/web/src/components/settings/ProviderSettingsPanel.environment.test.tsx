@@ -154,7 +154,7 @@ function isRefreshButton(element: ReactElement<Record<string, unknown>>): boolea
         child !== null &&
         (child as ReactElement<Record<string, unknown>>).props?.className === "sr-only" &&
         (child as ReactElement<Record<string, unknown>>).props?.children ===
-          "Refresh provider status",
+          "刷新 provider 状态",
     )
   );
 }
@@ -311,14 +311,14 @@ describe("EnvironmentProviderSettings routing", () => {
 
   it("keeps Advanced visible when search targets the provider health interval", () => {
     let panel = renderPanel();
-    expect(visitElements(panel, (element) => element.props.title === "Advanced")).not.toBeNull();
+    expect(visitElements(panel, (element) => element.props.title === "高级")).not.toBeNull();
     expect(
       visitElements(panel, (element) => element.props.id === "provider-health-check-interval"),
     ).not.toBeNull();
 
     settingsSearchState.targetId = "provider-health-check-interval";
     panel = renderPanel();
-    expect(visitElements(panel, (element) => element.props.title === "Advanced")).not.toBeNull();
+    expect(visitElements(panel, (element) => element.props.title === "高级")).not.toBeNull();
     expect(
       visitElements(panel, (element) => element.props.id === "provider-health-check-interval"),
     ).not.toBeNull();

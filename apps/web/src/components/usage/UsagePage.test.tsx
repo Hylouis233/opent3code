@@ -122,7 +122,7 @@ const modelTotals = Object.freeze([
 const environments = [
   {
     environmentId: EnvironmentId.make("test-environment"),
-    label: "Test environment",
+    label: "测试环境",
     isPending: false,
     error: null,
     summary: {

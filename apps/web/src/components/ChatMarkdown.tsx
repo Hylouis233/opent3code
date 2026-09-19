@@ -529,7 +529,7 @@ const GITHUB_ALERT_PRESENTATIONS: Record<
     titleClassName: "text-purple-600 dark:text-purple-400",
   },
   warning: {
-    label: "Warning",
+    label: "警告",
     Icon: TriangleAlertIcon,
     borderClassName: "border-amber-500/70",
     titleClassName: "text-amber-600 dark:text-amber-500",
@@ -1877,7 +1877,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to open file",
+            title: "无法打开文件",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -1889,7 +1889,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to open file",
+            title: "无法打开文件",
             description: cause instanceof Error ? cause.message : "An error occurred.",
           }),
         );
@@ -1927,7 +1927,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to open file in browser",
+            title: "无法在浏览器中打开文件",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -1939,7 +1939,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to open file in browser",
+            title: "无法在浏览器中打开文件",
             description: cause instanceof Error ? cause.message : "An error occurred.",
           }),
         );
@@ -1965,7 +1965,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to reveal file",
+            title: "无法显示文件",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -1977,7 +1977,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to reveal file",
+            title: "无法显示文件",
             description: cause instanceof Error ? cause.message : "An error occurred.",
           }),
         );
@@ -1992,7 +1992,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           stackedThreadToast({
             type: "error",
             title: `Failed to copy ${title.toLowerCase()}`,
-            description: "Clipboard API unavailable.",
+            description: "剪贴板不可用。",
           }),
         );
         return;
@@ -2038,8 +2038,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
               ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
               : []),
             ...(onReveal && revealLabel ? ([{ id: "reveal", label: revealLabel }] as const) : []),
-            { id: "copy-relative", label: "Copy relative path" },
-            { id: "copy-full", label: "Copy full path" },
+            { id: "copy-relative", label: "复制相对路径" },
+            { id: "copy-full", label: "复制完整路径" },
           ] as const,
           position,
         );
@@ -2446,7 +2446,7 @@ function useChatMarkdownState({
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Unable to open link in browser",
+                title: "无法在浏览器中打开链接",
                 description: error.message,
               }),
             );

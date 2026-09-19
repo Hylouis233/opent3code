@@ -260,7 +260,7 @@ function formatProcessName(command: string): string {
 function formatProcessType(process: ServerProcessDiagnosticsEntry): string {
   if (process.depth > 0) return "Subprocess";
   if (/\b(codex|claude|opencode|cursor)\b/i.test(process.command)) return "Agent";
-  return "Process";
+  return "进程";
 }
 
 function ProcessNameCell({
@@ -893,7 +893,7 @@ export function DiagnosticsSettingsPanel() {
           clearSignaling();
           toastManager.add({
             type: "error",
-            title: "Could not confirm signal",
+            title: "无法确认信号",
             description: error instanceof Error ? error.message : `Failed to send ${signal}.`,
           });
           return;
@@ -994,7 +994,7 @@ export function DiagnosticsSettingsPanel() {
             tooltip="Total CPU across live child processes of the current server process. The desktop shell and other parent processes are not included."
           />
           <StatBlock
-            label="Memory"
+            label="内存"
             value={processData ? formatBytes(processData.totalRssBytes) : "..."}
             tooltip="Total resident memory across live child processes of the current server process. The desktop shell and other parent processes are not included."
           />
@@ -1050,7 +1050,7 @@ export function DiagnosticsSettingsPanel() {
       >
         <StatsGrid>
           <StatBlock
-            label="CPU Time"
+            label="CPU 时间"
             value={resourceData ? formatCpuTime(resourceData.totalCpuSecondsApprox) : "..."}
             tooltip="Approximate active CPU time for the T3 server root process and its descendants during the selected window. It grows only while sampled processes use CPU and older samples leave as the window moves."
           />

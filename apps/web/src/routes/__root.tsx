@@ -591,7 +591,7 @@ function EventRouter({
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
-                  title: "Unable to open keybindings file",
+                  title: "无法打开快捷键文件",
                   description:
                     error instanceof Error ? error.message : "Unknown error opening file.",
                 }),

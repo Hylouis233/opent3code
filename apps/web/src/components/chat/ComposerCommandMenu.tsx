@@ -228,7 +228,7 @@ const SKILL_SOURCE_LABEL_BY_KIND: Record<ProviderSkillSourceKind, string> = {
   repo: "Repo",
   project: "项目",
   personal: "Personal",
-  system: "System",
+  system: "系统",
   other: "Provider",
 };
 

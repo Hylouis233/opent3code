@@ -25,7 +25,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
     approval.requestKind === "mcp-elicitation"
       ? "App access request"
       : approval.requestKind === "command"
-        ? "Command"
+        ? "命令"
         : approval.requestKind === "file-read"
           ? "File to read"
           : "File change";

@@ -23,11 +23,11 @@ const installSteps: ReadonlyArray<{
   readonly label: string;
 }> = [
   { stage: "checking", label: "Checking current installation" },
-  { stage: "waiting_for_lock", label: "Waiting for installer" },
+  { stage: "waiting_for_lock", label: "等待安装器" },
   { stage: "downloading", label: "Downloading relay client" },
-  { stage: "verifying", label: "Verifying download" },
+  { stage: "verifying", label: "正在校验下载" },
   { stage: "installing", label: "Installing relay client" },
-  { stage: "validating", label: "Validating executable" },
+  { stage: "validating", label: "正在验证可执行文件" },
   { stage: "activating", label: "Activating installation" },
 ];
 

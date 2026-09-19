@@ -73,11 +73,11 @@ function useServerUpdate() {
       }
       toastManager.add({
         type: "success",
-        title: `${serverLabel} updated`,
+        title: `${serverLabel} 已更新`,
         description:
           selfUpdate === "desktop-managed"
-            ? `Desktop app relaunched on ${result.value.targetVersion}.`
-            : `Reconnected on t3@${result.value.targetVersion}.`,
+            ? `桌面应用已重启到 ${result.value.targetVersion}。`
+            : `已在 t3@${result.value.targetVersion} 重新连接。`,
       });
     } catch (error) {
       toastManager.add({
@@ -126,7 +126,7 @@ export function ServerUpdatesAction({
         if (!confirmed) return;
       }
       await Promise.all(
-        available.map((target) => update(target, `${target.serverLabel} update failed`)),
+        available.map((target) => update(target, `${target.serverLabel} 更新失败`)),
       );
     } finally {
       pending.current = false;
@@ -210,7 +210,7 @@ export function ServerUpdateAction({
     onCopy: ({ command }) => {
       toastManager.add({
         type: "success",
-        title: "Update command copied",
+        title: "更新命令已复制",
         description: `Run \`${command}\` on ${serverLabel} to update it.`,
       });
     },

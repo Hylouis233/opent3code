@@ -15,7 +15,7 @@ describe("ComposerPendingApprovalActions", () => {
     );
 
     expect(markup).toContain(">取消<");
-    expect(markup).toContain("Always allow this session");
+    expect(markup).toContain("本会话始终允许");
     expect(markup).not.toContain(">Always allow<");
     expect(markup).toContain("h-5");
     expect(markup).toContain("sm:text-[11px]");
@@ -28,17 +28,17 @@ describe("ComposerPendingApprovalActions", () => {
         requestId={ApprovalRequestId.make("approval-safari")}
         isResponding={false}
         options={[
-          { decision: "decline", label: "Decline" },
+          { decision: "decline", label: "拒绝" },
           { decision: "acceptAlways", label: "Always allow Safari" },
-          { decision: "accept", label: "Approve" },
+          { decision: "accept", label: "批准" },
         ]}
         onRespondToApproval={async () => undefined}
       />,
     );
 
     expect(markup).toContain("Always allow Safari");
-    expect(markup).toContain(">Approve<");
-    expect(markup).not.toContain("Always allow this session");
+    expect(markup).toContain(">批准<");
+    expect(markup).not.toContain("本会话始终允许");
   });
 
   it("marks an option that carries a provider warning", () => {

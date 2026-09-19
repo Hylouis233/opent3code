@@ -88,7 +88,7 @@ export function PullRequestMarkdownEditor({
           if (mode === "write" || mode === "preview") setPreview(mode === "preview");
         }}
       >
-        <Toggle value="write">Write</Toggle>
+        <Toggle value="write">写入</Toggle>
         <Toggle value="preview">Preview</Toggle>
       </ToggleGroup>
       {preview ? (

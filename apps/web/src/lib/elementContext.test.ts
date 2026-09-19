@@ -9,7 +9,7 @@ function makePayload(overrides?: Partial<PickedElementPayload>): PickedElementPa
     pageTitle: "Dashboard",
     tagName: "BUTTON",
     selector: "button.submit",
-    htmlPreview: '<button class="submit">Save</button>',
+    htmlPreview: '<button class="submit">保存</button>',
     componentName: "SubmitButton",
     source: {
       functionName: "SubmitButton",

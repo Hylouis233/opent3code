@@ -20,7 +20,7 @@ describe("ComposerPendingApprovalPanel", () => {
     );
 
     expect(markup).toContain('data-approval-detail="complete"');
-    expect(markup).toContain('aria-label="Command"');
+    expect(markup).toContain('aria-label="命令"');
     expect(markup).toContain('role="group"');
     expect(markup).toContain('tabindex="0"');
     expect(markup).toContain(detail);

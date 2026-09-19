@@ -62,7 +62,7 @@ const soundOptionItemClassName = "data-checked:bg-transparent";
 const soundPreviewClassName = "min-h-7 w-7 justify-center px-0";
 
 function captureSettingsError(title: string, error: unknown) {
-  return { title, message: error instanceof Error ? error.message : "Try again." };
+  return { title, message: error instanceof Error ? error.message : "请重试。" };
 }
 
 type ShortcutCheck =

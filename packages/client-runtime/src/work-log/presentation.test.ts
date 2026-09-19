@@ -88,7 +88,7 @@ describe("workEntryIndicatesToolFailure", () => {
 
   it("does not treat error text in a command as rendered failure", () => {
     const entry = {
-      label: "Ran command",
+      label: "已运行命令",
       tone: "tool",
       toolLifecycleStatus: "completed",
       command: 'rg "file not found"',
@@ -178,7 +178,7 @@ describe("summarizeToolGroup", () => {
         { label: "Open page", tone: "tool", toolSource: source },
         { label: "Inspect page", tone: "tool", toolSource: source },
         {
-          label: "Ran command",
+          label: "已运行命令",
           tone: "tool",
           itemType: "command_execution",
           command: "git status",
@@ -349,7 +349,7 @@ describe("browser group summaries", () => {
     tone: "tool",
   };
   const commandEntry: WorkLogPresentationEntry = {
-    label: "Ran command",
+    label: "已运行命令",
     command: "/bin/bash -lc 'vp test run'",
     itemType: "command_execution",
     toolLifecycleStatus: "completed",
@@ -516,7 +516,7 @@ describe("workEntryViewedImagePath", () => {
       workEntryViewedImagePath({
         ...entry,
         itemType: "dynamic_tool_call",
-        toolTitle: "Read file",
+        toolTitle: "读取文件",
         detail: "C:\\workspace\\a.webp",
       }),
     ).toBe("C:\\workspace\\a.webp");
@@ -682,7 +682,7 @@ describe("device group summaries", () => {
   it("summarizes device calls alongside shell commands", () => {
     expect(
       summarizeToolGroup([
-        { label: "Ran command", itemType: "command_execution", command: "pwd", tone: "tool" },
+        { label: "已运行命令", itemType: "command_execution", command: "pwd", tone: "tool" },
         deviceEntry("device_list"),
         deviceEntry("device_open"),
       ]),

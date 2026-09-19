@@ -14,7 +14,7 @@ describe("ComposerCommandMenu", () => {
             type: "slash-command",
             command: "model",
             label: "/model",
-            description: "Switch response model for this thread",
+            description: "切换此对话的回复模型",
           },
         ]}
         resolvedTheme="dark"
@@ -27,7 +27,7 @@ describe("ComposerCommandMenu", () => {
     );
 
     expect(markup).toContain("/model");
-    expect(markup).toContain("Switch response model for this thread");
+    expect(markup).toContain("切换此对话的回复模型");
   });
 
   it("shows the app source for an app skill", () => {
@@ -44,7 +44,7 @@ describe("ComposerCommandMenu", () => {
               scope: "user",
               enabled: true,
             },
-            label: "Browser",
+            label: "浏览器",
             description: "Open and control the in-app browser",
           },
         ]}
@@ -57,7 +57,7 @@ describe("ComposerCommandMenu", () => {
       />,
     );
 
-    expect(markup).toContain("Browser");
+    expect(markup).toContain("浏览器");
     expect(markup).toContain('data-slot="badge"');
     expect(markup).toContain(">App Skill</span>");
     expect(markup).toContain("Open and control the in-app browser");

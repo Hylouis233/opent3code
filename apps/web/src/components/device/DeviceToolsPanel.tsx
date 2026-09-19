@@ -42,13 +42,13 @@ type ActionBody = DeviceActionInput extends infer A
 
 const TEXT_SIZES: ReadonlyArray<{ value: DeviceTextSize; label: string }> = [
   { value: "small", label: "Small" },
-  { value: "default", label: "Default" },
+  { value: "default", label: "默认" },
   { value: "large", label: "Large" },
   { value: "extra-large", label: "Extra large" },
 ];
 
 const COLOR_FILTERS = [
-  { value: "none", label: "None" },
+  { value: "none", label: "无" },
   { value: "grayscale", label: "Grayscale" },
   { value: "red-green", label: "Red / green (protanopia)" },
   { value: "green-red", label: "Green / red (deuteranopia)" },
@@ -63,27 +63,27 @@ const ORIENTATIONS = [
 ] as const;
 
 const IOS_PERMISSIONS: ReadonlyArray<{ value: DevicePermission; label: string }> = [
-  { value: "camera", label: "Camera" },
-  { value: "microphone", label: "Microphone" },
-  { value: "photos", label: "Photos" },
-  { value: "contacts", label: "Contacts" },
-  { value: "calendar", label: "Calendar" },
+  { value: "camera", label: "相机" },
+  { value: "microphone", label: "麦克风" },
+  { value: "photos", label: "照片" },
+  { value: "contacts", label: "通讯录" },
+  { value: "calendar", label: "日历" },
   { value: "reminders", label: "Reminders" },
-  { value: "location", label: "Location" },
-  { value: "notifications", label: "Notifications" },
+  { value: "location", label: "位置" },
+  { value: "notifications", label: "通知" },
   { value: "motion", label: "Motion" },
   { value: "media-library", label: "Media library" },
   { value: "faceid", label: "Face ID" },
 ];
 
 const ANDROID_PERMISSIONS: ReadonlyArray<{ value: DevicePermission; label: string }> = [
-  { value: "camera", label: "Camera" },
-  { value: "microphone", label: "Microphone" },
-  { value: "photos", label: "Photos" },
-  { value: "contacts", label: "Contacts" },
-  { value: "calendar", label: "Calendar" },
-  { value: "location", label: "Location" },
-  { value: "notifications", label: "Notifications" },
+  { value: "camera", label: "相机" },
+  { value: "microphone", label: "麦克风" },
+  { value: "photos", label: "照片" },
+  { value: "contacts", label: "通讯录" },
+  { value: "calendar", label: "日历" },
+  { value: "location", label: "位置" },
+  { value: "notifications", label: "通知" },
   { value: "motion", label: "Physical activity" },
 ];
 
@@ -526,7 +526,7 @@ function LocationSection(props: {
     Math.abs(parsed.latitude) <= 90 &&
     Math.abs(parsed.longitude) <= 180;
   return (
-    <Section title="Location">
+    <Section title="位置">
       <div className="flex gap-1.5">
         <Input
           size="compact"

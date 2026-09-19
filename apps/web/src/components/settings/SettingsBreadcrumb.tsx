@@ -205,7 +205,7 @@ function ProjectScopeMenu({ value, groups, onChange }: SettingsScopeBreadcrumbPr
       ariaLabel="Project scope"
       narrowed={value.project !== undefined}
       icon={selected ? <ProjectFavicon project={selected} className="size-3.5 shrink-0" /> : null}
-      label={selected?.displayName ?? (value.project ? "Unavailable project" : "All projects")}
+      label={selected?.displayName ?? (value.project ? "Unavailable project" : "全部项目")}
     >
       <MenuRadioGroup
         value={projectAxisValue(value)}

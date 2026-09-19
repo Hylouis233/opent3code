@@ -274,7 +274,7 @@ function settledTimeLabel(thread: SidebarThreadSummary): string {
 // Floats at the row's right edge, vertically centered, while the jump
 // modifier is held. An overlay pill instead of an inline slot: the hint
 // must neither displace the status/time label (holding ⌘ used to blank
-// out "Working") nor shift any layout when it appears. pointer-events-none
+// out "运行中") nor shift any layout when it appears. pointer-events-none
 // so it never swallows clicks meant for the settle/un-settle buttons it
 // can overlap.
 function JumpHintBadge(props: { label: string }) {
@@ -1136,7 +1136,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const topStatus =
     status === "working"
       ? {
-          label: "Working",
+          label: "运行中",
           icon: "working" as const,
           // No shimmer: a label that animates forever is noise in a sidebar
           // full of them (and repaints every vsync on high-refresh displays).
@@ -1164,7 +1164,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               }
             : status === "failed"
               ? {
-                  label: "Failed",
+                  label: "失败",
                   icon: "failed" as const,
                   className: "text-red-700 dark:text-red-300",
                 }
@@ -1176,7 +1176,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   }
                 : isUnread
                   ? {
-                      label: "Done",
+                      label: "完成",
                       icon: "done" as const,
                       className: "text-emerald-700 dark:text-emerald-300",
                     }
@@ -2158,7 +2158,7 @@ export default function Sidebar() {
     onCopy: ({ path }) => {
       toastManager.add({
         type: "success",
-        title: "Path copied",
+        title: "路径已复制",
         description: path,
       });
     },
@@ -2166,7 +2166,7 @@ export default function Sidebar() {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy path",
+          title: "复制路径失败",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -2195,7 +2195,7 @@ export default function Sidebar() {
     onCopy: ({ threadId }) => {
       toastManager.add({
         type: "success",
-        title: "Thread ID copied",
+        title: "对话 ID 已复制",
         description: threadId,
       });
     },
@@ -2203,7 +2203,7 @@ export default function Sidebar() {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy thread ID",
+          title: "复制对话 ID 失败",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -2354,7 +2354,7 @@ export default function Sidebar() {
   // while the popup search filters the same collection.
   const projectScopeItems = useMemo(
     () => [
-      { value: "all", label: "All projects" },
+      { value: "all", label: "全部项目" },
       ...projectGroups.map((project) => ({
         value: project.projectKey,
         label: project.displayName,
@@ -2386,7 +2386,7 @@ export default function Sidebar() {
   const projectScopeFilter = useComboboxFilter();
   // Filtering derives from the same React state that controls the input, so
   // the visible query and the visible list can never desync — the peer wiring
-  // in DiffPanel and BranchToolbarBranchSelector. "All projects" is the default
+  // in DiffPanel and BranchToolbarBranchSelector. "全部项目" is the default
   // row, not a searchable entry: it heads the list while the query is empty and
   // drops out while filtering, so it can't outrank a project match under
   // autoHighlight and no-hit queries reach the empty state.
@@ -2674,7 +2674,7 @@ export default function Sidebar() {
   const visibleSettledThreads = useMemo(() => {
     if (settledThreads.length <= settledVisibleCount) return settledThreads;
     const visible = settledThreads.slice(0, settledVisibleCount);
-    // The open thread must never hide under "Show more": navigating into a
+    // The open thread must never hide under "显示更多": navigating into a
     // deep settled thread (search, deep link) pulls its row into the visible
     // tail so the highlight and the un-settle affordance stay reachable.
     if (routeThreadKey !== null) {
@@ -2729,7 +2729,7 @@ export default function Sidebar() {
     // The open thread must never vanish behind the collapsed shelf: a
     // snoozed thread reached by route (deep link, open before snoozing
     // elsewhere) keeps its row — with highlight and wake affordance — same
-    // exception the settled tail's "Show more" makes.
+    // exception the settled tail's "显示更多" makes.
     if (routeThreadKey === null) return EMPTY_THREADS;
     const routeThread = snoozedThreads.find(
       (thread) =>
@@ -2949,7 +2949,7 @@ export default function Sidebar() {
         const trimmed = title.trim();
         setRenamingThreadKey(null);
         if (trimmed.length === 0) {
-          toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+          toastManager.add({ type: "warning", title: "对话标题不能为空" });
           return;
         }
         if (trimmed === originalTitle) return;
@@ -2962,7 +2962,7 @@ export default function Sidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to rename thread",
+              title: "重命名对话失败",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -3045,7 +3045,7 @@ export default function Sidebar() {
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
-                  title: "Failed to settle thread",
+                  title: "收尾对话失败",
                   description: error instanceof Error ? error.message : "An error occurred.",
                 }),
               );
@@ -3081,7 +3081,7 @@ export default function Sidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to un-settle thread",
+              title: "取消收尾失败",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -3099,7 +3099,7 @@ export default function Sidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to wake thread",
+              title: "唤醒对话失败",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -3588,7 +3588,7 @@ export default function Sidebar() {
           case "settle": {
             settlingThreadKeysRef.current.add(activeKey);
             const navigateAfterSettle = planForwardNavigation(activeKey);
-            const settled = await run(settleThread(threadRef), "Failed to settle thread").finally(
+            const settled = await run(settleThread(threadRef), "收尾对话失败").finally(
               () => settlingThreadKeysRef.current.delete(activeKey),
             );
             if (
@@ -3610,10 +3610,10 @@ export default function Sidebar() {
               return;
             if (
               plan.unsettle &&
-              !(await run(unsettleThread(threadRef), "Failed to un-settle thread"))
+              !(await run(unsettleThread(threadRef), "取消收尾失败"))
             )
               return;
-            if (plan.unsnooze && !(await run(unsnoozeThread(threadRef), "Failed to wake thread")))
+            if (plan.unsnooze && !(await run(unsnoozeThread(threadRef), "唤醒对话失败")))
               return;
             break;
           case "pin":
@@ -3975,7 +3975,7 @@ export default function Sidebar() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to delete threads",
+            title: "删除对话失败",
             description: firstError instanceof Error ? firstError.message : "An error occurred.",
           }),
         );
@@ -4099,7 +4099,7 @@ export default function Sidebar() {
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
-                  title: "Could not create thread",
+                  title: "无法创建对话",
                   description: error instanceof Error ? error.message : "An error occurred.",
                 }),
               );
@@ -4150,7 +4150,7 @@ export default function Sidebar() {
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
-                  title: "Path unavailable",
+                  title: "路径不可用",
                   description: "This thread does not have a workspace path to copy.",
                 }),
               );
@@ -4185,7 +4185,7 @@ export default function Sidebar() {
                 stackedThreadToast({
                   type: "error",
                   title: didArchive
-                    ? "Thread archived, but navigation failed"
+                    ? "对话已归档，但导航失败"
                     : "Failed to archive thread",
                   description: error instanceof Error ? error.message : "An error occurred.",
                 }),
@@ -4213,7 +4213,7 @@ export default function Sidebar() {
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
-                  title: "Failed to delete thread",
+                  title: "删除对话失败",
                   description: error instanceof Error ? error.message : "An error occurred.",
                 }),
               );
@@ -4891,7 +4891,7 @@ export default function Sidebar() {
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
               {projects.length === 0 ? (
                 <>
-                  <span>No projects yet</span>
+                  <span>还没有项目</span>
                   <button
                     type="button"
                     onClick={openAddProjectCommandPalette}

@@ -17,6 +17,7 @@ describe("searchSlashCommandItems", () => {
         type: "slash-command",
         command: "default",
         label: "/default",
+        // 英文描述保证 "ui" 子串能命中，检验精确命令匹配优先于模糊描述匹配的排序语义。
         description: "Switch this thread back to normal build mode",
       },
       {

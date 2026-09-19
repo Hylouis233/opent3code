@@ -230,7 +230,7 @@ it.each(["Escape", "blur"])(
 it("cancelling a reviewed diff does not write or finish setup", async () => {
   button(render(), "Review changes").onClick();
   await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
-  button(render(), "Cancel").onClick();
+  button(render(), "取消").onClick();
   expect(shortcutInput(render())["aria-label"]).toBe(
     "Record snapshot shortcut, currently Ctrl+Shift+2",
   );

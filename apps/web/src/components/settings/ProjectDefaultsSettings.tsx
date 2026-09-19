@@ -145,7 +145,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
         category === "general"
           ? "New threads"
           : category === "integrations"
-            ? "Browser"
+            ? "浏览器"
             : "Repositories"
       }
     >
@@ -289,7 +289,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             settingKeys={["defaultThreadEnvMode"]}
             mixed={mixedWorkspace}
             id={searchableSetting("new-threads").id}
-            title="Workspace"
+            title="工作区"
             description={
               isProjectScope
                 ? "Where new threads in this project start. A t3.json preference applies when the project has no override."

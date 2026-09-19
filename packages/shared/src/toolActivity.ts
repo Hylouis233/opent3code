@@ -213,7 +213,7 @@ export function deriveToolActivityPresentation(
 
   if (action === "command") {
     return {
-      summary: "Ran command",
+      summary: "已运行命令",
       ...(command ? { detail: command } : {}),
     };
   }
@@ -221,18 +221,18 @@ export function deriveToolActivityPresentation(
   if (action === "read") {
     if (primaryPath) {
       return {
-        summary: "Read file",
+        summary: "读取文件",
         detail: primaryPath,
       };
     }
     return {
-      summary: "Read file",
+      summary: "读取文件",
     };
   }
 
   if (action === "file_change") {
     return {
-      summary: "Changed files",
+      summary: "更改了文件",
       ...(primaryPath ? { detail: primaryPath } : {}),
     };
   }
@@ -243,7 +243,7 @@ export function deriveToolActivityPresentation(
       asTrimmedString(asRecord(data?.rawInput)?.pattern) ??
       asTrimmedString(asRecord(data?.rawInput)?.searchTerm);
     return {
-      summary: "Searched files",
+      summary: "搜索了文件",
       ...(query ? { detail: query } : {}),
     };
   }

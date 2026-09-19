@@ -41,7 +41,7 @@ describe("buildThreadActionMenuItems", () => {
     const copyIndex = items.findIndex((item) => item.id === "copy");
     expect(items[copyIndex + 1]).toMatchObject({
       id: "project-settings",
-      label: "Project settings",
+      label: "项目设置",
       icon: "settings",
     });
     expect(items[copyIndex + 2]?.id).toBe("archive");

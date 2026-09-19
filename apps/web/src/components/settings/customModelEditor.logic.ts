@@ -97,7 +97,7 @@ export const DESCRIPTOR_PRESETS_BY_KIND: Partial<
       type: "select",
       choices: [
         { id: "build", label: "Build", isDefault: true },
-        { id: "plan", label: "Plan" },
+        { id: "plan", label: "计划" },
       ],
     },
   ],

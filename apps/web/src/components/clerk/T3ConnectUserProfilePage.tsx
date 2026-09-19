@@ -97,7 +97,7 @@ export function T3ConnectEnvironmentRow(props: {
                   disabled={props.mutationPending}
                   onClick={() => props.onConfirmationChange(false)}
                 >
-                  Cancel
+                  取消
                 </Button>
                 <Button
                   size="sm"

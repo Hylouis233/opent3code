@@ -726,7 +726,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "tool-complete",
         createdAt: "2026-02-23T00:00:02.000Z",
-        summary: "Ran command",
+        summary: "已运行命令",
         tone: "tool",
         kind: "tool.completed",
       }),
@@ -760,7 +760,7 @@ describe("deriveWorkLogEntries", () => {
         id: "real-work-log",
         createdAt: "2026-02-23T00:00:03.000Z",
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         payload: {
           itemType: "command_execution",
           detail: "Bash: bun test",
@@ -799,7 +799,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "command-tool",
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         payload: {
           itemType: "command_execution",
           data: {
@@ -1077,7 +1077,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "command-tool-windows-wrapper",
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         payload: {
           itemType: "command_execution",
           data: {
@@ -1101,7 +1101,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "command-tool-windows-wrapper-argv",
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         payload: {
           itemType: "command_execution",
           data: {
@@ -1125,7 +1125,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "command-tool-windows-detail-fallback",
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         payload: {
           itemType: "command_execution",
           detail:
@@ -1146,7 +1146,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "command-tool-shell-script",
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         payload: {
           itemType: "command_execution",
           data: {
@@ -1170,7 +1170,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "command-tool-serialized-wrapper",
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         payload: {
           itemType: "command_execution",
           data: { item: { command } },
@@ -1404,10 +1404,10 @@ describe("deriveWorkLogEntries", () => {
         id: "cursor-command-complete",
         createdAt: "2026-04-16T22:40:42.221Z",
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         payload: {
           itemType: "command_execution",
-          title: "Ran command",
+          title: "已运行命令",
           data: {
             toolCallId: "toolu_vrtx_01WypXgRM8PPygBtrVAZwzy5",
             kind: "execute",
@@ -1425,9 +1425,9 @@ describe("deriveWorkLogEntries", () => {
     const [entry] = deriveWorkLogEntries(activities);
     expect(entry).toMatchObject({
       id: "cursor-command-complete",
-      label: "Ran command",
+      label: "已运行命令",
       itemType: "command_execution",
-      toolTitle: "Ran command",
+      toolTitle: "已运行命令",
     });
     expect(entry?.detail).toBeUndefined();
     expect(entry?.command).toBeUndefined();
@@ -1976,13 +1976,13 @@ describe("deriveWorkLogEntries context window handling", () => {
         id: "tool-1",
         turnId: "turn-1",
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         tone: "tool",
       }),
     ]);
 
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Ran command");
+    expect(entries[0]?.label).toBe("已运行命令");
   });
 
   it("keeps context compaction activities as normal work log entries", () => {
@@ -2457,11 +2457,11 @@ describe("session activity performance", () => {
         id: `benchmark-tool-${index}`,
         createdAt: new Date(1_700_000_000_000 + index).toISOString(),
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         sequence: index,
         payload: {
           itemType: "command_execution",
-          title: "Ran command",
+          title: "已运行命令",
           data: {
             toolCallId: `benchmark-tool-${index}`,
             item: { command: ["git", "status"] },
@@ -2477,11 +2477,11 @@ describe("session activity performance", () => {
         id: "benchmark-tool-appended",
         createdAt: new Date(1_700_000_000_000 + activities.length).toISOString(),
         kind: "tool.completed",
-        summary: "Ran command",
+        summary: "已运行命令",
         sequence: activities.length,
         payload: {
           itemType: "command_execution",
-          title: "Ran command",
+          title: "已运行命令",
           data: { toolCallId: "benchmark-tool-appended", item: { command: ["git", "diff"] } },
         },
       }),

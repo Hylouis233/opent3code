@@ -1145,7 +1145,7 @@ function OpenCommandPaletteDialog(props: {
           });
           const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
             kind: "remote" as const,
-            label: "Remote",
+            label: "远程",
             machine: "server" as const,
           };
           return (
@@ -1186,7 +1186,7 @@ function OpenCommandPaletteDialog(props: {
           renderDescription: (project) => {
             const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
               kind: "remote",
-              label: "Remote",
+              label: "远程",
               machine: "server" as const,
             };
             return (
@@ -1255,7 +1255,7 @@ function OpenCommandPaletteDialog(props: {
               project={projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null}
               projectTitle={projectTitle ?? null}
               environmentLabel={
-                projectEnvironmentLocationById.get(thread.environmentId)?.label ?? "Remote"
+                projectEnvironmentLocationById.get(thread.environmentId)?.label ?? "远程"
               }
               branch={thread.branch}
               worktreePath={thread.worktreePath}
@@ -1488,7 +1488,7 @@ function OpenCommandPaletteDialog(props: {
         });
       }
 
-      return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
+      return [{ value: `sources:${environmentId}`, label: "来源", items: sourceItems }];
     },
     [openSourceControlSettings, startAddProjectBrowse, startAddProjectClone],
   );
@@ -1502,7 +1502,7 @@ function OpenCommandPaletteDialog(props: {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Environment unavailable",
+            title: "环境不可用",
             description: `${environment?.label ?? "The selected environment"} is not connected.`,
           }),
         );
@@ -1807,7 +1807,7 @@ function OpenCommandPaletteDialog(props: {
     kind: "action",
     value: "action:theme-editor",
     searchTerms: ["theme", "appearance", "colors", "palette", "customize"],
-    title: "Toggle theme editor",
+    title: "切换主题编辑器",
     icon: <PaletteIcon className={ITEM_ICON_CLASS} />,
     shortcutCommand: "themeEditor.toggle",
     run: async () => {
@@ -1856,7 +1856,7 @@ function OpenCommandPaletteDialog(props: {
         "remove",
         "t3.json",
       ],
-      title: "Project settings",
+      title: "项目设置",
       description: contextualProjectGroup.displayName,
       icon: <FolderIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
@@ -1936,7 +1936,7 @@ function OpenCommandPaletteDialog(props: {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Environment unavailable",
+            title: "环境不可用",
             description: `${environment?.label ?? "The selected environment"} is not connected.`,
           }),
         );
@@ -1948,8 +1948,8 @@ function OpenCommandPaletteDialog(props: {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to add project",
-            description: "Windows-style paths are only supported on Windows.",
+            title: "添加项目失败",
+            description: "Windows 风格路径仅支持 Windows。",
           }),
         );
         return;
@@ -1959,8 +1959,8 @@ function OpenCommandPaletteDialog(props: {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to add project",
-            description: "Relative paths require an active project.",
+            title: "添加项目失败",
+            description: "相对路径需要活跃项目。",
           }),
         );
         return;
@@ -1995,7 +1995,7 @@ function OpenCommandPaletteDialog(props: {
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Failed to open project",
+                title: "打开项目失败",
                 description: error instanceof Error ? error.message : "An error occurred.",
               }),
             );
@@ -2023,7 +2023,7 @@ function OpenCommandPaletteDialog(props: {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to add project",
+              title: "添加项目失败",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -2039,7 +2039,7 @@ function OpenCommandPaletteDialog(props: {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to add project",
+            title: "添加项目失败",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -2091,7 +2091,7 @@ function OpenCommandPaletteDialog(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Environment unavailable",
+          title: "环境不可用",
           description: `${browseEnvironment?.label ?? "The selected environment"} is not connected.`,
         }),
       );
@@ -2175,8 +2175,8 @@ function OpenCommandPaletteDialog(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Clone failed",
-          description: "Windows-style paths are only supported on Windows.",
+          title: "克隆失败",
+          description: "Windows 风格路径仅支持 Windows。",
         }),
       );
       return;
@@ -2186,8 +2186,8 @@ function OpenCommandPaletteDialog(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Clone failed",
-          description: "Relative paths require an active project.",
+          title: "克隆失败",
+          description: "相对路径需要活跃项目。",
         }),
       );
       return;
@@ -2218,7 +2218,7 @@ function OpenCommandPaletteDialog(props: {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Clone failed",
+              title: "克隆失败",
               description: errorMessage(squashAtomCommandFailure(cloneResult)),
             }),
           );
@@ -2251,7 +2251,7 @@ function OpenCommandPaletteDialog(props: {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Clone failed",
+            title: "克隆失败",
             description: errorMessage(squashAtomCommandFailure(startResult)),
           }),
         );
@@ -2270,7 +2270,7 @@ function OpenCommandPaletteDialog(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to open project",
+          title: "打开项目失败",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -2396,7 +2396,7 @@ function OpenCommandPaletteDialog(props: {
     : willCreateProjectPath
       ? "Create & Add"
       : "Add";
-  const addShortcutLabel = hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter";
+  const addShortcutLabel = hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "回车";
   const remoteProjectButtonLabel = addProjectCloneFlow
     ? addProjectCloneFlow.source === "url"
       ? "继续"
@@ -2519,7 +2519,7 @@ function OpenCommandPaletteDialog(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Unable to run command",
+          title: "无法运行命令",
           description: error instanceof Error ? error.message : "An unexpected error occurred.",
         }),
       );
@@ -2658,9 +2658,9 @@ function OpenCommandPaletteDialog(props: {
             />
           }
         >
-          <span>{isRemoteProjectPending ? "Working" : remoteProjectButtonLabel}</span>
+          <span>{isRemoteProjectPending ? "运行中" : remoteProjectButtonLabel}</span>
           <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
-            <Kbd>Enter</Kbd>
+            <Kbd>回车</Kbd>
           </KbdGroup>
         </TooltipTrigger>
         <TooltipPopup side="top">{remoteProjectButtonLabel ?? "继续"} (Enter)</TooltipPopup>
@@ -2703,7 +2703,7 @@ function OpenCommandPaletteDialog(props: {
             {isCloneDestinationStep && isRemoteProjectPending ? "Cloning" : submitActionLabel}
           </span>
           <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
-            <Kbd>{hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter"}</Kbd>
+            <Kbd>{hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "回车"}</Kbd>
           </KbdGroup>
         </TooltipTrigger>
         <TooltipPopup side="top">
@@ -2811,7 +2811,7 @@ function OpenCommandPaletteDialog(props: {
           : addProjectCloneFlow?.step === "confirm"
             ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
             : relativePathNeedsActiveProject
-              ? { emptyStateMessage: "Relative paths require an active project." }
+              ? { emptyStateMessage: "相对路径需要活跃项目。" }
               : willCreateProjectPath
                 ? {
                     emptyStateMessage: "Press Enter to create this folder and add it as a project.",

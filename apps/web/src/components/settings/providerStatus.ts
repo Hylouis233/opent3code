@@ -110,7 +110,7 @@ export function getProviderVersionAdvisoryPresentation(
     return null;
   }
 
-  const label = "Update available";
+  const label = "有可用更新";
   const version = advisory.latestVersion;
   const versionLabel = getProviderVersionLabel(version);
 

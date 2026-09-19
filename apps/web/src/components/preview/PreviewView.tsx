@@ -199,7 +199,7 @@ export function PreviewView({
         if (error instanceof BrowserSettingsReadError) {
           toastManager.add({
             type: "error",
-            title: "Unable to open browser",
+            title: "无法打开浏览器",
             description: error.message,
           });
         }
@@ -268,7 +268,7 @@ export function PreviewView({
         const error = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
-          title: "Unable to resize browser viewport",
+          title: "无法调整浏览器视口",
           description: error instanceof Error ? error.message : "An error occurred.",
         });
         throw error;
@@ -331,7 +331,7 @@ export function PreviewView({
     void operation(runtimeTabId).catch((error) => {
       toastManager.add({
         type: "error",
-        title: "Unable to update popped-out preview",
+        title: "无法更新弹出预览",
         description: error instanceof Error ? error.message : "An error occurred.",
       });
     });
@@ -354,8 +354,8 @@ export function PreviewView({
                   toastId,
                   stackedThreadToast({
                     type: "error",
-                    title: "Unable to copy recording path",
-                    description: "Clipboard API unavailable.",
+                    title: "无法复制录制路径",
+                    description: "剪贴板不可用。",
                     actionProps: revealAction,
                   }),
                 );
@@ -376,7 +376,7 @@ export function PreviewView({
                     toastId,
                     stackedThreadToast({
                       type: "error",
-                      title: "Unable to copy recording path",
+                      title: "无法复制录制路径",
                       description: error instanceof Error ? error.message : "An error occurred.",
                       actionProps: revealAction,
                     }),
@@ -394,7 +394,7 @@ export function PreviewView({
                 toastId,
                 stackedThreadToast({
                   type: "success",
-                  title: "Recording saved",
+                  title: "录制已保存",
                   actionProps: revealAction,
                   data: {
                     secondaryActionProps: {
@@ -411,7 +411,7 @@ export function PreviewView({
             toastId = toastManager.add(
               stackedThreadToast({
                 type: "success",
-                title: "Recording saved",
+                title: "录制已保存",
                 actionProps: revealAction,
                 data: {
                   secondaryActionProps: {
@@ -426,7 +426,7 @@ export function PreviewView({
           (error) => {
             toastManager.add({
               type: "error",
-              title: "Unable to stop recording",
+              title: "无法停止录制",
               description: error instanceof Error ? error.message : "An error occurred.",
             });
           },
@@ -439,7 +439,7 @@ export function PreviewView({
           if (isBrowserRecordingStartCancelledError(error)) return;
           toastManager.add({
             type: "error",
-            title: "Unable to start recording",
+            title: "无法开始录制",
             description,
           });
         });
@@ -496,7 +496,7 @@ export function PreviewView({
               updateScreenshotToast(
                 "error",
                 "Unable to copy screenshot path",
-                "Clipboard API unavailable.",
+                "剪贴板不可用。",
               );
               return;
             }
@@ -569,7 +569,7 @@ export function PreviewView({
         (error) => {
           toastManager.add({
             type: "error",
-            title: "Unable to capture screenshot",
+            title: "无法截屏",
             description: error instanceof Error ? error.message : "An error occurred.",
           });
         },
@@ -739,7 +739,7 @@ export function PreviewView({
         }
         leadingActions={
           // Only when it differs from the default: labelling every tab
-          // "Default" would be noise on the common case, while a tab in
+          // "默认" would be noise on the common case, while a tab in
           // another profile is exactly what needs calling out.
           activeProfileId !== browserDefaults.profileId ? (
             // Capped: profile names run to 48 characters, and an unbounded

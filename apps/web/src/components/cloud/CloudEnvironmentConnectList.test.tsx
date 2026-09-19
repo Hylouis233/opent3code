@@ -77,7 +77,7 @@ const linkedMachines: DiscoveredEnvironments = new Map([
     {
       environment: {
         environmentId: newMachineId,
-        label: "Work laptop",
+        label: "工作笔记本",
         endpoint: {
           httpBaseUrl: "https://relay.example.test",
           wsBaseUrl: "wss://relay.example.test/ws",
@@ -230,7 +230,7 @@ describe("cloud onboarding discovery", () => {
     await advance(5_000);
 
     expect(renderer!.root.findAllByType("p").map((node) => node.children)).toContainEqual([
-      "Work laptop",
+      "工作笔记本",
     ]);
     expect(renderer!.root.findByType("button").children).toEqual(["Add"]);
     await advance(30_000);
@@ -257,7 +257,7 @@ describe("cloud onboarding discovery", () => {
       );
     });
     expect(renderer!.root.findAllByType("p").map((node) => node.children)).toContainEqual([
-      "Work laptop",
+      "工作笔记本",
     ]);
     expect(renderer!.root.findByType("button").children).toEqual(["Connected"]);
   });

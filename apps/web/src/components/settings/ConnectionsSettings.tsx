@@ -211,7 +211,7 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
 }> = [
   {
     scope: AuthOrchestrationReadScope,
-    title: "View environment",
+    title: "查看环境",
     description: "Read threads, status, diffs, and configuration.",
   },
   {
@@ -226,12 +226,12 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
   },
   {
     scope: AuthReviewWriteScope,
-    title: "Write reviews",
+    title: "撰写评审",
     description: "Create comments while reviewing changes.",
   },
   {
     scope: AuthAccessReadScope,
-    title: "View access",
+    title: "查看权限",
     description: "Inspect pairing links and authorized clients.",
   },
   {
@@ -241,7 +241,7 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
   },
   {
     scope: AuthRelayReadScope,
-    title: "View relay",
+    title: "查看中继",
     description: "Inspect managed relay connectivity.",
   },
   {
@@ -1489,7 +1489,7 @@ function SavedBackendListRow({
     onCopy: ({ traceId }) => {
       toastManager.add({
         type: "success",
-        title: "Trace ID copied",
+        title: "Trace ID 已复制",
         description: traceId,
       });
     },
@@ -2325,7 +2325,7 @@ export function ConnectionsSettings() {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not add backend",
+          title: "无法添加后端",
           description: message,
         }),
       );
@@ -2342,7 +2342,7 @@ export function ConnectionsSettings() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not add backend",
+            title: "无法添加后端",
             description: message,
           }),
         );
@@ -2654,7 +2654,7 @@ export function ConnectionsSettings() {
         onClick={() => void handleAddSavedBackend()}
       >
         <PlusIcon className="size-3.5" />
-        {isAddingSavedBackend ? "Adding…" : "Add environment"}
+        {isAddingSavedBackend ? "Adding…" : "添加环境"}
       </Button>
     </div>
   );
@@ -2775,7 +2775,7 @@ export function ConnectionsSettings() {
           onClick={() => void handleAddSavedBackend()}
         >
           <PlusIcon className="size-3.5" />
-          {isAddingSavedBackend ? "Adding…" : "Add environment"}
+          {isAddingSavedBackend ? "Adding…" : "添加环境"}
         </Button>
       </div>
     </div>
@@ -3243,7 +3243,7 @@ export function ConnectionsSettings() {
           <SettingsSection
             {...searchableSetting("connections-environment")}
             title={
-              primaryEnvironment?.label ?? (desktopBridge ? "This machine" : "Primary environment")
+              primaryEnvironment?.label ?? (desktopBridge ? "本机" : "Primary environment")
             }
             icon={
               <EnvironmentMachineIcon
@@ -3688,16 +3688,16 @@ export function ConnectionsSettings() {
                           size="xs"
                           variant="ghost"
                           className="font-normal text-muted-foreground/60 hover:text-muted-foreground"
-                          aria-label="Add environment"
+                          aria-label="添加环境"
                         >
                           <PlusIcon className="size-3" />
-                          <span>Add environment</span>
+                          <span>添加环境</span>
                         </Button>
                       }
                     />
                   }
                 />
-                <TooltipPopup side="top">Add environment</TooltipPopup>
+                <TooltipPopup side="top">添加环境</TooltipPopup>
               </Tooltip>
               <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
                 <DialogHeader>

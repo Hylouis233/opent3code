@@ -21,9 +21,9 @@ interface ComposerPendingApprovalActionsProps {
 const APPROVAL_ACTION_CLASS_NAME = "font-normal";
 const DEFAULT_APPROVAL_OPTIONS = [
   { decision: "cancel", label: "取消" },
-  { decision: "decline", label: "Decline" },
-  { decision: "acceptForSession", label: "Always allow this session" },
-  { decision: "accept", label: "Approve" },
+  { decision: "decline", label: "拒绝" },
+  { decision: "acceptForSession", label: "本会话始终允许" },
+  { decision: "accept", label: "批准" },
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
 
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({

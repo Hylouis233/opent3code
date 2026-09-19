@@ -59,7 +59,7 @@ const toBrowserDefaults = (settings: {
     // Incognito is a per-tab choice, not a default: a profile that discards
     // everything on close would leave every new tab signed out. Excluding it
     // here keeps the resolved default equal to what the settings list offers,
-    // so the row badged "Default" is the one tabs actually open under.
+    // so the row badged "默认" is the one tabs actually open under.
     profileId:
       profiles.find(
         (profile) =>

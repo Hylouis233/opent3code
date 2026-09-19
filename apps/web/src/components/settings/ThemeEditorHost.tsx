@@ -53,7 +53,7 @@ export function ThemeEditorHost() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not save your theme",
+              title: "无法保存主题",
               description: "Browser storage is unavailable, so the change was not kept.",
             }),
           );
@@ -91,7 +91,7 @@ export function ThemeEditorHost() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not save your theme",
+            title: "无法保存主题",
             description: "Browser storage is unavailable, so the change was not kept.",
           }),
         );

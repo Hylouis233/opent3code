@@ -30,7 +30,7 @@ describe("wizard target selection", () => {
   it("rejects an existing target that is no longer listed", () => {
     expect(
       resolveWizardTarget({ kind: "existing", profileId: "removed" }, "generated", [
-        { id: "default", name: "Default" },
+        { id: "default", name: "默认" },
       ]),
     ).toBeUndefined();
   });
@@ -39,7 +39,7 @@ describe("wizard target selection", () => {
 const source = (over: Partial<BrowserImportSource> = {}): BrowserImportSource => ({
   id: "helium",
   name: "Helium",
-  profiles: [{ directory: "Default", name: "You" }],
+  profiles: [{ directory: "默认", name: "You" }],
   ...over,
 });
 
@@ -169,7 +169,7 @@ describe("fullDiskAccessRecheckStep", () => {
 describe("refreshedSourceProfileDirectory", () => {
   const refreshed = source({
     profiles: [
-      { directory: "Default", name: "Personal" },
+      { directory: "默认", name: "Personal" },
       { directory: "Profile 2", name: "Work" },
     ],
   });
@@ -179,7 +179,7 @@ describe("refreshedSourceProfileDirectory", () => {
   });
 
   it("falls back only when the old profile vanished and clears an empty result", () => {
-    expect(refreshedSourceProfileDirectory("Removed", refreshed)).toBe("Default");
+    expect(refreshedSourceProfileDirectory("Removed", refreshed)).toBe("默认");
     expect(refreshedSourceProfileDirectory("Removed", source({ profiles: [] }))).toBe("");
   });
 });

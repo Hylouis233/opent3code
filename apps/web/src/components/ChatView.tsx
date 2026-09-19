@@ -3125,7 +3125,7 @@ export default function ChatView(props: ChatViewProps) {
       return true;
     }
     setUsageLimitsPanel(null);
-    toastManager.add({ type: "info", title: "Usage limits are unavailable for this provider" });
+    toastManager.add({ type: "info", title: "该 provider 暂无用量限额" });
     return false;
   }, [
     activeProviderInstanceId,
@@ -3280,7 +3280,7 @@ export default function ChatView(props: ChatViewProps) {
     async (attachment: ChatFileAttachment) => {
       const connection = readPreparedConnection(environmentId);
       if (!connection) {
-        toastManager.add({ type: "error", title: "The environment is not connected." });
+        toastManager.add({ type: "error", title: "该环境未连接。" });
         return;
       }
 
@@ -3960,7 +3960,7 @@ export default function ChatView(props: ChatViewProps) {
       if (prompt !== null && !composer.insertTextAtEnd(prompt, { ensureLeadingBoundary: true })) {
         toastManager.add({
           type: "error",
-          title: "Unable to add to chat",
+          title: "无法添加到对话",
           description: "The composer is busy; try again once it is ready.",
         });
         return;
@@ -4487,7 +4487,7 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Unable to open browser",
+              title: "无法打开浏览器",
               description: error.message,
             }),
           );
@@ -5092,8 +5092,8 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy path",
-          description: "Clipboard API unavailable.",
+          title: "复制路径失败",
+          description: "剪贴板不可用。",
         }),
       );
       return;
@@ -5103,7 +5103,7 @@ export default function ChatView(props: ChatViewProps) {
       () => {
         toastManager.add({
           type: "success",
-          title: "Path copied",
+          title: "路径已复制",
           description: relativePath,
         });
       },
@@ -5111,7 +5111,7 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to copy path",
+            title: "复制路径失败",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -5998,7 +5998,7 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to un-settle thread",
+            title: "取消收尾失败",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -6026,7 +6026,7 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to wake thread",
+            title: "唤醒对话失败",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -6221,7 +6221,7 @@ export default function ChatView(props: ChatViewProps) {
       id: `thread-woke:${activeThread?.id ?? "unknown"}`,
       variant: "info",
       icon: <AlarmClockIcon />,
-      title: "Thread woke from snooze",
+      title: "对话已从暂挂中唤醒",
       description: "发送消息继续",
       dismissLabel: "关闭唤醒通知",
       onDismiss: acknowledgeActiveThreadWoke,
@@ -6626,7 +6626,7 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to settle thread",
+              title: "收尾对话失败",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -6925,7 +6925,7 @@ export default function ChatView(props: ChatViewProps) {
           throw new Error("Wait for attachments to finish preparing before rewinding.");
         }
         const connection = readPreparedConnection(environmentId);
-        if (!connection) throw new Error("The environment is not connected.");
+        if (!connection) throw new Error("该环境未连接。");
         const files = await prepareRevertedMessageAttachments({
           message,
           environmentId,
@@ -8006,7 +8006,7 @@ export default function ChatView(props: ChatViewProps) {
               toastManager.add(
                 stackedThreadToast({
                   type: "success",
-                  title: "Started in background",
+                  title: "已在后台启动",
                   timeout: 5_000,
                   actionProps: {
                     children: "Open",
@@ -8028,7 +8028,7 @@ export default function ChatView(props: ChatViewProps) {
             toastManager.add(
               stackedThreadToast({
                 type: "warning",
-                title: "Task started in the background",
+                title: "任务已在后台启动",
                 description:
                   error instanceof Error
                     ? `Could not open a fresh composer: ${error.message}`
@@ -9756,7 +9756,7 @@ export default function ChatView(props: ChatViewProps) {
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+                  <AlertDialogClose render={<Button variant="outline" />}>取消</AlertDialogClose>
                   <Button
                     variant="default"
                     onClick={() => {
@@ -9932,7 +9932,7 @@ export default function ChatView(props: ChatViewProps) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>取消</AlertDialogClose>
             <Button
               variant="destructive"
               onClick={() => {
