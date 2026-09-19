@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- existsSync path probe sits below the Effect service boundary, mirroring ZcodeProtocol/usageTranscriptReader.
 /**
  * ZcodeDriver - ZCode as a supervised preview provider over its own stdio
  * agent protocol (NOT ACP and NOT JSON-RPC; see ZcodeProtocol.ts).
@@ -15,6 +16,8 @@
  *
  * @module provider/Drivers/ZcodeDriver
  */
+import * as NodeFS from "node:fs";
+
 import {
   EventId,
   ProviderDriverKind,
@@ -61,29 +64,35 @@ import {
 
 const REQUEST_TIMEOUT = "30 seconds";
 const PROBE_TIMEOUT = "20 seconds";
-/** Ships inside the desktop app; see docs/zcode-driver.md for the config shim. */
+/**
+ * The settings schema's binaryPath defaults to the bare placeholder
+ * "zcode.cjs", which is not a real path; resolve to the desktop-app engine
+ * unless the configured path actually exists on disk.
+ */
 const DEFAULT_SCRIPT = "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs";
-
-type ZcodeHandle = ChildProcessSpawner.ChildProcessHandle;
 
 const decodeZcodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
-/** Decoded stdout → complete newline-terminated frames, carrying partial tails. */
+/**
+ * Decoded stdout → complete newline-terminated frames, carrying partial tails
+ * across chunks. mapAccum already spreads the returned line array into
+ * individual emissions; do NOT add flattenIterable on top (it would split
+ * every line into single characters).
+ */
 function zcodeLines<E, R>(stream: Stream.Stream<Uint8Array, E, R>): Stream.Stream<string, E, R> {
   return stream.pipe(
     Stream.decodeText(),
     Stream.mapAccum(
       () => "",
       (buffer: string, chunk: string) => {
-        const combined = buffer + chunk;
-        const parts = combined.split("\n");
-        const rest = parts.pop() ?? "";
-        return [rest, parts] as const;
+        const parts = (buffer + chunk).split("\n");
+        return [parts.pop() ?? "", parts] as const;
       },
     ),
-    Stream.flattenIterable,
   );
 }
+
+type ZcodeHandle = ChildProcessSpawner.ChildProcessHandle;
 
 interface LiveSession {
   readonly scope: Scope.Closeable;
@@ -131,8 +140,8 @@ export const ZcodeDriver: ProviderDriver<ZcodeConfig, ZcodeDriverEnv> = {
       const requestError = (method: string, detail: string) =>
         new ProviderAdapterRequestError({ provider, method, detail });
 
-      const script =
-        config.binaryPath.trim().length > 0 ? config.binaryPath.trim() : DEFAULT_SCRIPT;
+      const configuredScript = config.binaryPath.trim();
+      const script = NodeFS.existsSync(configuredScript) ? configuredScript : DEFAULT_SCRIPT;
 
       const spawnHandle = (cwd: string, scope: Scope.Closeable) =>
         spawner
@@ -289,76 +298,76 @@ export const ZcodeDriver: ProviderDriver<ZcodeConfig, ZcodeDriverEnv> = {
           Effect.gen(function* () {
             if (sessions.has(input.threadId)) {
               return yield* invalid("startSession", "Stop the existing ZCode session first.");
-          }
-          const cwd = input.cwd ?? "/tmp";
-          const createdAt = yield* now;
-          const scope = yield* Scope.make();
-          let transferred = false;
-          yield* Effect.addFinalizer(() =>
-            transferred ? Effect.void : Scope.close(scope, Exit.void),
-          );
-          const handle = yield* spawnHandle(cwd, scope);
-          const ctx: LiveSession = {
-            scope,
-            handle,
-            sessionId: "",
-            session: {
-              provider,
-              providerInstanceId: instanceId,
-              status: "connecting",
-              runtimeMode: "auto",
-              cwd,
-              threadId: input.threadId,
-              createdAt,
-              updatedAt: createdAt,
-            },
-            nextRequestId: 1,
-            pending: new Map(),
-            answeredServerRequests: new Set(),
-            activeTurn: null,
-            stopped: false,
-          };
-          yield* startPump(ctx, input.threadId, scope);
+            }
+            const cwd = input.cwd ?? "/tmp";
+            const createdAt = yield* now;
+            const scope = yield* Scope.make();
+            let transferred = false;
+            yield* Effect.addFinalizer(() =>
+              transferred ? Effect.void : Scope.close(scope, Exit.void),
+            );
+            const handle = yield* spawnHandle(cwd, scope);
+            const ctx: LiveSession = {
+              scope,
+              handle,
+              sessionId: "",
+              session: {
+                provider,
+                providerInstanceId: instanceId,
+                status: "connecting",
+                runtimeMode: "auto",
+                cwd,
+                threadId: input.threadId,
+                createdAt,
+                updatedAt: createdAt,
+              },
+              nextRequestId: 1,
+              pending: new Map(),
+              answeredServerRequests: new Set(),
+              activeTurn: null,
+              stopped: false,
+            };
+            yield* startPump(ctx, input.threadId, scope);
 
-          const created = (yield* zcodeRequest(ctx, "session/create", {
-            workspace: { workspacePath: cwd, workspaceKey: cwd },
-          })) as { readonly sessionId?: string } | undefined;
-          const sessionId = created?.sessionId;
-          if (typeof sessionId !== "string" || sessionId.length === 0) {
-            return yield* invalid("startSession", "ZCode did not return a session id.");
-          }
-          ctx.sessionId = sessionId;
-          yield* writeLine(
-            ctx,
-            encodeZcodeRequest({
-              id: ctx.nextRequestId++,
-              method: "session/subscribe",
-              params: { sessionId },
-            }),
-          );
-          ctx.session = {
-            ...ctx.session,
-            status: "ready",
-            updatedAt: yield* now,
-            resumeCursor: { sessionId },
-          };
-          sessions.set(input.threadId, ctx);
-          transferred = true;
-          yield* emit({
-            type: "session.started",
-            ...(yield* stamp),
-            provider,
-            threadId: input.threadId,
-            payload: { resume: { sessionId } },
-          });
-          yield* emit({
-            type: "thread.started",
-            ...(yield* stamp),
-            provider,
-            threadId: input.threadId,
-            payload: { providerThreadId: sessionId },
-          });
-          return ctx.session;
+            const created = (yield* zcodeRequest(ctx, "session/create", {
+              workspace: { workspacePath: cwd, workspaceKey: cwd },
+            })) as { readonly sessionId?: string } | undefined;
+            const sessionId = created?.sessionId;
+            if (typeof sessionId !== "string" || sessionId.length === 0) {
+              return yield* invalid("startSession", "ZCode did not return a session id.");
+            }
+            ctx.sessionId = sessionId;
+            yield* writeLine(
+              ctx,
+              encodeZcodeRequest({
+                id: ctx.nextRequestId++,
+                method: "session/subscribe",
+                params: { sessionId },
+              }),
+            );
+            ctx.session = {
+              ...ctx.session,
+              status: "ready",
+              updatedAt: yield* now,
+              resumeCursor: { sessionId },
+            };
+            sessions.set(input.threadId, ctx);
+            transferred = true;
+            yield* emit({
+              type: "session.started",
+              ...(yield* stamp),
+              provider,
+              threadId: input.threadId,
+              payload: { resume: { sessionId } },
+            });
+            yield* emit({
+              type: "thread.started",
+              ...(yield* stamp),
+              provider,
+              threadId: input.threadId,
+              payload: { providerThreadId: sessionId },
+            });
+            return ctx.session;
           }),
         );
 
