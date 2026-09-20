@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: opent3code-upstream-sync
+  group: ${{ github.event_name == 'pull_request' && format('opent3code-upstream-sync-pr-{0}', github.event.pull_request.number) || 'opent3code-upstream-sync' }}
   cancel-in-progress: false
 
 jobs:
