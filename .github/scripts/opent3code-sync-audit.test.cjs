@@ -145,3 +145,24 @@ test("real Git recovery inventory is complete and leaves branches and files unto
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+test("NUL-delimited evidence preserves every non-NUL ASCII character and Unicode path", () => {
+  const names = Array.from(
+    { length: 127 },
+    (_, index) => `folder/prefix${String.fromCodePoint(index + 1)}suffix`,
+  );
+  names.push("folder/中文", "folder/cafe\u0301", "folder/\u{1f9ea}");
+  const wire = names.map((name) => header + name + "\0").join("");
+  const decoded = decodeGitOutput(Buffer.from(wire));
+  assert.equal(decoded, wire);
+  assert.deepEqual(
+    parseDiff(decoded).map((entry) => entry.filename),
+    names,
+  );
+  assert.deepEqual(parseMerge(sha + "\0" + names.join("\0") + "\0", 1).conflicts, names);
+});
+test("NUL remains a record delimiter rather than part of a filename", () => {
+  assert.throws(() => parseDiff(header + "prefix\0suffix\0"), /Incomplete raw diff/);
+  assert.throws(() => parseDiff(header + "prefix\0\0"), /Incomplete raw diff/);
+  assert.throws(() => parseMerge(sha + "\0prefix\0\0", 1), /empty conflict paths/);
+  assert.throws(() => parseMerge(sha + "\0prefix\0prefix\0", 1), /Duplicate conflict paths/);
+});
