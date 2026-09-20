@@ -4,9 +4,15 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { TextDecoder } = require("node:util");
+const { isUtf8 } = require("node:buffer");
 const SHA = /^[a-f0-9]{40}$/;
-const decoder = new TextDecoder("utf-8", { fatal: true });
+
+// This standalone trusted tool cannot load application workspace helpers.
+// Reject invalid path bytes instead of silently replacing them in audit evidence.
+function decodeGitOutput(bytes) {
+  if (!isUtf8(bytes)) throw Error("Git output is not valid UTF-8; no audit can be trusted.");
+  return Buffer.from(bytes).toString("utf8");
+}
 
 function assertSha(value) {
   if (!SHA.test(value || "")) throw Error("An exact 40-character commit SHA is required.");
@@ -41,10 +47,10 @@ function git(repo, args, allowed = [0]) {
   );
   if (result.error || !allowed.includes(result.status)) {
     throw Error(
-      `Git ${args[0]} failed: ${result.error?.message || decoder.decode(result.stderr).slice(0, 4000)}`,
+      `Git ${args[0]} failed: ${result.error?.message || decodeGitOutput(result.stderr).slice(0, 4000)}`,
     );
   }
-  return { status: result.status, text: decoder.decode(result.stdout) };
+  return { status: result.status, text: decodeGitOutput(result.stdout) };
 }
 function nulFields(text) {
   if (text === "") return [];
@@ -247,7 +253,16 @@ function main() {
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
   console.log(text);
 }
-module.exports = { assertSha, nulFields, parseDiff, parseMerge, sensitive, analyze, summary };
+module.exports = {
+  assertSha,
+  decodeGitOutput,
+  nulFields,
+  parseDiff,
+  parseMerge,
+  sensitive,
+  analyze,
+  summary,
+};
 if (require.main === module) {
   try {
     main();
