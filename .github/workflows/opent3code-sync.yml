@@ -4,12 +4,19 @@ on:
   schedule:
     - cron: "23 2 * * *"
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/opent3code-sync.yml
+      - .github/scripts/opent3code-sync-audit.cjs
+      - .github/scripts/opent3code-sync-audit.test.cjs
   push:
     branches: [main]
     paths:
       - .github/workflows/opent3code-sync.yml
       - .github/scripts/opent3code-sync.cjs
       - .github/scripts/opent3code-sync.test.cjs
+      - .github/scripts/opent3code-sync-audit.cjs
+      - .github/scripts/opent3code-sync-audit.test.cjs
 
 permissions:
   contents: read
@@ -20,7 +27,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.repository_id == '1341460159'
+    if: github.repository_id == '1341460159' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -145,3 +152,54 @@ jobs:
               merge: process.env.SYNC_MERGE,
               validationSucceeded: true,
             }});
+
+  diagnose:
+    name: Inspect upstream conflicts (not validation)
+    needs: prepare
+    if: ${{ always() && !cancelled() && github.repository_id == '1341460159' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.id == github.event.repository.id) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Capture immutable public repository heads
+        id: refs
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data: repo } = await github.rest.repos.get(context.repo);
+            const upstream = { owner: 'pingdotgg', repo: 't3code' };
+            const { data: source } = await github.rest.repos.get(upstream);
+            if (repo.id !== 1341460159 || repo.owner.login !== 'Hylouis233' || repo.default_branch !== 'main' || source.id !== 1153130349 || source.default_branch !== 'main') {
+              throw new Error('Unexpected fork or upstream identity.');
+            }
+            const { data: base } = await github.rest.repos.getBranch({ ...context.repo, branch: 'main' });
+            const { data: head } = await github.rest.repos.getBranch({ ...upstream, branch: 'main' });
+            for (const [name, sha] of Object.entries({ base: base.commit.sha, head: head.commit.sha, tool: context.sha })) {
+              if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid snapshot SHA.');
+              core.setOutput(name, sha);
+            }
+      - name: Load the audit tool without persisted credentials
+        env:
+          TOOL_SHA: ${{ steps.refs.outputs.tool }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init --bare --quiet "$RUNNER_TEMP/opent3code-audit-tool.git"
+          git -C "$RUNNER_TEMP/opent3code-audit-tool.git" fetch --quiet --no-tags --no-recurse-submodules --depth=1 https://github.com/Hylouis233/opent3code.git "$TOOL_SHA"
+          git -C "$RUNNER_TEMP/opent3code-audit-tool.git" show "$TOOL_SHA:.github/scripts/opent3code-sync-audit.cjs" > "$RUNNER_TEMP/opent3code-sync-audit.cjs"
+      - name: Enumerate all changed paths and compute conflicts without checkout
+        env:
+          AUDIT_BASE: ${{ steps.refs.outputs.base }}
+          AUDIT_HEAD: ${{ steps.refs.outputs.head }}
+          AUDIT_TOOL_SHA: ${{ steps.refs.outputs.tool }}
+          AUDIT_ROOT: ${{ runner.temp }}/opent3code-sync-audit
+        run: node "$RUNNER_TEMP/opent3code-sync-audit.cjs"
+      - name: Upload complete diagnostic evidence (not a release)
+        uses: actions/upload-artifact@v7
+        with:
+          name: opent3code-sync-audit-${{ github.run_id }}
+          path: ${{ runner.temp }}/opent3code-sync-audit/report/
+          if-no-files-found: error
+          retention-days: 14
