@@ -4,8 +4,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { execFileSync } = require("node:child_process");
-const { assertSha, nulFields, parseDiff, parseMerge, sensitive, analyze, summary } =
-  require("./opent3code-sync-audit.cjs");
+const {
+  assertSha,
+  nulFields,
+  parseDiff,
+  parseMerge,
+  sensitive,
+  analyze,
+  summary,
+} = require("./opent3code-sync-audit.cjs");
 const sha = "a".repeat(40);
 const header = `:100644 100644 ${sha} ${"b".repeat(40)} M\0`;
 
