@@ -221,7 +221,9 @@ function main() {
   const head = assertSha(process.env.AUDIT_HEAD);
   const root = process.env.AUDIT_ROOT;
   if (!root || !path.isAbsolute(root) || fs.existsSync(root) || process.argv.length !== 2)
-    throw Error("AUDIT_ROOT must be a new absolute directory; positional arguments are not accepted.");
+    throw Error(
+      "AUDIT_ROOT must be a new absolute directory; positional arguments are not accepted.",
+    );
   fs.mkdirSync(root, { mode: 0o700 });
   const repo = path.join(root, "objects.git");
   fs.mkdirSync(repo);
