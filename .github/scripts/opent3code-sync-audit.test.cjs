@@ -70,18 +70,32 @@ test("real Git recovery inventory is complete and leaves branches and files unto
   const work = path.join(root, "work");
   const bare = path.join(root, "objects.git");
   fs.mkdirSync(work);
+  // Fixture commits must not depend on a hosted runner's Git account configuration.
+  const fixtureEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Audit fixture",
+    GIT_AUTHOR_EMAIL: "audit@example.invalid",
+    GIT_COMMITTER_NAME: "Audit fixture",
+    GIT_COMMITTER_EMAIL: "audit@example.invalid",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_COUNT: "0",
+  };
   const g = (...args) =>
     execFileSync("git", ["-C", work, ...args], {
       encoding: "utf8",
+      env: fixtureEnv,
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
   try {
     g("init", "-q");
-    g("config", "user.name", "Audit fixture");
-    g("config", "user.email", "audit@example.invalid");
     fs.writeFileSync(path.join(work, "README.md"), "base\n");
     g("add", ".");
     g("commit", "-qm", "base");
+    assert.equal(
+      g("log", "-1", "--format=%an <%ae>|%cn <%ce>"),
+      "Audit fixture <audit@example.invalid>|Audit fixture <audit@example.invalid>",
+    );
     const ancestor = g("rev-parse", "HEAD");
     fs.writeFileSync(path.join(work, "README.md"), "fork\n");
     fs.writeFileSync(path.join(work, "opent3code-only.txt"), "preserve\n");
