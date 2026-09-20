@@ -26,7 +26,12 @@ test("Git output decoding preserves UTF-8 and rejects malformed bytes", () => {
   const text = "folder/中文\tname\nfile\0";
   assert.equal(decodeGitOutput(Buffer.from(text)), text);
   assert.equal(decodeGitOutput(Buffer.alloc(0)), "");
-  for (const bytes of [[0xff, 0], [0xc0, 0xaf, 0], [0xe2, 0x82], [0xed, 0xa0, 0x80]])
+  for (const bytes of [
+    [0xff, 0],
+    [0xc0, 0xaf, 0],
+    [0xe2, 0x82],
+    [0xed, 0xa0, 0x80],
+  ])
     assert.throws(() => decodeGitOutput(Buffer.from(bytes)), /not valid UTF-8/);
 });
 test("raw Git inventory preserves unusual paths and does not truncate at 3000", () => {
