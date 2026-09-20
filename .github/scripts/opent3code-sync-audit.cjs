@@ -11,6 +11,7 @@ const SHA = /^[a-f0-9]{40}$/;
 // Reject invalid path bytes instead of silently replacing them in audit evidence.
 function decodeGitOutput(bytes) {
   if (!isUtf8(bytes)) throw Error("Git output is not valid UTF-8; no audit can be trusted.");
+  // oxlint-disable-next-line t3code/no-new-text-encoder-decoder -- Standalone CI audit cannot load workspace helpers; invalid UTF-8 was rejected above.
   return Buffer.from(bytes).toString("utf8");
 }
 
@@ -24,6 +25,7 @@ function git(repo, args, allowed = [0]) {
     HOME: path.dirname(repo),
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_COUNT: "0",
     GIT_TERMINAL_PROMPT: "0",
     GIT_NO_REPLACE_OBJECTS: "1",
     LC_ALL: "C",
@@ -218,8 +220,8 @@ function main() {
   const base = assertSha(process.env.AUDIT_BASE);
   const head = assertSha(process.env.AUDIT_HEAD);
   const root = process.env.AUDIT_ROOT;
-  if (!root || !path.isAbsolute(root) || fs.existsSync(root))
-    throw Error("AUDIT_ROOT must be a new absolute directory.");
+  if (!root || !path.isAbsolute(root) || fs.existsSync(root) || process.argv.length !== 2)
+    throw Error("AUDIT_ROOT must be a new absolute directory; positional arguments are not accepted.");
   fs.mkdirSync(root, { mode: 0o700 });
   const repo = path.join(root, "objects.git");
   fs.mkdirSync(repo);
