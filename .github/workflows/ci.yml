@@ -72,6 +72,7 @@ jobs:
       - name: Verify maintained-file formatting with an actionable diff
         run: |
           vp fmt README.md CONTRIBUTING.md docs/operations/opent3code.md docs/operations/pr-actions.md .github/opent3code-vouched.json .github/scripts/opent3code-*.cjs .github/workflows/ci.yml .github/workflows/deploy-relay.yml .github/workflows/opent3code-sync.yml .github/workflows/pr-size.yml .github/workflows/pr-vouch.yml .github/workflows/windows-tests.yml .github/workflows/mobile-fingerprint-check.yml .github/workflows/desktop-macos-preview.yml .github/workflows/desktop-macos-preview-publish.yml
+          vp fmt apps/desktop/src/main.ts apps/mobile/src/features/review/shikiReviewHighlighter.test.ts
           git diff --exit-code
       - name: Check unused code
         run: vp run knip:check
