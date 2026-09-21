@@ -55,7 +55,9 @@ function classifySizeWithCoverage(files, changedFiles) {
   }
   const incomplete = files.length !== changedFiles;
   if (incomplete && (files.length !== PR_FILES_API_LIMIT || changedFiles <= PR_FILES_API_LIMIT)) {
-    throw new Error(`Incomplete file list (${files.length}/${changedFiles}); refusing to guess size.`);
+    throw new Error(
+      `Incomplete file list (${files.length}/${changedFiles}); refusing to guess size.`,
+    );
   }
   const result = classifySize(files);
   if (!incomplete) return { ...result, incomplete };
@@ -172,7 +174,14 @@ async function labelPullRequests({ github, context, core, kind }) {
             `observed non-test lower bound ${result.nonTest} lines; ${result.label}.`,
         );
       }
-      await syncLabel({ github, repo, pull, label: result.label, managed: MANAGED_SIZE_NAMES, core });
+      await syncLabel({
+        github,
+        repo,
+        pull,
+        label: result.label,
+        managed: MANAGED_SIZE_NAMES,
+        core,
+      });
       if (!result.incomplete) {
         core.info(
           `${result.nonTest} non-test + ${result.test} test lines; ${result.effective} effective.`,
