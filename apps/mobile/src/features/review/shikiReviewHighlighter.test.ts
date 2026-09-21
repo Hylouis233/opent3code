@@ -47,28 +47,47 @@ describe("highlightSourceFile", () => {
     ]);
   });
 
-  it("initializes source and snippet highlighting without a warmup", async () => {
-    vi.resetModules();
-    const highlighter = await import("./shikiReviewHighlighter");
-    const source = "const answer: number = 42;";
+  it.each(["source", "snippet"] as const)(
+    "initializes %s highlighting first without a warmup",
+    async (first) => {
+      // Shiki's 500 ms per-line budget uses Date.now. CPU contention and lazy
+      // regex compilation must not turn this initialization test into a benchmark.
+      const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+      try {
+        vi.resetModules();
+        const highlighter = await import("./shikiReviewHighlighter");
+        const source = "const answer: number = 42;";
+        const highlight = {
+          source: () =>
+            highlighter.highlightSourceFile({
+              path: "example.ts",
+              contents: source,
+              theme: "dark",
+            }),
+          snippet: () =>
+            highlighter.highlightCodeSnippet({ code: source, language: "ts", theme: "dark" }),
+        };
+        const highlighted = await highlight[first]();
 
-    const highlighted = await highlighter.highlightSourceFile({
-      path: "example.ts",
-      contents: source,
-      theme: "dark",
-    });
-
-    expect(
-      highlighted
-        .flat()
-        .map((token) => token.content)
-        .join(""),
-    ).toBe(source);
-    expect(highlighted.flat().some((token) => token.color !== null)).toBe(true);
-    expect(
-      await highlighter.highlightCodeSnippet({ code: source, language: "ts", theme: "dark" }),
-    ).toEqual(highlighted);
-  });
+        expect(
+          highlighted
+            .flat()
+            .map((token) => token.content)
+            .join(""),
+        ).toBe(source);
+        expect(highlighted.flat().some((token) => token.color !== null)).toBe(true);
+        expect(highlighted.flat()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ content: "=" }),
+            expect.objectContaining({ content: "42" }),
+          ]),
+        );
+        expect(await highlight[first === "source" ? "snippet" : "source"]()).toEqual(highlighted);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 });
 
 describe("highlightReviewSelectedLines", () => {

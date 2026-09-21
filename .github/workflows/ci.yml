@@ -72,8 +72,49 @@ jobs:
       - name: Verify maintained-file formatting with an actionable diff
         run: |
           vp fmt README.md CONTRIBUTING.md docs/operations/opent3code.md docs/operations/pr-actions.md .github/opent3code-vouched.json .github/scripts/opent3code-*.cjs .github/workflows/ci.yml .github/workflows/deploy-relay.yml .github/workflows/opent3code-sync.yml .github/workflows/pr-size.yml .github/workflows/pr-vouch.yml .github/workflows/windows-tests.yml .github/workflows/mobile-fingerprint-check.yml .github/workflows/desktop-macos-preview.yml .github/workflows/desktop-macos-preview-publish.yml
+          vp fmt apps/desktop/src/main.ts apps/mobile/src/features/review/shikiReviewHighlighter.test.ts
           git diff --exit-code
-      - name: Upload maintained-file formatting diagnostics
+      - name: Check unused code
+        run: vp run knip:check
+      - name: Verify lint input provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/opent3code-lint-evidence"
+          mkdir -p "$out"
+          git rev-parse HEAD > "$out/checkout-sha.txt"
+          test "$(cat "$out/checkout-sha.txt")" = "$GITHUB_SHA"
+          git ls-tree HEAD -- .github/scripts/opent3code-sync.cjs .github/scripts/opent3code-sync-audit.cjs > "$out/tree.txt"
+          test ! -L .github
+          test ! -L .github/scripts
+          for name in opent3code-sync.cjs opent3code-sync-audit.cjs; do
+            file=".github/scripts/$name"
+            test -f "$file"
+            test ! -L "$file"
+            git show "HEAD:$file" > "$out/committed-$name"
+            cp -- "$file" "$out/worktree-$name"
+            git hash-object --no-filters "$file" > "$out/blob-$name.txt"
+            cmp -- "$out/committed-$name" "$out/worktree-$name"
+          done
+          cat "$out/checkout-sha.txt" "$out/tree.txt"
+      # Keep formatting on the same standalone path used by the diff above.
+      - name: Check formatting
+        run: vp fmt --check
+      - name: Check lint and types
+        shell: bash
+        run: |
+          set -o pipefail
+          vp check --no-fmt 2>&1 | tee "$RUNNER_TEMP/opent3code-lint-evidence/check.log"
+      - name: Typecheck
+        run: vpr typecheck
+      - uses: ./.github/actions/setup-apt-mirrors
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - name: Build desktop pipeline
+        run: vp run build:desktop
+      - name: Verify preload bundle output
+        run: node apps/desktop/scripts/verify-preload-bundle.mjs
+      - name: Upload maintained-file and lint diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
         with:
@@ -90,20 +131,13 @@ jobs:
             .github/workflows/desktop-macos-preview.yml
             .github/workflows/desktop-macos-preview-publish.yml
             docs/operations/pr-actions.md
+            apps/desktop/src/main.ts
+            vite.config.ts
+            oxlint-plugin-t3code/
+            package.json
+            pnpm-workspace.yaml
+            ${{ runner.temp }}/opent3code-lint-evidence/
           retention-days: 3
-      - name: Check unused code
-        run: vp run knip:check
-      - name: Check
-        run: vp check
-      - name: Typecheck
-        run: vpr typecheck
-      - uses: ./.github/actions/setup-apt-mirrors
-      - name: Install browser secret helper build libraries
-        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
-      - name: Build desktop pipeline
-        run: vp run build:desktop
-      - name: Verify preload bundle output
-        run: node apps/desktop/scripts/verify-preload-bundle.mjs
 
   test:
     name: Test

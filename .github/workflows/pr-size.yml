@@ -9,6 +9,7 @@ on:
     paths:
       - .github/workflows/pr-size.yml
       - .github/scripts/opent3code-pr.cjs
+      - .github/scripts/opent3code-pr.test.cjs
 
 permissions:
   contents: read
