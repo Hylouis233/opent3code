@@ -101,7 +101,10 @@ jobs:
       - name: Check formatting
         run: vp fmt --check
       - name: Check lint and types
-        run: vp check --no-fmt
+        shell: bash
+        run: |
+          set -o pipefail
+          vp check --no-fmt 2>&1 | tee "$RUNNER_TEMP/opent3code-lint-evidence/check.log"
       - name: Typecheck
         run: vpr typecheck
       - uses: ./.github/actions/setup-apt-mirrors
@@ -128,6 +131,11 @@ jobs:
             .github/workflows/desktop-macos-preview.yml
             .github/workflows/desktop-macos-preview-publish.yml
             docs/operations/pr-actions.md
+            apps/desktop/src/main.ts
+            vite.config.ts
+            oxlint-plugin-t3code/
+            package.json
+            pnpm-workspace.yaml
             ${{ runner.temp }}/opent3code-lint-evidence/
           retention-days: 3
 
