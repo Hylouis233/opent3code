@@ -126,7 +126,11 @@ function cappedFiles(nonTest = 0) {
 }
 
 test("complete lists retain exact size semantics, including exactly 3000 files", () => {
-  for (const files of [[], [{ filename: "src/a.ts", additions: 10, deletions: 0 }], cappedFiles()]) {
+  for (const files of [
+    [],
+    [{ filename: "src/a.ts", additions: 10, deletions: 0 }],
+    cappedFiles(),
+  ]) {
     assert.deepEqual(classifySizeWithCoverage(files, files.length), {
       ...classifySize(files),
       incomplete: false,
@@ -161,7 +165,12 @@ test("999 observed non-test lines cannot determine a capped PR size", () => {
 });
 
 test("incomplete pagination below the documented cap still fails closed", () => {
-  for (const [returned, expected] of [[0, 1], [99, 100], [2999, 3000], [2999, 5068]]) {
+  for (const [returned, expected] of [
+    [0, 1],
+    [99, 100],
+    [2999, 3000],
+    [2999, 5068],
+  ]) {
     assert.throws(
       () => classifySizeWithCoverage(cappedFiles().slice(0, returned), expected),
       /Incomplete file list/,
