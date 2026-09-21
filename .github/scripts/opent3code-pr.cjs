@@ -1,6 +1,8 @@
 const { Buffer } = require("node:buffer");
 
 const SIZE_NAMES = ["size:XS", "size:S", "size:M", "size:L", "size:XL", "size:XXL"];
+const MANAGED_SIZE_NAMES = [...SIZE_NAMES, "size:unknown"];
+const PR_FILES_API_LIMIT = 3000;
 const TRUST_NAMES = ["vouch:trusted", "vouch:unvouched", "vouch:denounced"];
 const LABELS = [
   ["size:XS", "0e8a16", "0-9 effective changed lines."],
@@ -9,6 +11,7 @@ const LABELS = [
   ["size:L", "fe7d37", "100-499 effective changed lines."],
   ["size:XL", "d93f0b", "500-999 effective changed lines."],
   ["size:XXL", "b60205", "1,000+ effective changed lines."],
+  ["size:unknown", "ededed", "File-list limit reached; size cannot be determined safely."],
   ["vouch:trusted", "1f883d", "Author has write access or is explicitly trusted by OpenT3Code."],
   ["vouch:unvouched", "fbca04", "New or unvouched contributor; contributions are welcome."],
   ["vouch:denounced", "d1242f", "Author is listed for maintainer review; no automatic closure."],
@@ -44,6 +47,25 @@ function classifySize(files) {
   const effective = nonTest === 0 ? test : nonTest;
   const index = [10, 30, 100, 500, 1000].findIndex((limit) => effective < limit);
   return { test, nonTest, effective, label: SIZE_NAMES[index === -1 ? 5 : index] };
+}
+
+function classifySizeWithCoverage(files, changedFiles) {
+  if (!Number.isSafeInteger(changedFiles) || changedFiles < 0 || files.length > changedFiles) {
+    throw new Error("Invalid changed-file count.");
+  }
+  const incomplete = files.length !== changedFiles;
+  if (incomplete && (files.length !== PR_FILES_API_LIMIT || changedFiles <= PR_FILES_API_LIMIT)) {
+    throw new Error(`Incomplete file list (${files.length}/${changedFiles}); refusing to guess size.`);
+  }
+  const result = classifySize(files);
+  if (!incomplete) return { ...result, incomplete };
+  // Tests-only totals may shrink when unseen production changes are included.
+  return {
+    ...result,
+    effective: null,
+    label: result.nonTest >= 1000 ? "size:XXL" : "size:unknown",
+    incomplete,
+  };
 }
 
 function validatePolicy(policy) {
@@ -143,16 +165,19 @@ async function labelPullRequests({ github, context, core, kind }) {
         pull_number: pull.number,
         per_page: 100,
       });
-      if (files.length !== pull.changed_files) {
-        throw new Error(
-          `PR #${pull.number}: incomplete file list (${files.length}/${pull.changed_files}); refusing to guess size.`,
+      const result = classifySizeWithCoverage(files, pull.changed_files);
+      if (result.incomplete) {
+        core.warning(
+          `PR #${pull.number}: GitHub returned ${files.length}/${pull.changed_files} files; ` +
+            `observed non-test lower bound ${result.nonTest} lines; ${result.label}.`,
         );
       }
-      const result = classifySize(files);
-      await syncLabel({ github, repo, pull, label: result.label, managed: SIZE_NAMES, core });
-      core.info(
-        `${result.nonTest} non-test + ${result.test} test lines; ${result.effective} effective.`,
-      );
+      await syncLabel({ github, repo, pull, label: result.label, managed: MANAGED_SIZE_NAMES, core });
+      if (!result.incomplete) {
+        core.info(
+          `${result.nonTest} non-test + ${result.test} test lines; ${result.effective} effective.`,
+        );
+      }
     } else {
       let permission =
         pull.user.login.toLowerCase() === repo.owner.toLowerCase() ? "admin" : "none";
@@ -176,4 +201,11 @@ async function labelPullRequests({ github, context, core, kind }) {
   }
 }
 
-module.exports = { classifySize, classifyTrust, validatePolicy, syncLabel, labelPullRequests };
+module.exports = {
+  classifySize,
+  classifySizeWithCoverage,
+  classifyTrust,
+  validatePolicy,
+  syncLabel,
+  labelPullRequests,
+};
