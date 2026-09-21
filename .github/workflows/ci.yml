@@ -97,8 +97,11 @@ jobs:
             cmp -- "$out/committed-$name" "$out/worktree-$name"
           done
           cat "$out/checkout-sha.txt" "$out/tree.txt"
-      - name: Check
-        run: vp check
+      # Keep formatting on the same standalone path used by the diff above.
+      - name: Check formatting
+        run: vp fmt --check
+      - name: Check lint and types
+        run: vp check --no-fmt
       - name: Typecheck
         run: vpr typecheck
       - uses: ./.github/actions/setup-apt-mirrors
