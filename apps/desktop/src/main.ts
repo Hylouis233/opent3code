@@ -161,9 +161,7 @@ const desktopSnapShotLayer = DesktopSnapShot.layer.pipe(
   Layer.provideMerge(desktopWindowLayer),
   Layer.provideMerge(desktopFoundationLayer),
 );
-const desktopAppActivationLayer = DesktopAppActivation.layer.pipe(
-  Layer.provide(desktopWindowLayer),
-);
+const desktopAppActivationLayer = DesktopAppActivation.layer.pipe(Layer.provide(desktopWindowLayer));
 
 // Pool layer instantiates the backend factory once for the Windows
 // primary instance and exposes it via pool.primary. Consumers go through
@@ -182,9 +180,7 @@ const desktopBackendLayer = DesktopBackendPool.layer.pipe(
 // WSL orchestrator hangs off the backend layer because it needs the
 // pool + configuration + serverExposure; it pulls NetService and the
 // foundation services through the same provideMerge chain.
-const desktopWslBackendLayer = DesktopWslBackend.layer.pipe(
-  Layer.provideMerge(desktopBackendLayer),
-);
+const desktopWslBackendLayer = DesktopWslBackend.layer.pipe(Layer.provideMerge(desktopBackendLayer));
 
 const desktopLocalEnvironmentAuthLayer = DesktopLocalEnvironmentAuth.layer.pipe(
   Layer.provideMerge(desktopBackendLayer),
