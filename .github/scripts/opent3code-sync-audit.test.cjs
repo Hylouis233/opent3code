@@ -91,7 +91,7 @@ test("real Git recovery inventory is complete and leaves branches and files unto
     GIT_COMMITTER_NAME: "Audit fixture",
     GIT_COMMITTER_EMAIL: "audit@example.invalid",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_COUNT: "0",
   };
   const g = (...args) =>

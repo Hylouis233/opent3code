@@ -3,6 +3,7 @@
 // Read-only recovery evidence. Never checks out, executes, pushes, or approves upstream code.
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const { spawnSync } = require("node:child_process");
 const { isUtf8 } = require("node:buffer");
 const SHA = /^[a-f0-9]{40}$/;
@@ -11,7 +12,6 @@ const SHA = /^[a-f0-9]{40}$/;
 // Reject invalid path bytes instead of silently replacing them in audit evidence.
 function decodeGitOutput(bytes) {
   if (!isUtf8(bytes)) throw Error("Git output is not valid UTF-8; no audit can be trusted.");
-  // oxlint-disable-next-line t3code/no-new-text-encoder-decoder -- Standalone CI audit cannot load workspace helpers; invalid UTF-8 was rejected above.
   return Buffer.from(bytes).toString("utf8");
 }
 
@@ -24,7 +24,7 @@ function git(repo, args, allowed = [0]) {
     PATH: process.env.PATH,
     HOME: path.dirname(repo),
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_COUNT: "0",
     GIT_TERMINAL_PROMPT: "0",
     GIT_NO_REPLACE_OBJECTS: "1",
