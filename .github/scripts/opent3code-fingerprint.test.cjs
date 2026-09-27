@@ -74,7 +74,7 @@ function fixture(native) {
     GIT_COMMITTER_NAME: "Fingerprint fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_COUNT: "0",
   };
   const git = (...args) => execFileSync("git", args, { cwd: root, env, encoding: "utf8" }).trim();
