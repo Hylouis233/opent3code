@@ -93,14 +93,33 @@ jobs:
           for platform in ios android; do
             npx expo-updates fingerprint:generate --platform "$platform" > "$RUNNER_TEMP/fp/head/$platform.json"
           done
-      - name: Fingerprint base
+      - name: Checkout fingerprint base
         if: steps.changes.outputs.relevant == 'true'
         env:
           BASE_SHA: ${{ steps.changes.outputs.base_sha }}
         run: |
           git -c submodule.recurse=false checkout --quiet --detach "$BASE_SHA"
-          pnpm install --filter=@t3tools/mobile...
-          cd apps/mobile
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+      - name: Setup Vite+ for base
+        if: steps.changes.outputs.relevant == 'true'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+      - name: Expose base pnpm
+        if: steps.changes.outputs.relevant == 'true'
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
+          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
+          "$vp_pnpm_bin/pnpm" --version
+      - name: Fingerprint base
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: apps/mobile
+        run: |
           for platform in ios android; do
             npx expo-updates fingerprint:generate --platform "$platform" > "$RUNNER_TEMP/fp/base/$platform.json"
           done

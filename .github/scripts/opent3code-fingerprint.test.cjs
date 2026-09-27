@@ -52,6 +52,9 @@ test("event coverage clears stale labels without installing irrelevant dependenc
     "Setup Vite+",
     "Expose pnpm",
     "Fingerprint merge result",
+    "Checkout fingerprint base",
+    "Setup Vite+ for base",
+    "Expose base pnpm",
     "Fingerprint base",
     "Upload fingerprint evidence",
   ]) {
@@ -315,4 +318,66 @@ test("the final publication recheck also waits for determinate mergeability", as
   });
   assert.equal(writes.length, 1);
   assert.deepEqual(delays, [3000]);
+});
+
+test("the base toolchain is selected after checkout and before base fingerprinting", () => {
+  const names = [
+    "Fingerprint merge result",
+    "Checkout fingerprint base",
+    "Setup Vite+ for base",
+    "Expose base pnpm",
+    "Fingerprint base",
+  ];
+  const positions = names.map((name) => workflow.indexOf(`      - name: ${name}\n`));
+  assert.ok(
+    positions.every(
+      (position, index) => position >= 0 && (!index || position > positions[index - 1]),
+    ),
+  );
+  const setup = workflow.slice(positions[2], positions[3]);
+  assert.match(setup, /uses: voidzero-dev\/setup-vp@v1/);
+  assert.match(setup, /node-version-file: package.json/);
+  assert.match(setup, /cache: false/);
+  assert.match(setup, /run-install: \|/);
+  assert.match(setup, /--filter=@t3tools\/mobile\.\.\./);
+  assert.doesNotMatch(workflow.slice(positions[1], positions[2]), /pnpm install/);
+});
+test("base pnpm exposure selects its declared version, never the head PATH binary", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "opent3code-pnpm-test-"));
+  const baseStep = workflow.slice(workflow.indexOf("      - name: Expose base pnpm\n"));
+  const expose = block(baseStep, "run", 8);
+  const bin = (version) => path.join(root, ".vite-plus/package_manager/pnpm", version, "pnpm/bin");
+  const output = path.join(root, "github-path");
+  const manifest = path.join(root, "package.json");
+  try {
+    for (const version of ["10.24.0", "10.23.0"]) {
+      fs.mkdirSync(bin(version), { recursive: true });
+      const executable = path.join(bin(version), "pnpm");
+      fs.writeFileSync(executable, `#!/bin/sh\necho ${version}\n`, { mode: 0o700 });
+    }
+    const env = {
+      ...process.env,
+      HOME: root,
+      GITHUB_PATH: output,
+      PATH: `${bin("10.24.0")}${path.delimiter}${process.env.PATH}`,
+    };
+    fs.writeFileSync(manifest, JSON.stringify({ packageManager: "pnpm@10.23.0" }));
+    fs.writeFileSync(output, "");
+    const result = spawnSync("bash", ["-e", "-c", expose], { cwd: root, env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "10.23.0");
+    assert.equal(fs.readFileSync(output, "utf8").trim(), bin("10.23.0"));
+    const next = execFileSync("pnpm", ["--version"], {
+      cwd: root,
+      env: { ...env, PATH: `${bin("10.23.0")}${path.delimiter}${env.PATH}` },
+      encoding: "utf8",
+    });
+    assert.equal(next.trim(), "10.23.0");
+    fs.writeFileSync(manifest, JSON.stringify({ packageManager: "pnpm@10.22.0" }));
+    const missing = spawnSync("bash", ["-e", "-c", expose], { cwd: root, env, encoding: "utf8" });
+    assert.notEqual(missing.status, 0);
+    assert.doesNotMatch(missing.stdout, /10\.24\.0/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
