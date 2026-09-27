@@ -55,7 +55,9 @@ test("event coverage clears stale labels without installing irrelevant dependenc
     "Fingerprint base",
     "Upload fingerprint evidence",
   ]) {
-    assert.ok(workflow.includes(`name: ${name}\n        if: steps.changes.outputs.relevant == 'true'`));
+    assert.ok(
+      workflow.includes(`name: ${name}\n        if: steps.changes.outputs.relevant == 'true'`),
+    );
   }
   assert.doesNotMatch(workflow, /github.event.pull_request.base.sha/);
   assert.match(workflow, /--depth=2/);
