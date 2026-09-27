@@ -22,7 +22,11 @@ Edit [opent3code-vouched.json](../../.github/opent3code-vouched.json) on the def
 
 ## Mobile, Windows and performance reports
 
-[Mobile Fingerprint Check](../../.github/workflows/mobile-fingerprint-check.yml) compares iOS/Android native fingerprints against the PR base when mobile-related paths change. All PRs receive an Actions summary and fingerprint artifacts. Same-repository PRs also receive the native-change label through a separate API-only job. This is advisory, not an unconditional required check.
+[Mobile Fingerprint Check](../../.github/workflows/mobile-fingerprint-check.yml) evaluates opened, synchronized, reopened and edited PRs. It verifies the exact merge candidate and uses its first parent as the comparison base, not the potentially stale base SHA in the event. Relevant inputs include mobile-related paths, root package.json, the lockfile and the fingerprint workflow. Each revision uses its own declared toolchain before generating its iOS/Android fingerprints.
+
+A successful relevant run produces an Actions summary and fingerprint artifacts. An irrelevant run produces a summary only: dependency setup, fingerprint generation and artifact upload are skipped deliberately. A missing artifact on that path is expected, not a failed comparison. A failed, approval-required or unfinished run is not successful fingerprint evidence.
+
+Same-repository PRs can add or clear the advisory native-change label through a separate API-only job; a current irrelevant result can clear a stale label. External fork PRs never receive label writes from this workflow. Publication rechecks the head, exact candidate and live base, with bounded retries for temporarily unknown mergeability. Stale or unresolved identities leave labels untouched. This workflow remains advisory, not an unconditional required check or release authorization.
 
 [Windows Tests](../../.github/workflows/windows-tests.yml) uses `windows-2025` and preserves upstream's manual diagnostic role. Select an optional workspace and relative test files through workflow dispatch. Inputs are passed through environment variables and validated, not interpolated into PowerShell code. This is not a claim that the entire Windows suite passes.
 

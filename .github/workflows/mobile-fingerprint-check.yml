@@ -4,17 +4,8 @@ name: Mobile Fingerprint Check
 # read-only token; label writes occur in a separate, API-only job.
 on:
   pull_request:
-    paths:
-      - apps/mobile/**
-      - packages/client-runtime/**
-      - packages/contracts/**
-      - packages/shared/**
-      - assets/**
-      - scripts/**
-      - patches/**
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - .github/workflows/mobile-fingerprint-check.yml
+    # Re-evaluate rebases and base changes even when native paths disappear.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -30,6 +21,9 @@ jobs:
     timeout-minutes: 45
     outputs:
       changed_platforms: ${{ steps.compare.outputs.changed_platforms }}
+      relevant: ${{ steps.changes.outputs.relevant }}
+      base_sha: ${{ steps.changes.outputs.base_sha }}
+      merge_sha: ${{ steps.changes.outputs.merge_sha }}
     env:
       APP_VARIANT: production
       NODE_OPTIONS: --max-old-space-size=8192
@@ -44,9 +38,39 @@ jobs:
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
-          git fetch --no-tags --filter=blob:none origin "$CHECKOUT_REF"
-          git checkout --detach FETCH_HEAD
+          git fetch --no-tags --no-recurse-submodules --depth=2 --filter=blob:none origin "$CHECKOUT_REF"
+          git -c submodule.recurse=false checkout --detach FETCH_HEAD
+      - id: changes
+        name: Detect native fingerprint inputs
+        shell: bash
+        env:
+          EXPECTED_MERGE: ${{ github.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merge_sha=$(git rev-parse --verify HEAD)
+          test "$merge_sha" = "$EXPECTED_MERGE"
+          read -ra parents <<< "$(git show -s --format=%P HEAD)"
+          test "${#parents[@]}" -eq 2
+          test "${parents[1]}" = "$EXPECTED_HEAD"
+          base_sha="${parents[0]}"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+          status=0
+          git diff --quiet --no-renames --no-ext-diff --no-textconv "$base_sha" HEAD -- \
+            apps/mobile/ packages/client-runtime/ packages/contracts/ packages/shared/ \
+            assets/ scripts/ patches/ package.json pnpm-lock.yaml pnpm-workspace.yaml \
+            .github/workflows/mobile-fingerprint-check.yml || status=$?
+          case "$status" in
+            0)
+              echo "relevant=false" >> "$GITHUB_OUTPUT"
+              echo "No native fingerprint inputs changed; any current native change label can be cleared." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            1) echo "relevant=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Could not inspect native fingerprint inputs." >&2; exit "$status" ;;
+          esac
       - name: Setup Vite+
+        if: steps.changes.outputs.relevant == 'true'
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
@@ -55,30 +79,53 @@ jobs:
             args:
               - --filter=@t3tools/mobile...
       - name: Expose pnpm
+        if: steps.changes.outputs.relevant == 'true'
         run: |
           pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
           vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
           echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
           "$vp_pnpm_bin/pnpm" --version
       - name: Fingerprint merge result
+        if: steps.changes.outputs.relevant == 'true'
         working-directory: apps/mobile
         run: |
           mkdir -p "$RUNNER_TEMP/fp/head" "$RUNNER_TEMP/fp/base"
           for platform in ios android; do
             npx expo-updates fingerprint:generate --platform "$platform" > "$RUNNER_TEMP/fp/head/$platform.json"
           done
-      - name: Fingerprint base
+      - name: Checkout fingerprint base
+        if: steps.changes.outputs.relevant == 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.changes.outputs.base_sha }}
         run: |
-          git checkout --quiet "$BASE_SHA"
-          pnpm install --filter=@t3tools/mobile...
-          cd apps/mobile
+          git -c submodule.recurse=false checkout --quiet --detach "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+      - name: Setup Vite+ for base
+        if: steps.changes.outputs.relevant == 'true'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+      - name: Expose base pnpm
+        if: steps.changes.outputs.relevant == 'true'
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
+          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
+          "$vp_pnpm_bin/pnpm" --version
+      - name: Fingerprint base
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: apps/mobile
+        run: |
           for platform in ios android; do
             npx expo-updates fingerprint:generate --platform "$platform" > "$RUNNER_TEMP/fp/base/$platform.json"
           done
       - id: compare
         name: Compare fingerprints
+        if: steps.changes.outputs.relevant == 'true'
         run: |
           changed=""
           {
@@ -97,6 +144,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "changed_platforms=${changed# }" >> "$GITHUB_OUTPUT"
       - name: Upload fingerprint evidence
+        if: steps.changes.outputs.relevant == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: native-fingerprints
@@ -121,15 +169,47 @@ jobs:
         uses: actions/github-script@v8
         env:
           CHANGED_PLATFORMS: ${{ needs.fingerprint.outputs.changed_platforms }}
+          FINGERPRINT_RELEVANT: ${{ needs.fingerprint.outputs.relevant }}
+          CHECKED_BASE: ${{ needs.fingerprint.outputs.base_sha }}
+          CHECKED_MERGE: ${{ needs.fingerprint.outputs.merge_sha }}
         with:
           script: |
             const repo = context.repo;
-            const number = context.payload.pull_request.number;
-            const { data: pull } = await github.rest.pulls.get({ ...repo, pull_number: number });
-            if (pull.state !== "open" || pull.head.sha !== context.payload.pull_request.head.sha) return;
+            const eventPull = context.payload.pull_request;
+            const number = eventPull.number;
             const value = process.env.CHANGED_PLATFORMS ?? "";
-            if (!["", "ios", "android", "ios android"].includes(value)) {
-              throw new Error("Invalid fingerprint output.");
+            const relevant = process.env.FINGERPRINT_RELEVANT;
+            const base = process.env.CHECKED_BASE;
+            const merge = process.env.CHECKED_MERGE;
+            if (!["", "ios", "android", "ios android"].includes(value) ||
+                !["true", "false"].includes(relevant) || (relevant === "false" && value !== "") ||
+                !/^[a-f0-9]{40}$/.test(base ?? "") || !/^[a-f0-9]{40}$/.test(merge ?? "") ||
+                merge !== context.sha) {
+              throw new Error("Invalid fingerprint output or candidate identity.");
+            }
+            const currentPull = async () => {
+              for (let attempt = 0; attempt < 8; attempt++) {
+                const { data: pull } = await github.rest.pulls.get({ ...repo, pull_number: number });
+                const fullName = `${repo.owner}/${repo.repo}`;
+                if (pull.state !== "open" || pull.head.sha !== eventPull.head.sha ||
+                    pull.head.repo?.full_name !== fullName || pull.base.repo?.full_name !== fullName ||
+                    pull.base.ref !== eventPull.base.ref) return null;
+                // GitHub computes mergeability asynchronously after PR events.
+                // Retry only an unknown state; never treat it as successful evidence.
+                if (pull.mergeable === null) {
+                  if (attempt === 7) return null;
+                  await new Promise((resolve) => setTimeout(resolve, 3000));
+                  continue;
+                }
+                if (pull.mergeable !== true || pull.merge_commit_sha !== merge) return null;
+                const { data: branch } = await github.rest.repos.getBranch({ ...repo, branch: pull.base.ref });
+                return branch.commit.sha === base ? pull : null;
+              }
+              return null;
+            };
+            if (!(await currentPull())) {
+              core.notice("Fingerprint candidate or base moved; labels left unchanged.");
+              return;
             }
             const name = "📱 Native Change";
             try {
@@ -142,6 +222,12 @@ jobs:
                 if (createError.status !== 422) throw createError;
                 await github.rest.issues.getLabel({ ...repo, name });
               }
+            }
+            // Recheck both refs immediately before changing PR labels.
+            const pull = await currentPull();
+            if (!pull) {
+              core.notice("Fingerprint candidate or base moved during publication; labels left unchanged.");
+              return;
             }
             const hasLabel = pull.labels.some((label) => label.name === name);
             if (value && !hasLabel) {
