@@ -168,6 +168,7 @@ async function publish(options = {}) {
       pulls: {
         get: async () => {
           reads += 1;
+          options.reads?.push(reads);
           const current = structuredClone(pull);
           if (options.changePull) options.changePull(current, reads);
           return { data: current };
@@ -196,6 +197,10 @@ async function publish(options = {}) {
     context,
     core: { notice() {} },
     process: { env },
+    setTimeout(callback, milliseconds) {
+      options.delays?.push(milliseconds);
+      callback();
+    },
   });
   return writes;
 }
@@ -251,4 +256,63 @@ test("missing and malformed outputs never become unchanged fingerprint evidence"
     { CHANGED_PLATFORMS: "ios\nandroid" },
   ])
     await assert.rejects(() => publish({ env }), /Invalid fingerprint output/);
+});
+
+test("indeterminate mergeability is retried before publishing a current result", async () => {
+  const reads = [];
+  const delays = [];
+  const writes = await publish({
+    reads,
+    delays,
+    changePull(pull, count) {
+      if (count < 3) {
+        pull.mergeable = null;
+        pull.merge_commit_sha = null;
+      }
+    },
+  });
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0][0], "add");
+  assert.deepEqual(delays, [3000, 3000]);
+  assert.deepEqual(reads, [1, 2, 3, 4]);
+});
+test("exhausted unknown mergeability cannot clear a stale label", async () => {
+  const reads = [];
+  const delays = [];
+  const writes = await publish({
+    reads,
+    delays,
+    hasLabel: true,
+    env: { FINGERPRINT_RELEVANT: "false", CHANGED_PLATFORMS: "" },
+    changePull(pull) {
+      pull.mergeable = null;
+      pull.merge_commit_sha = null;
+    },
+  });
+  assert.equal(writes.length, 0);
+  assert.equal(reads.length, 8);
+  assert.deepEqual(delays, Array(7).fill(3000));
+});
+test("a head change during mergeability retries stops publication", async () => {
+  const delays = [];
+  const writes = await publish({
+    delays,
+    changePull(pull, count) {
+      if (count === 1) pull.mergeable = null;
+      else pull.head.sha = "d".repeat(40);
+    },
+  });
+  assert.equal(writes.length, 0);
+  assert.deepEqual(delays, [3000]);
+});
+test("the final publication recheck also waits for determinate mergeability", async () => {
+  const delays = [];
+  const writes = await publish({
+    delays,
+    changePull(pull, count) {
+      if (count === 2) pull.mergeable = null;
+    },
+  });
+  assert.equal(writes.length, 1);
+  assert.deepEqual(delays, [3000]);
 });

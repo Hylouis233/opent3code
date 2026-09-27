@@ -169,14 +169,24 @@ jobs:
               throw new Error("Invalid fingerprint output or candidate identity.");
             }
             const currentPull = async () => {
-              const { data: pull } = await github.rest.pulls.get({ ...repo, pull_number: number });
-              const fullName = `${repo.owner}/${repo.repo}`;
-              if (pull.state !== "open" || pull.head.sha !== eventPull.head.sha ||
-                  pull.head.repo?.full_name !== fullName || pull.base.repo?.full_name !== fullName ||
-                  pull.base.ref !== eventPull.base.ref || pull.mergeable !== true ||
-                  pull.merge_commit_sha !== merge) return null;
-              const { data: branch } = await github.rest.repos.getBranch({ ...repo, branch: pull.base.ref });
-              return branch.commit.sha === base ? pull : null;
+              for (let attempt = 0; attempt < 8; attempt++) {
+                const { data: pull } = await github.rest.pulls.get({ ...repo, pull_number: number });
+                const fullName = `${repo.owner}/${repo.repo}`;
+                if (pull.state !== "open" || pull.head.sha !== eventPull.head.sha ||
+                    pull.head.repo?.full_name !== fullName || pull.base.repo?.full_name !== fullName ||
+                    pull.base.ref !== eventPull.base.ref) return null;
+                // GitHub computes mergeability asynchronously after PR events.
+                // Retry only an unknown state; never treat it as successful evidence.
+                if (pull.mergeable === null) {
+                  if (attempt === 7) return null;
+                  await new Promise((resolve) => setTimeout(resolve, 3000));
+                  continue;
+                }
+                if (pull.mergeable !== true || pull.merge_commit_sha !== merge) return null;
+                const { data: branch } = await github.rest.repos.getBranch({ ...repo, branch: pull.base.ref });
+                return branch.commit.sha === base ? pull : null;
+              }
+              return null;
             };
             if (!(await currentPull())) {
               core.notice("Fingerprint candidate or base moved; labels left unchanged.");
