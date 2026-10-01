@@ -74,6 +74,14 @@ test("diagnostics flag release policy and independent integrations for review", 
     "integrations/dsh-opent3code/package.json",
     "apps/server/src/provider/Drivers/ExternalAcpDriver.ts",
     "scripts/opent3code-preview.mjs",
+    "apps/server/src/provider/acp/AcpSessionRuntime.ts",
+    "apps/server/src/provider/providerCompatibility.ts",
+    "packages/contracts/src/model.ts",
+    "packages/contracts/src/settings.ts",
+    "apps/web/src/components/settings/providerDriverMeta.ts",
+    "docs/user/opent3code-preview.md",
+    "knip.jsonc",
+    "apps/mobile/app.config.ts",
   ])
     assert.equal(sensitive(name), true);
   assert.equal(sensitive("apps/web/src/simple.ts"), false);

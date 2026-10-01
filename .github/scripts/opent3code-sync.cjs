@@ -24,7 +24,17 @@ function protectedPath(path) {
     path.startsWith(".github/actions/") ||
     path.startsWith(".github/scripts/opent3code-") ||
     path.startsWith("docs/assets/opent3code-") ||
-    path === "docs/operations/opent3code.md"
+    path === "docs/operations/opent3code.md" ||
+    // Shared provider and wire changes can silently alter fork-only MCode/DSH behavior.
+    // Keep this standalone policy self-contained: the workflow loads it through the API.
+    path.startsWith("apps/server/src/provider/") ||
+    path.startsWith("packages/contracts/") ||
+    path === "apps/web/src/components/settings/providerDriverMeta.ts" ||
+    path.startsWith("integrations/dsh-opent3code/") ||
+    path === "scripts/opent3code-preview.mjs" ||
+    path === "docs/user/opent3code-preview.md" ||
+    path === "knip.jsonc" ||
+    path === "apps/mobile/app.config.ts"
   );
 }
 
