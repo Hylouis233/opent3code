@@ -49,9 +49,21 @@ function classifySize(files) {
   return { test, nonTest, effective, label: SIZE_NAMES[index === -1 ? 5 : index] };
 }
 
+function hasValidChangedFileCount(files, changedFiles) {
+  return Number.isSafeInteger(changedFiles) && changedFiles >= 0 && files.length <= changedFiles;
+}
+
+function describeChangedFileCount(changedFiles) {
+  return changedFiles == null || typeof changedFiles === "number"
+    ? String(changedFiles)
+    : typeof changedFiles;
+}
+
 function classifySizeWithCoverage(files, changedFiles) {
-  if (!Number.isSafeInteger(changedFiles) || changedFiles < 0 || files.length > changedFiles) {
-    throw new Error("Invalid changed-file count.");
+  if (!hasValidChangedFileCount(files, changedFiles)) {
+    throw new Error(
+      `Invalid changed-file count (${describeChangedFileCount(changedFiles)}; ${files.length} returned files).`,
+    );
   }
   const incomplete = files.length !== changedFiles;
   if (incomplete && (files.length !== PR_FILES_API_LIMIT || changedFiles <= PR_FILES_API_LIMIT)) {
@@ -113,9 +125,34 @@ async function ensureLabels(github, repo) {
   }
 }
 
+function isCurrentPull(current, pull) {
+  return (
+    current.state === "open" &&
+    current.head.sha === pull.head.sha &&
+    current.base?.sha === pull.base?.sha
+  );
+}
+
+async function refreshSizeMetadata({ github, repo, pull, files, core }) {
+  // Diff metadata can lag the file-list response. Never infer or coerce its count.
+  for (let retry = 1; retry <= 2 && !hasValidChangedFileCount(files, pull.changed_files); retry++) {
+    core.warning(
+      `PR #${pull.number}: invalid changed-file count ${describeChangedFileCount(pull.changed_files)}; ` +
+        `${files.length} returned files; metadata refresh ${retry}/2.`,
+    );
+    const { data: current } = await github.rest.pulls.get({ ...repo, pull_number: pull.number });
+    if (!isCurrentPull(current, pull)) {
+      core.info(`PR #${pull.number} changed while being classified; skipping stale result.`);
+      return null;
+    }
+    pull = current;
+  }
+  return pull;
+}
+
 async function syncLabel({ github, repo, pull, label, managed, core }) {
   const { data: current } = await github.rest.pulls.get({ ...repo, pull_number: pull.number });
-  if (current.state !== "open" || current.head.sha !== pull.head.sha) {
+  if (!isCurrentPull(current, pull)) {
     core.info(`PR #${pull.number} changed while being classified; skipping stale result.`);
     return;
   }
@@ -159,7 +196,7 @@ async function labelPullRequests({ github, context, core, kind }) {
       ? [context.payload.pull_request]
       : await github.paginate(github.rest.pulls.list, { ...repo, state: "open", per_page: 100 });
   for (const candidate of pulls) {
-    const { data: pull } = await github.rest.pulls.get({ ...repo, pull_number: candidate.number });
+    let { data: pull } = await github.rest.pulls.get({ ...repo, pull_number: candidate.number });
     if (pull.state !== "open") continue;
     if (kind === "size") {
       const files = await github.paginate(github.rest.pulls.listFiles, {
@@ -167,6 +204,8 @@ async function labelPullRequests({ github, context, core, kind }) {
         pull_number: pull.number,
         per_page: 100,
       });
+      pull = await refreshSizeMetadata({ github, repo, pull, files, core });
+      if (!pull) continue;
       const result = classifySizeWithCoverage(files, pull.changed_files);
       if (result.incomplete) {
         core.warning(
