@@ -194,6 +194,7 @@ function labelHarness(files, changedFiles, existingLabel = "size:S", currentSha 
     number: 4,
     state: "open",
     head: { sha: "same" },
+    base: { sha: "base" },
     changed_files: changedFiles,
     labels: [{ name: existingLabel }, { name: "bug" }],
   };
@@ -287,4 +288,99 @@ test("file-list API failures propagate instead of creating an unknown label", as
   await assert.rejects(labelPullRequests(args), /API unavailable/);
   assert.deepEqual(calls.added, []);
   assert.deepEqual(calls.removed, []);
+});
+
+function sequenceMetadata(harness, updates) {
+  const pull = harness.args.context.payload.pull_request;
+  const reads = [];
+  harness.args.github.rest.pulls.get = async () => {
+    const update = updates[Math.min(reads.length, updates.length - 1)];
+    reads.push(update);
+    return { data: { ...pull, ...update } };
+  };
+  return reads;
+}
+
+test("invalid changed-file metadata is refreshed without coercion on the same revision", async () => {
+  for (const changed_files of [undefined, null, -1, NaN, Infinity, 0.5, "1", 0]) {
+    const harness = labelHarness(
+      [{ filename: "src/a.ts", additions: 10, deletions: 0 }],
+      1,
+      "size:XS",
+    );
+    const reads = sequenceMetadata(harness, [{ changed_files }, { changed_files: 1 }]);
+    await labelPullRequests(harness.args);
+    assert.equal(reads.length, 3);
+    assert.deepEqual(harness.calls.added, ["size:S"]);
+    assert.deepEqual(harness.calls.removed, ["size:XS"]);
+    assert.match(harness.calls.warnings[0], /changed-file.*1 returned.*refresh 1\/2/);
+    assert.ok(harness.calls.info.some((line) => line.includes("10 effective")));
+  }
+});
+
+test("a second metadata refresh can recover a capped list without claiming exact totals", async () => {
+  const harness = labelHarness(cappedFiles(1000), 0);
+  const reads = sequenceMetadata(harness, [
+    { changed_files: 0 },
+    { changed_files: null },
+    { changed_files: 5903 },
+  ]);
+  await labelPullRequests(harness.args);
+  assert.equal(reads.length, 4);
+  assert.deepEqual(harness.calls.added, ["size:XXL"]);
+  assert.match(harness.calls.warnings[2], /3000\/5903.*lower bound 1000/);
+  assert.ok(!harness.calls.info.some((line) => line.includes("effective")));
+});
+
+test("persistent invalid metadata fails closed after two refreshes", async () => {
+  for (const changed_files of [undefined, null, -1, NaN, Infinity, 0.5, "1", 0]) {
+    const harness = labelHarness([{ filename: "src/a.ts", additions: 10, deletions: 0 }], 1);
+    const reads = sequenceMetadata(harness, [{ changed_files }]);
+    await assert.rejects(labelPullRequests(harness.args), /Invalid changed-file count/);
+    assert.equal(reads.length, 3);
+    assert.equal(harness.calls.warnings.length, 2);
+    assert.deepEqual(harness.calls.added, []);
+    assert.deepEqual(harness.calls.removed, []);
+  }
+});
+
+test("metadata refresh skips changed heads, changed bases, and closed PRs", async () => {
+  for (const update of [{ head: { sha: "new" } }, { base: { sha: "new" } }, { state: "closed" }]) {
+    const harness = labelHarness(cappedFiles(1000), 0);
+    const reads = sequenceMetadata(harness, [
+      { changed_files: 0 },
+      { changed_files: 5903, ...update },
+    ]);
+    await labelPullRequests(harness.args);
+    assert.equal(reads.length, 2);
+    assert.deepEqual(harness.calls.added, []);
+    assert.deepEqual(harness.calls.removed, []);
+    assert.ok(harness.calls.info.some((line) => line.includes("skipping stale result")));
+  }
+});
+
+test("a base change after metadata recovery still cannot publish labels", async () => {
+  const harness = labelHarness(cappedFiles(1000), 0);
+  sequenceMetadata(harness, [
+    { changed_files: 0 },
+    { changed_files: 5903 },
+    { changed_files: 5903, base: { sha: "new" } },
+  ]);
+  await labelPullRequests(harness.args);
+  assert.deepEqual(harness.calls.added, []);
+  assert.deepEqual(harness.calls.removed, []);
+});
+
+test("metadata refresh API errors propagate without changing labels", async () => {
+  const harness = labelHarness(cappedFiles(1000), 0);
+  const get = harness.args.github.rest.pulls.get;
+  let reads = 0;
+  harness.args.github.rest.pulls.get = async () => {
+    if (++reads > 1) throw new Error("metadata API unavailable");
+    return get();
+  };
+  await assert.rejects(labelPullRequests(harness.args), /metadata API unavailable/);
+  assert.equal(reads, 2);
+  assert.deepEqual(harness.calls.added, []);
+  assert.deepEqual(harness.calls.removed, []);
 });
