@@ -32,7 +32,7 @@ test("upstream ancestry is interpreted in the correct direction", () => {
     assert.equal(alreadyContainsUpstream(state), false);
 });
 test("application-only changes are eligible for validation, not automatically trusted", () => {
-  assert.equal(reviewRequired([{ filename: "apps/server/src/provider/Example.ts" }]), false);
+  assert.equal(reviewRequired([{ filename: "apps/web/src/simple.ts" }]), false);
 });
 test("branding, policy, automation and renamed protected paths require review", () => {
   for (const filename of [
@@ -53,6 +53,33 @@ test("branding, policy, automation and renamed protected paths require review", 
     );
   }
 });
+const integrationPaths = [
+  "apps/server/src/provider/builtInDrivers.ts",
+  "apps/server/src/provider/Drivers/ExternalAcpDriver.ts",
+  "apps/server/src/provider/acp/ExternalAcpPolicy.ts",
+  "apps/server/src/provider/acp/AcpSessionRuntime.ts",
+  "apps/server/src/provider/providerCompatibility.ts",
+  "packages/contracts/src/model.ts",
+  "packages/contracts/src/settings.ts",
+  "apps/web/src/components/settings/providerDriverMeta.ts",
+  "integrations/dsh-opent3code/prepare-profile.mjs",
+  "scripts/opent3code-preview.mjs",
+  "docs/user/opent3code-preview.md",
+  "knip.jsonc",
+  "apps/mobile/app.config.ts",
+];
+
+test("provider compatibility and fork integration boundaries always require review", () => {
+  for (const filename of integrationPaths) {
+    assert.equal(reviewRequired([{ filename }]), true, filename);
+    assert.equal(
+      reviewRequired([{ filename: "moved.txt", previous_filename: filename }]),
+      true,
+      filename,
+    );
+  }
+});
+
 test("missing or truncated comparison fails closed", () => {
   assert.equal(reviewRequired(undefined), true);
   assert.equal(
@@ -266,7 +293,12 @@ test("valid but outdated merge parents cannot satisfy a current-base validation"
   assert.throws(() => assertMergeable(expected, verified, base, true), /moved/);
 });
 
-function syncFixture({ protectedFiles = false, parentBase = base, moveBeforeMerge = false } = {}) {
+function syncFixture({
+  protectedFiles = false,
+  files,
+  parentBase = base,
+  moveBeforeMerge = false,
+} = {}) {
   const outputs = {};
   const warnings = [];
   const merges = [];
@@ -305,7 +337,7 @@ function syncFixture({ protectedFiles = false, parentBase = base, moveBeforeMerg
           data:
             args.base === head
               ? { status: "diverged" }
-              : { files: [{ filename: protectedFiles ? "AGENTS.md" : "apps/a.ts" }] },
+              : { files: files ?? [{ filename: protectedFiles ? "AGENTS.md" : "apps/a.ts" }] },
         }),
         getCombinedStatusForRef: async () => ({ data: { total_count: 0 } }),
       },
@@ -386,4 +418,20 @@ test("merge still refuses protected changes after stale-base metadata is correct
     /Protected files/,
   );
   assert.deepEqual(fixture.merges, []);
+});
+
+test("provider integration changes cannot reach automatic merge after successful validation", async () => {
+  for (const filename of integrationPaths) {
+    for (const file of [{ filename }, { filename: "moved.txt", previous_filename: filename }]) {
+      const fixture = syncFixture({ files: [file] });
+      await prepare(fixture);
+      assert.equal(fixture.outputs.merge, merge, filename);
+      assert.equal(fixture.outputs.auto_merge, "false", filename);
+      await assert.rejects(
+        mergeUpstream({ ...fixture, expected: { ...expected, pr: 1, validationSucceeded: true } }),
+        /Protected files/,
+      );
+      assert.deepEqual(fixture.merges, [], filename);
+    }
+  }
 });

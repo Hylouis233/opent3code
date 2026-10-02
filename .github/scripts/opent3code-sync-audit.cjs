@@ -104,7 +104,12 @@ function sensitive(filename) {
     filename.includes("opent3code") ||
     filename.includes("ExternalAcp") ||
     filename.endsWith("provider/builtInDrivers.ts") ||
-    filename.endsWith("providerDriverMeta.ts")
+    filename.endsWith("providerDriverMeta.ts") ||
+    // These shared integration surfaces also require review in the sync merge policy.
+    filename.startsWith("apps/server/src/provider/") ||
+    filename.startsWith("packages/contracts/") ||
+    filename === "knip.jsonc" ||
+    filename === "apps/mobile/app.config.ts"
   );
 }
 function analyze(repo, base, head) {
