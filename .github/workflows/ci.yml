@@ -172,7 +172,9 @@ jobs:
       - name: Test nightly release checks
         run: node --test .github/scripts/check-nightly-release.test.cjs
       - name: Test
-        run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
+        # Each workspace already runs a Vitest worker pool. Avoid overlapping
+        # four pools on the fork runner and starving generated-schema tests.
+        run: vp run --parallel --concurrency-limit 1 --filter '!t3' --filter '!@t3tools/monorepo' test
 
   test_server:
     name: Test Server ${{ matrix.shard }}

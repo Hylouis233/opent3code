@@ -128,6 +128,9 @@ it.layer(NodeServices.layer)("OpenT3Code official ACP providers", (it) => {
           const snapshot = yield* h.instance.snapshot.getSnapshot;
           assert.equal(snapshot.installed, true);
           assert.equal(snapshot.auth.status, "unknown");
+          const maintenance = yield* h.instance.snapshot.resolveMaintenance();
+          assert.equal(maintenance.packageName, null);
+          assert.equal(maintenance.update, null);
           const session = yield* h.adapter.startSession(h.start);
           assert.equal(session.status, "ready");
           assert.equal(session.providerInstanceId, `${kind}-test`);
