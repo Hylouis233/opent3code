@@ -34,7 +34,9 @@ const refs = [];
 const checkpoints = [];
 const count = Number(process.argv[4] ?? 4);
 const bytes = Number(process.argv[5] ?? 32768);
+const runtimeLifetime = {};
 const session = {
+  runtimeLifetime,
   driver: "codex",
   providerSession: { id: "session", driver: "codex" },
   resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
@@ -72,6 +74,7 @@ const dependencies = Layer.mergeAll(
   Layer.mock(Run.RunExecutionServiceV2)({
     startRootRun: (input) =>
       Effect.gen(function* () {
+        NodeAssert.strictEqual(input.session.runtimeLifetime, runtimeLifetime);
         liveRuns.push(input);
         const turnInput = { ...input, message: input.message };
         const result = yield* Effect.exit(

@@ -9438,6 +9438,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         acceptedAt,
         events: plan.events,
         effects: plan.effects,
+        // Resolution retains the identity/capability read during planning.
+        // Cleanup can commit independently of this thread's command lock, so
+        // all resolutions must still see that pending request at commit time.
+        expectedRuntimeRequests: plan.events.flatMap((event) =>
+          event.type === "runtime-request.updated" && event.payload.status === "resolved"
+            ? [{ ...event.payload, status: "pending" as const }]
+            : [],
+        ),
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
@@ -9454,10 +9462,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
 
     if (committed.receipt.status === "rejected") {
-      return yield* new OrchestratorCommandPreviouslyRejectedError({
+      return yield* new OrchestratorCommandRejectedError({
         commandId: command.commandId,
         commandType: command.type,
-        detail: committed.receipt.error ?? "Previously rejected.",
+        cause: committed.receipt.error ?? "Previously rejected.",
       });
     }
     if (command.type === "queue.resume") {

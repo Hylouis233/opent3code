@@ -12,6 +12,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 
 export class RuntimeRequestResponseExecutionError extends Schema.TaggedError<RuntimeRequestResponseExecutionError>()(
@@ -66,12 +67,15 @@ export class RuntimeRequestServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   RuntimeRequestServiceV2,
   never,
-  ProjectionStore.ProjectionStoreV2 | ProviderSessionManager.ProviderSessionManagerV2
+  | ProjectionStore.ProjectionStoreV2
+  | ProviderSessionManager.ProviderSessionManagerV2
+  | ProviderEventIngestor.ProviderEventIngestorV2
 > = Layer.effect(
   RuntimeRequestServiceV2,
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+    const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
 
     return RuntimeRequestServiceV2.of({
       respond: (input) =>
@@ -115,7 +119,20 @@ export const layer: Layer.Layer<
               requestId: input.requestId,
             });
           }
-          yield* session.value.respondToRuntimeRequest({
+          // Capture once. A later replacement of this logical session ID must
+          // never receive an old lifetime's queued response effect.
+          const runtime = session.value;
+          if (
+            !(yield* ingestor.ownsRequest(runtime.runtimeLifetime, input.threadId, input.requestId))
+          ) {
+            return yield* new RuntimeRequestResponseExecutionError({
+              reason: "request-not-resumable",
+              threadId: input.threadId,
+              providerSessionId: input.providerSessionId,
+              requestId: input.requestId,
+            });
+          }
+          yield* runtime.respondToRuntimeRequest({
             requestId: input.requestId,
             ...(input.decision === undefined ? {} : { decision: input.decision }),
             ...(input.answers === undefined ? {} : { answers: input.answers }),

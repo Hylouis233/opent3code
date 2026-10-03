@@ -13,6 +13,7 @@ import {
   type OrchestrationV2TurnItem,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
   PlanId,
   RunAttemptId,
   RunId,
@@ -24,6 +25,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -33,6 +35,9 @@ import * as EventStore from "./EventStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
+import type { ProviderRuntimeLifetime } from "./ProviderRuntimeLifetime.ts";
+import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
 import {
@@ -133,6 +138,24 @@ function threadCreatedEvent(
   });
 }
 
+// Each test fixture captures one real lifetime per resident test runtime.
+const testIngestor = Effect.gen(function* () {
+  const service = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+  const tokens = new Map<ProviderSessionId, ProviderRuntimeLifetime>();
+  type Input = Parameters<typeof service.ingestNormalized>[0];
+  const ingestNormalized = (input: Omit<Input, "runtimeLifetime">) =>
+    Effect.gen(function* () {
+      let token = tokens.get(input.providerSessionId);
+      if (token === undefined) {
+        token = yield* service.createLifetime(input.providerSessionId);
+        service.activateLifetime(token);
+        tokens.set(input.providerSessionId, token);
+      }
+      return yield* service.ingestNormalized({ ...input, runtimeLifetime: token });
+    });
+  return { ...service, ingestNormalized };
+});
+
 const layer = it.layer(TestLayer);
 
 it.effect("records accepted billed turn usage once without billing the context window", () => {
@@ -146,7 +169,7 @@ it.effect("records accepted billed turn usage once without billing the context w
   return Effect.gen(function* () {
     const now = yield* DateTime.now;
     const eventSink = yield* EventSink.EventSinkV2;
-    const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+    const ingestor = yield* testIngestor;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const threadEvent = yield* threadCreatedEvent(now);
     yield* eventSink.write({ events: [threadEvent] });
@@ -242,7 +265,7 @@ layer("ProviderEventIngestorV2", (it) => {
       const eventSink = yield* EventSink.EventSinkV2;
       const eventStore = yield* EventStore.EventStoreV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const ingestor = yield* testIngestor;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const threadEvent = yield* threadCreatedEvent(now);
       const providerSessionId = yield* idAllocator.allocate.providerSession({
@@ -323,7 +346,7 @@ layer("ProviderEventIngestorV2", (it) => {
       const now = yield* DateTime.now;
       const eventSink = yield* EventSink.EventSinkV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const ingestor = yield* testIngestor;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const threadEvent = yield* threadCreatedEvent(now);
       const providerSessionId = yield* idAllocator.allocate.providerSession({
@@ -342,10 +365,7 @@ layer("ProviderEventIngestorV2", (it) => {
         status: "active",
         steps,
       });
-      const ingest = (
-        service: ProviderEventIngestor.ProviderEventIngestorV2["Service"],
-        steps: TodoListPlan["steps"],
-      ) =>
+      const ingest = (service: typeof ingestor, steps: TodoListPlan["steps"]) =>
         service.ingestNormalized({
           providerSessionId,
           providerInstanceId: modelSelection.instanceId,
@@ -366,7 +386,7 @@ layer("ProviderEventIngestorV2", (it) => {
         { id: "fallback", text: "Report", status: "pending" },
       ]);
 
-      const restartedIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2.pipe(
+      const restartedIngestor = yield* testIngestor.pipe(
         Effect.provide(
           Layer.fresh(ProviderEventIngestor.layer).pipe(
             Layer.provide(
@@ -437,7 +457,7 @@ layer("ProviderEventIngestorV2", (it) => {
     "treats successful provider terminal markers as non-persisted orchestration control signals",
     () =>
       Effect.gen(function* () {
-        const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+        const ingestor = yield* testIngestor;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
         const projectId = yield* idAllocator.allocate.project({
           fixtureName: "provider-event-terminal",
@@ -481,7 +501,7 @@ layer("ProviderEventIngestorV2", (it) => {
       const now = yield* DateTime.now;
       const eventSink = yield* EventSink.EventSinkV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const ingestor = yield* testIngestor;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const threadEvent = yield* threadCreatedEvent(now);
       const priorRunId = RunId.make("run:provider-event-inherited:prior");
@@ -595,7 +615,7 @@ layer("ProviderEventIngestorV2", (it) => {
       const now = yield* DateTime.now;
       const eventSink = yield* EventSink.EventSinkV2;
       const eventStore = yield* EventStore.EventStoreV2;
-      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const ingestor = yield* testIngestor;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const threadEvent = yield* threadCreatedEvent(now);
       const priorRunId = RunId.make("run:provider-event-completed:prior");
@@ -741,7 +761,7 @@ layer("ProviderEventIngestorV2", (it) => {
         const eventSink = yield* EventSink.EventSinkV2;
         const eventStore = yield* EventStore.EventStoreV2;
         const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-        const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+        const ingestor = yield* testIngestor;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
         const threadEvent = yield* threadCreatedEvent(now);
         const threadId = threadEvent.threadId;
@@ -829,22 +849,25 @@ layer("ProviderEventIngestorV2", (it) => {
           };
           return { key: spec.key, request, node, item };
         });
-        const seedEvents: Array<OrchestrationV2DomainEvent> = [threadEvent];
+        yield* eventSink.write({ events: [threadEvent] });
         for (const fixture of fixtures) {
-          for (const payload of [
-            { type: "runtime-request.updated" as const, payload: fixture.request },
-            { type: "node.updated" as const, payload: fixture.node },
-            { type: "turn-item.updated" as const, payload: fixture.item },
+          for (const event of [
+            {
+              type: "runtime_request.updated" as const,
+              driver: CODEX_DRIVER,
+              runtimeRequest: fixture.request,
+            },
+            { type: "node.updated" as const, driver: CODEX_DRIVER, node: fixture.node },
+            { type: "turn_item.updated" as const, driver: CODEX_DRIVER, turnItem: fixture.item },
           ]) {
-            seedEvents.push({
-              id: yield* idAllocator.allocate.event({ threadId }),
+            yield* ingestor.ingestNormalized({
+              providerSessionId,
+              providerInstanceId: modelSelection.instanceId,
               threadId,
-              occurredAt: now,
-              ...payload,
+              event,
             });
           }
         }
-        yield* eventSink.write({ events: seedEvents });
         const input = {
           providerSessionId,
           providerInstanceId: modelSelection.instanceId,
@@ -901,7 +924,7 @@ layer("ProviderEventIngestorV2", (it) => {
         }
         assert.equal(
           stored.filter((entry) => entry.event.type === "runtime-request.updated").length,
-          2,
+          1,
         );
         assert.isEmpty(
           (yield* projectionStore.getPendingNativeUserInputs(threadId, providerTurnId))
@@ -993,33 +1016,41 @@ layer("ProviderEventIngestorV2", (it) => {
             requestId: request.id,
             questions: [],
           };
-          const seedEvents: Array<OrchestrationV2DomainEvent> = [threadEvent];
-          for (const payload of [
-            { type: "runtime-request.updated" as const, payload: request },
-            { type: "node.updated" as const, payload: node },
-            { type: "turn-item.updated" as const, payload: item },
-          ])
-            seedEvents.push({
-              id: yield* idAllocator.allocate.event({ threadId }),
-              threadId,
-              occurredAt: now,
-              ...payload,
-            });
-          yield* eventSink.write({ events: seedEvents });
+          yield* eventSink.write({ events: [threadEvent] });
           const normalized = yield* Deferred.make<void>();
           const releaseTerminalWrite = yield* Deferred.make<void>();
           const gatedSink = EventSink.EventSinkV2.of({
             ...eventSink,
-            write: (input) =>
-              Deferred.succeed(normalized, undefined).pipe(
-                Effect.andThen(Deferred.await(releaseTerminalWrite)),
-                Effect.andThen(eventSink.write(input)),
-              ),
+            writeIfRuntimeRequestCurrent: (input) =>
+              !input.events.some(
+                (event) =>
+                  event.type === "runtime-request.updated" && event.payload.status === "cancelled",
+              )
+                ? eventSink.writeIfRuntimeRequestCurrent(input)
+                : Deferred.succeed(normalized, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseTerminalWrite)),
+                    Effect.andThen(eventSink.writeIfRuntimeRequestCurrent(input)),
+                  ),
           });
-          const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2.pipe(
+          const ingestor = yield* testIngestor.pipe(
             Effect.provide(Layer.fresh(ProviderEventIngestor.layer)),
             Effect.provideService(EventSink.EventSinkV2, gatedSink),
           );
+          for (const event of [
+            {
+              type: "runtime_request.updated" as const,
+              driver: CODEX_DRIVER,
+              runtimeRequest: request,
+            },
+            { type: "node.updated" as const, driver: CODEX_DRIVER, node },
+            { type: "turn_item.updated" as const, driver: CODEX_DRIVER, turnItem: item },
+          ])
+            yield* ingestor.ingestNormalized({
+              providerSessionId,
+              providerInstanceId: modelSelection.instanceId,
+              threadId,
+              event,
+            });
           const terminal = yield* ingestor
             .ingestNormalized({
               providerSessionId,
@@ -1099,7 +1130,7 @@ layer("ProviderEventIngestorV2", (it) => {
       const retryStartedAt = DateTime.makeUnsafe(DateTime.toEpochMillis(now) - 5_000);
       const eventSink = yield* EventSink.EventSinkV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const ingestor = yield* testIngestor;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const threadEvent = yield* threadCreatedEvent(now);
       const providerSessionId = yield* idAllocator.allocate.providerSession({
@@ -1172,7 +1203,7 @@ layer("ProviderEventIngestorV2", (it) => {
   it.effect("routes provider-owned child artifacts to their child app thread", () =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
-      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const ingestor = yield* testIngestor;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const rootEvent = yield* threadCreatedEvent(now);
       if (rootEvent.type !== "thread.created") {
@@ -1249,7 +1280,7 @@ layer("ProviderEventIngestorV2", (it) => {
       const now = yield* DateTime.now;
       const eventSink = yield* EventSink.EventSinkV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const ingestor = yield* testIngestor;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const rootEvent = yield* threadCreatedEvent(now);
       if (rootEvent.type !== "thread.created") {
@@ -1337,5 +1368,694 @@ layer("ProviderEventIngestorV2", (it) => {
         model: "gpt-6.1-sol",
       });
     }),
+  );
+});
+
+const requestFixture = Effect.gen(function* () {
+  const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const threadEvent = yield* threadCreatedEvent(now);
+  const threadId = threadEvent.threadId;
+  yield* sink.write({ events: [threadEvent] });
+  const providerSessionId = ProviderSessionId.make(`${threadId}:session`);
+  const token = yield* ingestor.createLifetime(providerSessionId);
+  ingestor.activateLifetime(token);
+  const request: OrchestrationV2RuntimeRequest = {
+    id: RuntimeRequestId.make(`${threadId}:request`),
+    nodeId: NodeId.make(`${threadId}:question`),
+    providerTurnId: null,
+    nativeRequestRef: {
+      driver: CODEX_DRIVER,
+      nativeId: "reusable-native-request",
+      strength: "strong",
+    },
+    kind: "user_input",
+    status: "pending",
+    responseCapability: { type: "live", providerSessionId },
+    createdAt: now,
+    resolvedAt: null,
+  };
+  const node: OrchestrationV2ExecutionNode = {
+    id: request.nodeId,
+    threadId,
+    runId: null,
+    parentNodeId: null,
+    rootNodeId: request.nodeId,
+    kind: "user_input_request",
+    status: "waiting",
+    countsForRun: false,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    runtimeRequestId: request.id,
+    checkpointScopeId: null,
+    startedAt: now,
+    completedAt: null,
+  };
+  const item: OrchestrationV2TurnItem = {
+    id: TurnItemId.make(`${threadId}:question`),
+    threadId,
+    runId: null,
+    nodeId: node.id,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 1,
+    status: "waiting",
+    title: "Choose a workspace",
+    startedAt: now,
+    completedAt: null,
+    updatedAt: now,
+    type: "user_input_request",
+    requestId: request.id,
+    questions: [
+      {
+        id: "workspace",
+        header: "Workspace",
+        question: "Which workspace should I use?",
+        options: [
+          { label: "Existing workspace", description: "Keep the current checkout" },
+          { label: "New worktree", description: "Isolate the changes" },
+        ],
+        allowCustomAnswer: true,
+      },
+    ],
+  };
+  const input = {
+    providerSessionId,
+    runtimeLifetime: token,
+    providerInstanceId: modelSelection.instanceId,
+    threadId,
+  };
+  const events = {
+    request: {
+      type: "runtime_request.updated" as const,
+      driver: CODEX_DRIVER,
+      runtimeRequest: request,
+    },
+    node: { type: "node.updated" as const, driver: CODEX_DRIVER, node },
+    item: { type: "turn_item.updated" as const, driver: CODEX_DRIVER, turnItem: item },
+  };
+  const ingest = (event: ProviderEventIngestor.ProviderEventIngestInput["event"]) =>
+    ingestor.ingestNormalized({ ...input, event });
+  return {
+    ingestor,
+    sink,
+    now,
+    threadId,
+    token,
+    providerSessionId,
+    request,
+    node,
+    item,
+    input,
+    events,
+    ingest,
+  };
+});
+
+const siblingOrders = [
+  ["node", "request", "item"],
+  ["item", "request", "node"],
+  ["node", "item", "request"],
+  ["item", "node", "request"],
+  ["request", "node", "item"],
+  ["request", "item", "node"],
+] as const;
+
+layer("Provider runtime lifetime admission", (it) => {
+  it.effect.each(siblingOrders.map((order) => ({ order, name: order.join("/") })))(
+    "preserves a real message-mode question across retirement in $name order",
+    ({ order }) =>
+      Effect.gen(function* () {
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        for (let retireAfter = 0; retireAfter <= 3; retireAfter += 1) {
+          const f = yield* requestFixture;
+          const events = {
+            ...f.events,
+            request: {
+              ...f.events.request,
+              runtimeRequest: { ...f.request, responseCapability: { type: "message" as const } },
+            },
+            item: { ...f.events.item, turnItem: { ...f.item, responseMode: "message" as const } },
+          };
+          for (const [index, key] of order.entries()) {
+            if (index === retireAfter) f.ingestor.retireLifetime(f.token);
+            yield* f.ingest(events[key]);
+            if (index < order.indexOf("request")) {
+              const partial = yield* projections.getThreadProjection(f.threadId);
+              assert.isEmpty(partial.nodes);
+              assert.isEmpty(partial.turnItems);
+            }
+          }
+          f.ingestor.retireLifetime(f.token);
+          const projection = yield* projections.getThreadProjection(f.threadId);
+          assert.equal(projection.runtimeRequests[0]?.status, "pending");
+          assert.equal(projection.runtimeRequests[0]?.responseCapability.type, "message");
+          assert.equal(projection.nodes[0]?.status, "waiting");
+          assert.deepEqual(projection.turnItems[0], { ...f.item, responseMode: "message" });
+          assert.isEmpty(f.ingestor.getOwnedRequestGroups(f.token));
+        }
+      }),
+  );
+
+  it.effect.each(siblingOrders.map((order) => ({ order, name: order.join("/") })))(
+    "drops wholly late live groups in $name order",
+    ({ order }) =>
+      Effect.gen(function* () {
+        const f = yield* requestFixture;
+        f.ingestor.retireLifetime(f.token);
+        for (const key of order) assert.isEmpty(yield* f.ingest(f.events[key]));
+        const projection = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(
+          f.threadId,
+        );
+        assert.isEmpty(projection.runtimeRequests);
+        assert.isEmpty(projection.nodes);
+        assert.isEmpty(projection.turnItems);
+      }),
+  );
+
+  it.effect(
+    "commits buffered siblings with their request and preserves resolved answers on every later sibling",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* requestFixture;
+        assert.isEmpty(yield* f.ingest(f.events.node));
+        assert.isEmpty(yield* f.ingest(f.events.item));
+        assert.equal((yield* f.ingest(f.events.request)).length, 3);
+        const answers = { workspace: "Existing workspace" };
+        const resolved = yield* f.ingestor.normalize({
+          ...f.input,
+          event: {
+            ...f.events.request,
+            runtimeRequest: { ...f.request, status: "resolved", answers, resolvedAt: f.now },
+          },
+        });
+        yield* f.sink.write({ events: resolved });
+        for (const key of ["request", "node", "item"] as const) yield* f.ingest(f.events[key]);
+        const projection = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(
+          f.threadId,
+        );
+        assert.equal(projection.runtimeRequests[0]?.status, "resolved");
+        assert.deepEqual(projection.runtimeRequests[0]?.answers, answers);
+        assert.equal(projection.nodes[0]?.status, "completed");
+        assert.equal(projection.turnItems[0]?.status, "completed");
+      }),
+  );
+
+  it.effect("settles explicit not-resumable groups and their already committed siblings", () =>
+    Effect.gen(function* () {
+      for (const initialTerminal of [true, false]) {
+        const f = yield* requestFixture;
+        if (!initialTerminal)
+          for (const key of ["request", "node", "item"] as const) yield* f.ingest(f.events[key]);
+        else {
+          yield* f.ingest(f.events.node);
+          yield* f.ingest(f.events.item);
+        }
+        yield* f.ingest({
+          ...f.events.request,
+          runtimeRequest: {
+            ...f.request,
+            responseCapability: { type: "not_resumable", reason: "Provider callback ended" },
+          },
+        });
+        for (const key of ["node", "item"] as const) yield* f.ingest(f.events[key]);
+        const projection = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(
+          f.threadId,
+        );
+        assert.equal(projection.runtimeRequests[0]?.status, "cancelled");
+        assert.equal(projection.runtimeRequests[0]?.responseCapability.type, "not_resumable");
+        assert.equal(projection.nodes[0]?.status, "cancelled");
+        assert.equal(projection.turnItems[0]?.status, "cancelled");
+      }
+    }),
+  );
+
+  it.effect(
+    "rejects global request IDs, node reservations, linked item collisions, and historical identities",
+    () =>
+      Effect.gen(function* () {
+        const first = yield* requestFixture;
+        const second = yield* requestFixture;
+        const collision = {
+          ...second.events.request,
+          runtimeRequest: { ...second.request, id: first.request.id },
+        };
+        const results = yield* Effect.all(
+          [first.ingest(first.events.request), second.ingest(collision)],
+          { concurrency: "unbounded" },
+        );
+        assert.equal(results.filter((events) => events.length > 0).length, 1);
+        const winner = results[0]!.length > 0 ? first : second;
+        const loser = winner === first ? second : first;
+        const occupiedRequest =
+          yield* (yield* ProjectionStore.ProjectionStoreV2).getRuntimeRequestById(
+            first.threadId,
+            first.request.id,
+          );
+        assert.isDefined(occupiedRequest);
+        const nodeCollision = {
+          ...loser.events.request,
+          runtimeRequest: {
+            ...loser.request,
+            id: RuntimeRequestId.make(`${loser.threadId}:fresh-node-collision`),
+            nodeId: occupiedRequest!.request.nodeId,
+          },
+        };
+        assert.isEmpty(yield* loser.ingest(nodeCollision));
+
+        const source = yield* requestFixture;
+        for (const key of ["request", "node", "item"] as const)
+          yield* source.ingest(source.events[key]);
+        const target = yield* requestFixture;
+        yield* target.ingest({
+          ...target.events.item,
+          turnItem: { ...target.item, id: source.item.id },
+        });
+        assert.isEmpty(yield* target.ingest(target.events.request));
+        assert.equal(
+          (yield* (yield* ProjectionStore.ProjectionStoreV2).getTurnItemById(
+            source.threadId,
+            source.item.id,
+          ))?.threadId,
+          source.threadId,
+        );
+
+        const historical = yield* requestFixture;
+        const persisted = yield* historical.ingestor.normalize({
+          ...historical.input,
+          event: historical.events.request,
+        });
+        yield* historical.sink.write({ events: persisted });
+        assert.isEmpty(yield* historical.ingest(historical.events.request));
+        assert.isEmpty(
+          yield* historical.ingest({
+            ...historical.events.node,
+            node: { ...historical.node, kind: "tool_call", runtimeRequestId: null },
+          }),
+        );
+        assert.isFalse(
+          yield* historical.ingestor.ownsRequest(
+            historical.token,
+            historical.threadId,
+            historical.request.id,
+          ),
+        );
+      }),
+  );
+
+  it.effect(
+    "allows native request-ID reuse with a fresh app identity but rejects an old run-scoped event",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* requestFixture;
+        yield* f.ingest(f.events.request);
+        f.ingestor.retireLifetime(f.token);
+        const replacement = yield* f.ingestor.createLifetime(f.providerSessionId);
+        f.ingestor.activateLifetime(replacement);
+        const fresh = {
+          ...f.request,
+          id: RuntimeRequestId.make(`${f.request.id}:fresh`),
+          nodeId: NodeId.make(`${f.node.id}:fresh`),
+        };
+        assert.equal(
+          (yield* f.ingestor.ingestNormalized({
+            ...f.input,
+            runtimeLifetime: replacement,
+            event: { ...f.events.request, runtimeRequest: fresh },
+          })).length,
+          1,
+        );
+        assert.isEmpty(
+          yield* f.ingestor.ingestNormalized({
+            ...f.input,
+            runId: RunId.make(`${f.threadId}:old-run`),
+            event: {
+              ...f.events.request,
+              runtimeRequest: {
+                ...f.request,
+                id: RuntimeRequestId.make(`${f.request.id}:late`),
+                nodeId: NodeId.make(`${f.node.id}:late`),
+              },
+            },
+          }),
+        );
+        assert.isEmpty(
+          yield* f.ingestor.ingestNormalized({
+            ...f.input,
+            runtimeLifetime: replacement,
+            event: f.events.request,
+          }),
+        );
+        assert.isTrue(yield* f.ingestor.ownsRequest(replacement, f.threadId, fresh.id));
+        const transcript = yield* f.ingest({
+          type: "message.updated",
+          driver: CODEX_DRIVER,
+          message: {
+            id: MessageId.make(`${f.threadId}:late-transcript`),
+            threadId: f.threadId,
+            runId: null,
+            nodeId: null,
+            createdBy: "agent",
+            creationSource: "provider",
+            role: "assistant",
+            text: "Finished safely",
+            attachments: [],
+            streaming: false,
+            createdAt: f.now,
+            updatedAt: f.now,
+          },
+        });
+        assert.equal(transcript.length, 1);
+      }),
+  );
+
+  it.effect("rejects old queued responses and pending IDs against a same-ID replacement", () =>
+    Effect.gen(function* () {
+      const f = yield* requestFixture;
+      yield* f.ingest(f.events.request);
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      let dispatches = 0;
+      let gets = 0;
+      let currentToken = f.token;
+      const sessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+        get: () =>
+          Effect.sync(() => {
+            gets += 1;
+            return Option.some({
+              runtimeLifetime: currentToken,
+              respondToRuntimeRequest: () =>
+                Effect.sync(() => {
+                  dispatches += 1;
+                }),
+            } as unknown as ProviderSessionManager.ManagedProviderSessionRuntime);
+          }),
+      });
+      const respond = RuntimeRequestService.RuntimeRequestServiceV2.pipe(
+        Effect.flatMap((service) =>
+          service.respond({
+            threadId: f.threadId,
+            providerSessionId: f.providerSessionId,
+            requestId: f.request.id,
+            answers: { workspace: "Existing workspace" },
+          }),
+        ),
+        Effect.provide(
+          RuntimeRequestService.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                sessions,
+                Layer.succeed(ProjectionStore.ProjectionStoreV2, projections),
+                Layer.succeed(ProviderEventIngestor.ProviderEventIngestorV2, f.ingestor),
+              ),
+            ),
+          ),
+        ),
+      );
+      assert.equal((yield* respond.pipe(Effect.flip)).reason, "request-not-ready");
+      assert.equal(gets, 0);
+      const resolved = yield* f.ingestor.normalize({
+        ...f.input,
+        event: {
+          ...f.events.request,
+          runtimeRequest: { ...f.request, status: "resolved", resolvedAt: f.now },
+        },
+      });
+      yield* f.sink.write({ events: resolved });
+      f.ingestor.retireLifetime(f.token);
+      currentToken = yield* f.ingestor.createLifetime(f.providerSessionId);
+      f.ingestor.activateLifetime(currentToken);
+      assert.equal((yield* respond.pipe(Effect.flip)).reason, "request-not-resumable");
+      assert.equal(dispatches, 0);
+    }),
+  );
+
+  it.effect("keeps an admitted response bound to the captured runtime during replacement", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* requestFixture;
+        yield* f.ingest(f.events.request);
+        yield* f.sink.write({
+          events: yield* f.ingestor.normalize({
+            ...f.input,
+            event: {
+              ...f.events.request,
+              runtimeRequest: { ...f.request, status: "resolved", resolvedAt: f.now },
+            },
+          }),
+        });
+        const entered = yield* Deferred.make<void>();
+        const finish = yield* Deferred.make<void>();
+        let oldDispatches = 0;
+        let newDispatches = 0;
+        const oldRuntime = {
+          runtimeLifetime: f.token,
+          respondToRuntimeRequest: () =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(finish)),
+              Effect.andThen(
+                Effect.sync(() => {
+                  oldDispatches += 1;
+                }),
+              ),
+            ),
+        } as unknown as ProviderSessionManager.ManagedProviderSessionRuntime;
+        let currentRuntime = oldRuntime;
+        const sessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          get: () => Effect.sync(() => Option.some(currentRuntime)),
+        });
+        const running = yield* RuntimeRequestService.RuntimeRequestServiceV2.pipe(
+          Effect.flatMap((service) =>
+            service.respond({
+              threadId: f.threadId,
+              providerSessionId: f.providerSessionId,
+              requestId: f.request.id,
+              answers: { workspace: "Existing workspace" },
+            }),
+          ),
+          Effect.provide(RuntimeRequestService.layer.pipe(Layer.provide(sessions))),
+          Effect.forkScoped,
+        );
+        yield* Deferred.await(entered);
+        f.ingestor.retireLifetime(f.token);
+        const replacement = yield* f.ingestor.createLifetime(f.providerSessionId);
+        f.ingestor.activateLifetime(replacement);
+        currentRuntime = {
+          runtimeLifetime: replacement,
+          respondToRuntimeRequest: () =>
+            Effect.sync(() => {
+              newDispatches += 1;
+            }),
+        } as unknown as ProviderSessionManager.ManagedProviderSessionRuntime;
+        yield* Deferred.succeed(finish, undefined);
+        yield* Fiber.join(running);
+        assert.equal(oldDispatches, 1);
+        assert.equal(newDispatches, 0);
+      }),
+    ),
+  );
+  it.effect("never converts a retired durable message question into a live callback", () =>
+    Effect.gen(function* () {
+      const f = yield* requestFixture;
+      yield* f.ingest({
+        ...f.events.request,
+        runtimeRequest: { ...f.request, responseCapability: { type: "message" } },
+      });
+      f.ingestor.retireLifetime(f.token);
+      assert.isEmpty(yield* f.ingest(f.events.request));
+      const request = yield* (yield* ProjectionStore.ProjectionStoreV2).getRuntimeRequest(
+        f.threadId,
+        f.request.id,
+      );
+      assert.equal(request?.responseCapability.type, "message");
+      assert.equal(request?.status, "pending");
+      assert.isEmpty(f.ingestor.getOwnedRequestGroups(f.token));
+    }),
+  );
+
+  it.effect("bounds request item identities and terminalizes every accepted item together", () =>
+    Effect.gen(function* () {
+      const f = yield* requestFixture;
+      yield* f.ingest(f.events.request);
+      yield* f.ingest(f.events.node);
+      for (let index = 0; index < 64; index += 1) {
+        yield* f.ingest({
+          ...f.events.item,
+          turnItem: { ...f.item, id: TurnItemId.make(`${f.item.id}:${index}`), ordinal: index },
+        });
+      }
+      const overflow = yield* f
+        .ingest({
+          ...f.events.item,
+          turnItem: { ...f.item, id: TurnItemId.make(`${f.item.id}:overflow`), ordinal: 64 },
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(overflow, ProviderEventIngestor.ProviderEventPublishError);
+      assert.equal(f.ingestor.getOwnedRequestGroups(f.token)[0]?.itemIds.length, 64);
+      yield* f.ingest({
+        ...f.events.request,
+        runtimeRequest: {
+          ...f.request,
+          status: "expired",
+          resolvedAt: f.now,
+          responseCapability: { type: "not_resumable", reason: "Provider ended" },
+        },
+      });
+      const projection = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(
+        f.threadId,
+      );
+      assert.equal(projection.turnItems.length, 64);
+      assert.isTrue(projection.turnItems.every((item) => item.status === "cancelled"));
+      assert.equal(projection.nodes[0]?.status, "cancelled");
+    }),
+  );
+
+  it.effect("bounds unclassified prompt buffers and fails closed after overflow", () =>
+    Effect.gen(function* () {
+      const f = yield* requestFixture;
+      const oversized = { ...f.events.item, turnItem: { ...f.item, title: "x".repeat(600_000) } };
+      assert.instanceOf(
+        yield* f.ingest(oversized).pipe(Effect.flip),
+        ProviderEventIngestor.ProviderEventPublishError,
+      );
+      assert.isEmpty(yield* f.ingest(f.events.request));
+      const projection = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(
+        f.threadId,
+      );
+      assert.isEmpty(projection.runtimeRequests);
+      assert.isEmpty(projection.turnItems);
+    }),
+  );
+
+  it.effect("discards only the finished consumer's uncommitted siblings", () =>
+    Effect.gen(function* () {
+      const f = yield* requestFixture;
+      const runId = RunId.make(`${f.threadId}:consumer`);
+      yield* f.ingestor.ingestNormalized({ ...f.input, runId, event: f.events.node });
+      f.ingestor.discardBufferedRequests(f.token);
+      assert.equal((yield* f.ingest(f.events.request)).length, 2);
+      const another = yield* requestFixture;
+      yield* another.ingestor.ingestNormalized({
+        ...another.input,
+        runId,
+        event: another.events.node,
+      });
+      another.ingestor.discardBufferedRequests(another.token, runId);
+      assert.equal((yield* another.ingest(another.events.request)).length, 1);
+      assert.isEmpty(
+        (yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(another.threadId))
+          .nodes,
+      );
+    }),
+  );
+
+  it.effect("does not reopen a completed sibling while its request update is still in flight", () =>
+    Effect.gen(function* () {
+      const f = yield* requestFixture;
+      yield* f.ingest(f.events.request);
+      yield* f.ingest({
+        ...f.events.node,
+        node: { ...f.node, status: "completed", completedAt: f.now },
+      });
+      yield* f.ingest({
+        ...f.events.item,
+        turnItem: { ...f.item, status: "completed", completedAt: f.now },
+      });
+      yield* f.ingest(f.events.node);
+      yield* f.ingest(f.events.item);
+      const projection = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(
+        f.threadId,
+      );
+      assert.equal(projection.nodes[0]?.status, "completed");
+      assert.equal(projection.turnItems[0]?.status, "completed");
+    }),
+  );
+  it.effect("retains failed admission ownership and retries the original complete group", () =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      let fail = true;
+      const gatedSink = EventSink.EventSinkV2.of({
+        ...sink,
+        write: (input) =>
+          Effect.suspend(() => {
+            if (fail && input.events.some((event) => event.type === "runtime-request.updated")) {
+              fail = false;
+              return Effect.fail(
+                new EventSink.EventSinkWriteError({ eventCount: input.events.length }),
+              );
+            }
+            return sink.write(input);
+          }),
+      });
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2.pipe(
+        Effect.provide(Layer.fresh(ProviderEventIngestor.layer)),
+        Effect.provideService(EventSink.EventSinkV2, gatedSink),
+      );
+      const f = yield* requestFixture.pipe(
+        Effect.provideService(ProviderEventIngestor.ProviderEventIngestorV2, ingestor),
+      );
+      yield* f.ingest(f.events.node);
+      yield* f.ingest(f.events.item);
+      yield* f.ingest(f.events.request).pipe(Effect.flip);
+      assert.equal(f.ingestor.getOwnedRequestGroups(f.token)[0]?.requestId, f.request.id);
+      assert.isEmpty(
+        (yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(f.threadId))
+          .runtimeRequests,
+      );
+      assert.equal((yield* f.ingest(f.events.request)).length, 3);
+      assert.isTrue(yield* f.ingestor.ownsRequest(f.token, f.threadId, f.request.id));
+    }),
+  );
+
+  it.effect("keeps cleanup ownership when a committed admission's caller is interrupted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const sink = yield* EventSink.EventSinkV2;
+        const committed = yield* Deferred.make<void>();
+        const waitAfterCommit = yield* Deferred.make<void>();
+        const gatedSink = EventSink.EventSinkV2.of({
+          ...sink,
+          write: (input) =>
+            sink
+              .write(input)
+              .pipe(
+                Effect.tap(() =>
+                  input.events.some((event) => event.type === "runtime-request.updated")
+                    ? Deferred.succeed(committed, undefined).pipe(
+                        Effect.andThen(Deferred.await(waitAfterCommit)),
+                      )
+                    : Effect.void,
+                ),
+              ),
+        });
+        const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2.pipe(
+          Effect.provide(Layer.fresh(ProviderEventIngestor.layer)),
+          Effect.provideService(EventSink.EventSinkV2, gatedSink),
+        );
+        const f = yield* requestFixture.pipe(
+          Effect.provideService(ProviderEventIngestor.ProviderEventIngestorV2, ingestor),
+        );
+        const admission = yield* f.ingest(f.events.request).pipe(Effect.forkScoped);
+        yield* Deferred.await(committed);
+        f.ingestor.retireLifetime(f.token);
+        yield* Fiber.interrupt(admission);
+        const groups = yield* f.ingestor.withLifetimeWrite(
+          f.token,
+          Effect.sync(() => f.ingestor.getOwnedRequestGroups(f.token)),
+        );
+        assert.equal(groups[0]?.requestId, f.request.id);
+        assert.equal(
+          (yield* (yield* ProjectionStore.ProjectionStoreV2).getRuntimeRequest(
+            f.threadId,
+            f.request.id,
+          ))?.status,
+          "pending",
+        );
+        assert.isFalse(yield* f.ingestor.ownsRequest(f.token, f.threadId, f.request.id));
+      }),
+    ),
   );
 });

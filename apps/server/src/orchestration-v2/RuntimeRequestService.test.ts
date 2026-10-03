@@ -14,8 +14,20 @@ import * as Option from "effect/Option";
 
 import type { ProviderAdapterV2RuntimeRequestResponseInput } from "./ProviderAdapter.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
+
+const unexpectedLifetimeMethod = (): never => {
+  throw new Error("This test must not manage provider runtime lifetimes");
+};
+const unusedLifetimeMethods = {
+  activateLifetime: unexpectedLifetimeMethod,
+  retireLifetime: unexpectedLifetimeMethod,
+  getOwnedRequestGroups: unexpectedLifetimeMethod,
+  settleOwnedRequestGroups: unexpectedLifetimeMethod,
+  discardBufferedRequests: unexpectedLifetimeMethod,
+};
 
 function projectionWithRuntimeRequest(
   runtimeRequest?: OrchestrationV2RuntimeRequest,
@@ -52,6 +64,10 @@ function runtimeRequestTestLayer(
   return RuntimeRequestService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+          ...unusedLifetimeMethods,
+          ownsRequest: () => Effect.succeed(true),
+        }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRuntimeRequest: (_threadId, requestId) =>
             Effect.succeed(projection.runtimeRequests.find((request) => request.id === requestId)),
@@ -99,6 +115,10 @@ it.effect("forwards orchestrator-resolved runtime requests to the live adapter",
   const testLayer = RuntimeRequestService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+          ...unusedLifetimeMethods,
+          ownsRequest: () => Effect.succeed(true),
+        }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRuntimeRequest: (_threadId, requestId) =>
             Effect.succeed(projection.runtimeRequests.find((request) => request.id === requestId)),
@@ -163,6 +183,10 @@ it.effect("rejects expired runtime requests before invoking the live adapter", (
   const testLayer = RuntimeRequestService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+          ...unusedLifetimeMethods,
+          ownsRequest: () => Effect.succeed(true),
+        }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRuntimeRequest: (_threadId, requestId) =>
             Effect.succeed(projection.runtimeRequests.find((request) => request.id === requestId)),

@@ -177,12 +177,12 @@ export const layer: Layer.Layer<
     };
 
     const makeDeliverySession = (
-      session: ProviderAdapterV2SessionRuntime,
+      session: ProviderSessionManager.ManagedProviderSessionRuntime,
       startWithHandoffs: (
         input: Parameters<ProviderAdapterV2SessionRuntime["startTurn"]>[0],
         compact?: boolean,
       ) => ReturnType<ProviderAdapterV2SessionRuntime["startTurn"]>,
-    ) => {
+    ): ProviderSessionManager.ManagedProviderSessionRuntime => {
       let deliver: typeof startWithHandoffs | undefined = startWithHandoffs;
       const start = (
         input: Parameters<ProviderAdapterV2SessionRuntime["startTurn"]>[0],

@@ -211,17 +211,19 @@ export const make = Effect.gen(function* () {
         }
         runs.push(run);
       }
-      const messageRequestNodeIds = new Set(
-        projection.runtimeRequests
-          .filter(
-            (request) =>
-              request.status === "pending" && request.responseCapability.type === "message",
-          )
-          .map((request) => request.nodeId),
+      const preservedRequests = projection.runtimeRequests.filter(
+        (request) => request.status === "resolved" || request.responseCapability.type === "message",
       );
+      const preservedRequestNodeIds = new Set(preservedRequests.map((request) => request.nodeId));
+      const preservedRequestIds = new Set(preservedRequests.map((request) => request.id));
+      const preservesRequestItem = (item: OrchestrationV2ThreadProjection["turnItems"][number]) =>
+        (item.nodeId !== null && preservedRequestNodeIds.has(item.nodeId)) ||
+        ((item.type === "approval_request" || item.type === "user_input_request") &&
+          preservedRequestIds.has(item.requestId));
       const requests = projection.runtimeRequests.filter(
-        (request) => request.status === "pending" && request.responseCapability.type !== "message",
+        (request) => request.status !== "resolved" && request.responseCapability.type !== "message",
       );
+      const pendingRequests = requests.filter((request) => request.status === "pending");
       const detail = `Cancelled because the server ${trigger === "startup" ? "restarted" : "shut down"} before the provider work completed.`;
       const commandId = CommandId.make(
         `command:runtime-reconcile:${trigger}:${projection.thread.id}:${DateTime.formatIso(now)}`,
@@ -285,7 +287,7 @@ export const make = Effect.gen(function* () {
           payload: { ...run, queueHeld: true },
         });
       }
-      for (const request of requests) {
+      for (const request of pendingRequests) {
         events.push({
           id: yield* allocateEventId(),
           type: "runtime-request.updated",
@@ -332,7 +334,7 @@ export const make = Effect.gen(function* () {
         for (const node of projection.nodes.filter(
           (candidate) =>
             candidate.runId === run.id &&
-            !messageRequestNodeIds.has(candidate.id) &&
+            !preservedRequestNodeIds.has(candidate.id) &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),
@@ -403,7 +405,7 @@ export const make = Effect.gen(function* () {
         for (const item of projection.turnItems.filter(
           (candidate) =>
             candidate.runId === run.id &&
-            (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
+            !preservesRequestItem(candidate) &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),
@@ -436,7 +438,7 @@ export const make = Effect.gen(function* () {
         if (!isBackgroundCapableTurnItemType(item.type)) {
           continue;
         }
-        if (!isNonterminalTurnItemStatus(item.status)) {
+        if (!isNonterminalTurnItemStatus(item.status) || preservesRequestItem(item)) {
           continue;
         }
         const providerInstanceId = resolveStaleBackgroundItemProviderInstanceId(item, projection);
@@ -454,7 +456,9 @@ export const make = Effect.gen(function* () {
         if (item.nodeId !== null && item.nodeId !== undefined) {
           const staleItemNode = projection.nodes.find(
             (candidate) =>
-              candidate.id === item.nodeId && isNonterminalNodeStatus(candidate.status),
+              candidate.id === item.nodeId &&
+              !preservedRequestNodeIds.has(candidate.id) &&
+              isNonterminalNodeStatus(candidate.status),
           );
           if (staleItemNode !== undefined && !cancelledStaleNodeIds.has(staleItemNode.id)) {
             cancelledStaleNodeIds.add(staleItemNode.id);
@@ -496,7 +500,9 @@ export const make = Effect.gen(function* () {
         }
         const staleSubagentNode = projection.nodes.find(
           (candidate) =>
-            candidate.id === item.subagentId && isNonterminalNodeStatus(candidate.status),
+            candidate.id === item.subagentId &&
+            !preservedRequestNodeIds.has(candidate.id) &&
+            isNonterminalNodeStatus(candidate.status),
         );
         if (staleSubagentNode !== undefined && !cancelledStaleNodeIds.has(staleSubagentNode.id)) {
           cancelledStaleNodeIds.add(staleSubagentNode.id);
@@ -523,6 +529,7 @@ export const make = Effect.gen(function* () {
         if (
           node.kind !== "root_turn" ||
           node.runId !== null ||
+          preservedRequestNodeIds.has(node.id) ||
           !isNonterminalNodeStatus(node.status) ||
           cancelledStaleNodeIds.has(node.id)
         ) {
@@ -542,6 +549,7 @@ export const make = Effect.gen(function* () {
           if (
             item.nodeId !== node.id ||
             item.runId !== null ||
+            preservesRequestItem(item) ||
             !isNonterminalTurnItemStatus(item.status) ||
             cancelledStaleItemIds.has(item.id)
           ) {
@@ -564,6 +572,59 @@ export const make = Effect.gen(function* () {
                 ? { streaming: false }
                 : {}),
             },
+          });
+        }
+      }
+      // Requests can belong to runless provider work or an already-settled
+      // run. Repair their exact linked artifacts even when an earlier recovery
+      // expired/cancelled the request first, preserving its terminal decision.
+      const terminalizedNodeIds = new Set(
+        events.flatMap((event) => (event.type === "node.updated" ? [event.payload.id] : [])),
+      );
+      const terminalizedItemIds = new Set(
+        events.flatMap((event) => (event.type === "turn-item.updated" ? [event.payload.id] : [])),
+      );
+      for (const request of requests) {
+        const node = projection.nodes.find((candidate) => candidate.id === request.nodeId);
+        if (
+          node !== undefined &&
+          isNonterminalNodeStatus(node.status) &&
+          !preservedRequestNodeIds.has(node.id) &&
+          !terminalizedNodeIds.has(node.id)
+        ) {
+          terminalizedNodeIds.add(node.id);
+          events.push({
+            id: yield* allocateEventId(),
+            type: "node.updated",
+            threadId: projection.thread.id,
+            ...(node.runId === null ? {} : { runId: node.runId }),
+            nodeId: node.id,
+            occurredAt: now,
+            payload: { ...node, status: "cancelled", completedAt: now },
+          });
+        }
+        for (const item of projection.turnItems ?? []) {
+          const linked =
+            item.nodeId === request.nodeId ||
+            ((item.type === "approval_request" || item.type === "user_input_request") &&
+              item.requestId === request.id);
+          if (
+            !linked ||
+            !isNonterminalTurnItemStatus(item.status) ||
+            preservesRequestItem(item) ||
+            terminalizedItemIds.has(item.id)
+          ) {
+            continue;
+          }
+          terminalizedItemIds.add(item.id);
+          events.push({
+            id: yield* allocateEventId(),
+            type: "turn-item.updated",
+            threadId: projection.thread.id,
+            ...(item.runId === null ? {} : { runId: item.runId }),
+            ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+            occurredAt: now,
+            payload: { ...item, status: "cancelled", completedAt: now, updatedAt: now },
           });
         }
       }
@@ -698,7 +759,7 @@ export const make = Effect.gen(function* () {
       return {
         terminalizedRuns: runs.length,
         stoppedSessions,
-        closedRequests: requests.length,
+        closedRequests: pendingRequests.length,
         retiredEffects,
       };
     },
