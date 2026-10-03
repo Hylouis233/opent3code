@@ -1,14 +1,9 @@
-import type { ProviderApprovalDecision } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
+import {
+  OrchestrationV2ExternalAcpResume,
+  type ProviderApprovalDecision,
+} from "@t3tools/contracts";
 
-export const ExternalAcpResume = Schema.Struct({
-  version: Schema.Literal(1),
-  driver: Schema.String,
-  instanceId: Schema.String,
-  cwd: Schema.String,
-  home: Schema.String,
-  sessionId: Schema.String.check(Schema.isNonEmpty()),
-});
+export const ExternalAcpResume = OrchestrationV2ExternalAcpResume;
 export type ExternalAcpResume = typeof ExternalAcpResume.Type;
 
 /** A cursor is an identity, not permission to open another instance's session. */
@@ -41,7 +36,8 @@ export function externalPermissionOutcome(
     kind === null
       ? []
       : options.filter((option) => option.kind === kind && option.optionId.length > 0);
-  return matches.length === 1
+  return matches.length === 1 &&
+    options.filter((option) => option.optionId === matches[0]!.optionId).length === 1
     ? { outcome: "selected", optionId: matches[0]!.optionId }
     : { outcome: "cancelled" };
 }
@@ -53,7 +49,11 @@ export function externalApprovalOptions(options: ReadonlyArray<ExternalPermissio
     ["reject_once", "decline"],
   ] as const) {
     const matching = options.filter((option) => option.kind === kind && option.optionId.length > 0);
-    if (matching.length === 1) result.push({ decision, label: matching[0]!.name || decision });
+    if (
+      matching.length === 1 &&
+      options.filter((option) => option.optionId === matching[0]!.optionId).length === 1
+    )
+      result.push({ decision, label: matching[0]!.name || decision });
   }
   result.push({ decision: "cancel", label: "Cancel request" });
   return result;
