@@ -8,6 +8,17 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
+  it.each(["mcode", "dsh"])("keeps %s visibly opt-in with official CLI settings", (kind) => {
+    const preview = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make(kind)];
+    expect(preview).toBeDefined();
+    expect(preview?.badgeLabel).toBe("Preview");
+    expect(deriveProviderSettingsFields(preview!).map((field) => field.key)).toEqual([
+      "binaryPath",
+      "homePath",
+    ]);
+    expect(preview?.environmentFields).toBeUndefined();
+  });
+
   it("derives visible provider config fields from the client definition schema", () => {
     const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
 
@@ -33,6 +44,34 @@ describe("ProviderSettingsForm helpers", () => {
       description: "Stored in plain text on disk.",
       control: "password",
     });
+  });
+
+  it("uses a dedicated environment field instead of legacy Cursor CLI settings", () => {
+    const cursor = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("cursor")];
+
+    expect(cursor).toBeDefined();
+    expect(deriveProviderSettingsFields(cursor!)).toEqual([]);
+    expect(cursor?.environmentFields).toEqual([
+      {
+        name: "CURSOR_API_KEY",
+        label: "Cursor API key",
+        description: "Optional. Overrides browser sign-in for this provider.",
+        placeholder: "Paste API key",
+        sensitive: true,
+      },
+    ]);
+  });
+
+  it("exposes ACP Registry as an instance-only configurable driver", () => {
+    const acpRegistry = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("acpRegistry")];
+
+    expect(acpRegistry).toBeDefined();
+    expect(acpRegistry?.hasDefaultInstance).toBe(false);
+    expect(deriveProviderSettingsFields(acpRegistry!).map((field) => field.key)).toEqual([
+      "agentId",
+      "commandPath",
+      "authMethodId",
+    ]);
   });
 
   it("derives a select control with its choices for the Antigravity sign-in method", () => {
