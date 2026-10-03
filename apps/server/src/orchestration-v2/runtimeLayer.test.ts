@@ -59,7 +59,8 @@ import * as EventSink from "./EventSink.ts";
 import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryService.ts";
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import type { ProviderAdapterV2SessionRuntime, ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import * as ProviderRuntimeLifetime from "./ProviderRuntimeLifetime.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import {
   OrchestrationEventInfrastructureLayerLive,
@@ -866,11 +867,29 @@ it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
           },
         ],
       });
+      const { lifecycle } = yield* ProviderRuntimeLifetime.make;
+      const runtimeLifetime = yield* lifecycle.createLifetime(providerSession.id);
+      lifecycle.activateLifetime(runtimeLifetime);
+      const runtime: ProviderSessionManager.ManagedProviderSessionRuntime = {
+        runtimeLifetime,
+        instanceId: providerSession.providerInstanceId,
+        driver,
+        providerSessionId: providerSession.id,
+        providerSession,
+        events: Stream.empty,
+        ensureThread: () => Effect.die("unused ensureThread"),
+        resumeThread: () => Effect.die("unused resumeThread"),
+        startTurn: () => Effect.die("unused startTurn"),
+        steerTurn: () => Effect.die("unused steerTurn"),
+        interruptTurn: () => Effect.die("unused interruptTurn"),
+        respondToRuntimeRequest: () => Effect.die("unused respondToRuntimeRequest"),
+        readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
+        rollbackThread: () => Effect.die("unused rollbackThread"),
+        forkThread: () => Effect.die("unused forkThread"),
+      };
       const sessionSpy = vi
         .spyOn(sessions, "get")
-        .mockReturnValue(
-          Effect.succeed(Option.some({ providerSession } as ProviderAdapterV2SessionRuntime)),
-        );
+        .mockReturnValue(Effect.succeed(Option.some(runtime)));
       yield* Effect.addFinalizer(() => Effect.sync(() => sessionSpy.mockRestore()));
 
       const steerCommandId = CommandId.make("runtime-delivery-intent-auto");

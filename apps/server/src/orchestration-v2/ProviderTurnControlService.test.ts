@@ -24,7 +24,7 @@ import * as Stream from "effect/Stream";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
+import * as ProviderRuntimeLifetime from "./ProviderRuntimeLifetime.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 
@@ -177,7 +177,11 @@ it.effect(
         updatedAt: now,
         lastError: null,
       };
-      const runtime: ProviderAdapterV2SessionRuntime = {
+      const { lifecycle } = yield* ProviderRuntimeLifetime.make;
+      const runtimeLifetime = yield* lifecycle.createLifetime(oldSessionId);
+      lifecycle.activateLifetime(runtimeLifetime);
+      const runtime: ProviderSessionManager.ManagedProviderSessionRuntime = {
+        runtimeLifetime,
         instanceId: providerInstanceId,
         driver,
         providerSessionId: oldSessionId,
@@ -229,6 +233,10 @@ it.effect(
           getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
           getThreadRecords: () => Effect.die("unused record read"),
           getRuntimeRequest: () => Effect.die("unused getRuntimeRequest"),
+          getRuntimeRequestById: () => Effect.die("unused getRuntimeRequestById"),
+          getRuntimeRequestByNodeId: () => Effect.die("unused getRuntimeRequestByNodeId"),
+          getNodeById: () => Effect.die("unused getNodeById"),
+          getTurnItemById: () => Effect.die("unused getTurnItemById"),
           getRunningTurnContext: () => Effect.die("unused getRunningTurnContext"),
           getThreadProviderContext: () => Effect.die("unused getThreadProviderContext"),
           getRuntimeResponseContext: () => Effect.die("unused getRuntimeResponseContext"),
