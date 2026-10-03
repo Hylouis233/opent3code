@@ -81,6 +81,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly primaryBearerToken?: string;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
   readonly descriptorProtocolVersion?: number | null | undefined;
+  readonly descriptorEnvironmentId?: EnvironmentId;
 }) => {
   const profiles = new Map(
     (options?.profiles ?? []).map((profile) => [profile.connectionId, profile]),
@@ -149,7 +150,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
     remoteHttpClientLayer((() =>
       Promise.resolve(
         Response.json({
-          environmentId: ENVIRONMENT_ID,
+          environmentId: options?.descriptorEnvironmentId ?? ENVIRONMENT_ID,
           label: "Compatible environment",
           platform: { os: "linux", arch: "x64" },
           serverVersion: "0.0.0-test",
@@ -222,6 +223,44 @@ describe("ConnectionResolver", () => {
 
       expect(error).toMatchObject({ reason: "unsupported" });
       expect(error.message).toContain("This client is not supported");
+    }),
+  );
+
+  it.effect("keeps identity checks when preparing an outdated host update", () =>
+    Effect.gen(function* () {
+      const brokerLayer = yield* makeDependencies({
+        descriptorProtocolVersion: null,
+        descriptorEnvironmentId: EnvironmentId.make("different-host"),
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      const target = new PrimaryConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Primary",
+        ...ENDPOINT,
+      });
+      const error = yield* Effect.flip(broker.prepareForUpdate(catalogEntry(target)));
+      expect(error).toMatchObject({ reason: "configuration" });
+      expect(error.message).toContain(
+        "Connected environment different-host does not match environment-1",
+      );
+    }),
+  );
+
+  it.effect("keeps authorization failures when preparing an outdated host update", () =>
+    Effect.gen(function* () {
+      const target = new RelayConnectionTarget({ environmentId: ENVIRONMENT_ID, label: "Cloud" });
+      const authorizationError = new ConnectionTransientError({
+        reason: "timeout",
+        detail: "Relay environment authorization timed out.",
+      });
+      const brokerLayer = yield* makeDependencies({
+        descriptorProtocolVersion: null,
+        authorizeDpop: () => Effect.fail(authorizationError),
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      expect(yield* Effect.flip(broker.prepareForUpdate(catalogEntry(target)))).toBe(
+        authorizationError,
+      );
     }),
   );
 

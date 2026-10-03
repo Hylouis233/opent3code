@@ -946,7 +946,7 @@ describe("orchestration V2 contracts", () => {
   });
 
   it.each(["mcode", "dsh"])(
-    "round-trips %s native resume identity through V2 provider-thread JSON",
+    "round-trips %s native resume identity alongside provider display metadata",
     (driver) => {
       const resume = {
         version: 1,
@@ -970,12 +970,16 @@ describe("orchestration V2 contracts", () => {
         lastRunOrdinal: 1,
         handoffIds: [],
         forkedFrom: null,
-        nativeMetadata: { externalAcpResume: resume },
+        nativeMetadata: {
+          externalAcpResume: resume,
+          modelSelection: { instanceId: resume.instanceId, model: "provider-selected-model" },
+        },
         createdAt: "2026-04-20T00:00:00.000Z",
         updatedAt: "2026-04-20T00:00:00.000Z",
       };
       const decoded = decodeOrchestrationV2ProviderThreadJson(encoded);
       expect(decoded.nativeMetadata?.externalAcpResume).toEqual(resume);
+      expect(decoded.nativeMetadata?.modelSelection).toEqual(encoded.nativeMetadata.modelSelection);
       expect(encodeOrchestrationV2ProviderThreadJson(decoded)).toMatchObject(encoded);
       expect(() =>
         decodeOrchestrationV2ProviderThreadJson({
