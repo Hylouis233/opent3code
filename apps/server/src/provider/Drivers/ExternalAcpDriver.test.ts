@@ -584,6 +584,93 @@ it.layer(Layer.merge(NodeServices.layer, IdAllocator.layer))(
         }),
     );
 
+    it.effect.each(
+      kinds.flatMap((kind) => ["cancel", "close"].map((action) => ({ kind, action }))),
+    )(
+      "$kind retires the transport after the two-second response-ack timeout on $action",
+      ({ kind, action }) =>
+        Effect.gen(function* () {
+          const written = yield* Deferred.make<void>();
+          const closed = yield* Deferred.make<void>();
+          let cancellationCount = 0;
+          // The native prompt remains open, and the transport never acknowledges the response.
+          const source = fixture.replace(
+            'return finish(message.result?.outcome?.optionId === "opaque-allow-42" ? "approved" : "rejected");',
+            "return;",
+          );
+          const h = yield* harness(kind, source, true, undefined, {
+            onResponse: () => Deferred.succeed(written, undefined).pipe(Effect.asVoid),
+            beforeCancel: Effect.sync(() => {
+              cancellationCount += 1;
+            }),
+            onClosed: Deferred.succeed(closed, undefined).pipe(Effect.asVoid),
+          });
+          const s = yield* h.open;
+          const thread = yield* s.ensure;
+          yield* s.runtime.startTurn(s.turn(thread, "permission"));
+          const request = yield* s.next(
+            (event) =>
+              event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+          );
+          assert.equal(request.type, "runtime_request.updated");
+          if (
+            request.type !== "runtime_request.updated" ||
+            request.runtimeRequest.providerTurnId === null
+          )
+            return;
+          const response = yield* s.runtime
+            .respondToRuntimeRequest({
+              requestId: request.runtimeRequest.id,
+              decision: "accept",
+            })
+            .pipe(Effect.result, Effect.forkChild);
+          yield* Deferred.await(written);
+          const operation = yield* (
+            action === "close"
+              ? s.close
+              : s.runtime.interruptTurn({
+                  providerThread: thread,
+                  providerTurnId: request.runtimeRequest.providerTurnId,
+                })
+          ).pipe(Effect.result, Effect.forkChild);
+
+          yield* TestClock.adjust("1999 millis");
+          const waitedForDeadline =
+            operation.pollUnsafe() === undefined && response.pollUnsafe() === undefined;
+          const stayedOpenBeforeDeadline = !(yield* Deferred.isDone(closed));
+          const didNotCancelBeforeDeadline = cancellationCount === 0;
+          yield* TestClock.adjust("1 millis");
+
+          const responseResult = yield* Fiber.join(response);
+          assert.equal(responseResult._tag, "Failure");
+          if (responseResult._tag === "Failure")
+            assert.equal(responseResult.failure._tag, "ProviderAdapterProtocolError");
+          const operationResult = yield* Fiber.join(operation);
+          assert.equal(operationResult._tag, action === "close" ? "Success" : "Failure");
+          if (operationResult._tag === "Failure")
+            assert.equal(operationResult.failure._tag, "ProviderAdapterProtocolError");
+          yield* Deferred.await(closed);
+          assert.isTrue(waitedForDeadline);
+          assert.isTrue(stayedOpenBeforeDeadline);
+          assert.isTrue(didNotCancelBeforeDeadline);
+          assert.equal(cancellationCount, 0);
+          if (action === "cancel") {
+            const completed = yield* s.next(terminal);
+            assert.equal(completed.type === "turn.terminal" && completed.status, "interrupted");
+            assert.equal(
+              completed.type === "turn.terminal" && completed.threadDisposition,
+              "broken",
+            );
+          }
+          const stale = yield* s.runtime
+            .respondToRuntimeRequest({ requestId: request.runtimeRequest.id, decision: "accept" })
+            .pipe(Effect.flip);
+          assert.equal(stale._tag, "ProviderAdapterProtocolError");
+          const refused = yield* s.runtime.startTurn(s.turn(thread, "next", 2)).pipe(Effect.flip);
+          assert.equal(refused._tag, "ProviderAdapterProtocolError");
+        }),
+    );
+
     it.effect.each(kinds)(
       "%s retires failed permission writes without leaving a running turn",
       (kind) =>
