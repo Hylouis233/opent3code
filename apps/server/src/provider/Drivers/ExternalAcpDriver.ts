@@ -77,8 +77,13 @@ function makeExternalDriver(
           scope: Scope.Closeable,
           resume?: string,
           canonicalHome?: string,
+          transport?: Pick<
+            AcpSessionRuntime.AcpSessionRuntimeOptions,
+            "onOutgoingResponse" | "onOutgoingResponseFailure" | "onTermination"
+          >,
         ) =>
           AcpSessionRuntime.make({
+            ...transport,
             spawn: {
               command: config.binaryPath,
               args: kind === "mcode" ? ["acp"] : ["--profile", "opent3code"],

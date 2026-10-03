@@ -16,6 +16,16 @@ import {
   ThreadId,
   type OrchestrationV2ProviderThread,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import * as EffectAcpErrors from "effect-acp/errors";
+import * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
+import { makeExternalAcpAdapterV2 } from "../../orchestration-v2/Adapters/ExternalAcpAdapterV2.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -68,6 +78,12 @@ createInterface({input:process.stdin}).on("line", (line) => {
     const text=params.prompt[0].text;
     if (text === "session-method") return finish(sessionMethod);
     if (text === "policy") return finish(JSON.stringify({args:process.argv.slice(2), permission:process.env.DSH_PERMISSION_MODE,telemetry:process.env.DSH_TELEMETRY_DISABLED,home:process.env.DSH_HOME}));
+    if (text === "provider-cancel") return finish("", "cancelled");
+    if (text === "todo-plan") {
+      update({sessionUpdate:"plan",entries:[{content:"First step",status:"in_progress",priority:"medium"},{content:"Second step",status:"pending",priority:"medium"}]});
+      update({sessionUpdate:"plan",entries:[{content:"First step",status:"completed",priority:"medium"},{content:"Second step",status:"completed",priority:"medium"}]});
+      return finish("plan complete");
+    }
     if (text === "crash") return process.exit(17);
     if (text === "hold") { update({sessionUpdate:"agent_message_chunk",content:{type:"text",text:"waiting"}}); return; }
     update({sessionUpdate:"agent_thought_chunk", content:{type:"text", text:"fixture reasoning"}});
@@ -82,7 +98,23 @@ createInterface({input:process.stdin}).on("line", (line) => {
 `;
 
 const kinds = ["mcode", "dsh"] as const;
-const harness = (kind: "mcode" | "dsh", source = fixture, enabled = true, homePath?: string) =>
+interface NativeControls {
+  readonly onResponse?: (input: {
+    readonly requestId: string;
+    readonly acknowledge: Effect.Effect<void>;
+    readonly fail: (error: EffectAcpErrors.AcpError) => Effect.Effect<void>;
+  }) => Effect.Effect<void>;
+  readonly beforeCancel?: Effect.Effect<void>;
+  readonly onClosed?: Effect.Effect<void>;
+  readonly idAllocator?: IdAllocator.IdAllocatorV2Shape;
+}
+const harness = (
+  kind: "mcode" | "dsh",
+  source = fixture,
+  enabled = true,
+  homePath?: string,
+  controls?: NativeControls,
+) =>
   Effect.gen(function* () {
     const dir = yield* Effect.promise(() =>
       NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "opent3code-acp-")),
@@ -116,7 +148,83 @@ const harness = (kind: "mcode" | "dsh", source = fixture, enabled = true, homePa
       modelSelection,
       runtimePolicy,
     };
-    const adapter = instance.orchestrationAdapter;
+    const crypto = yield* Crypto.Crypto;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
+    // Controlled native-boundary callbacks exercise the write receipt rather than relying on
+    // a fast subprocess to make handler completion and transport completion look identical.
+    const adapter =
+      controls === undefined
+        ? instance.orchestrationAdapter
+        : makeExternalAcpAdapterV2({
+            driver: driver.driverKind,
+            instanceId,
+            enabled,
+            home: homePath ?? dir,
+            homePath: homePath ?? dir,
+            crypto,
+            fileSystem,
+            path,
+            idAllocator: controls.idAllocator ?? idAllocator,
+            openRuntime: (cwd, nativeScope, resumeSessionId, canonicalHome, transport) =>
+              Effect.gen(function* () {
+                const native = yield* AcpSessionRuntime.make({
+                  ...transport,
+                  cwd,
+                  clientInfo: { name: "external-acp-test", version: "1" },
+                  spawn: {
+                    command: binaryPath,
+                    args: kind === "mcode" ? ["acp"] : ["--profile", "opent3code"],
+                    cwd,
+                    env: {
+                      ...process.env,
+                      ...(kind === "mcode"
+                        ? { MINIMAX_DATA_DIR: canonicalHome }
+                        : {
+                            DSH_HOME: canonicalHome,
+                            DSH_PERMISSION_MODE: "workspace-write",
+                            DSH_TELEMETRY_DISABLED: "1",
+                          }),
+                    },
+                  },
+                  ...(resumeSessionId === undefined
+                    ? {}
+                    : { resumeSessionId, resumeMethod: "resume" as const }),
+                  authenticateOnAuthRequired: false,
+                  cancelBehavior: "wait-for-prompt",
+                  cancelTimeout: "15 seconds",
+                  onOutgoingResponse: (requestId) => {
+                    if (
+                      transport?.onOutgoingResponse === undefined ||
+                      transport.onOutgoingResponseFailure === undefined
+                    )
+                      return Effect.die(
+                        "External adapter must register transport response callbacks",
+                      );
+                    return (
+                      controls.onResponse?.({
+                        requestId,
+                        acknowledge: transport.onOutgoingResponse(requestId),
+                        fail: (error) => transport.onOutgoingResponseFailure!(requestId, error),
+                      }) ?? transport.onOutgoingResponse(requestId)
+                    );
+                  },
+                });
+                yield* Effect.addFinalizer(() => controls.onClosed ?? Effect.void);
+                return {
+                  ...native,
+                  cancel: (controls.beforeCancel ?? Effect.void).pipe(
+                    Effect.andThen(native.cancel),
+                  ),
+                };
+              }).pipe(
+                Effect.provideService(Scope.Scope, nativeScope),
+                Effect.provideService(Crypto.Crypto, crypto),
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              ),
+          });
     const open = Effect.gen(function* () {
       const scope = yield* Scope.make();
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
@@ -334,6 +442,271 @@ it.layer(Layer.merge(NodeServices.layer, IdAllocator.layer))(
       }),
     );
 
+    it.effect.each(kinds)("%s completes a todo artifact only after every step completes", (kind) =>
+      Effect.gen(function* () {
+        const h = yield* harness(kind);
+        const s = yield* h.open;
+        const thread = yield* s.ensure;
+        yield* s.runtime.startTurn(s.turn(thread, "todo-plan"));
+        const active = yield* s.next(
+          (event) => event.type === "plan.updated" && event.plan.kind === "todo_list",
+        );
+        assert.equal(active.type === "plan.updated" && active.plan.status, "active");
+        const completed = yield* s.next(
+          (event) => event.type === "plan.updated" && event.plan.kind === "todo_list",
+        );
+        assert.equal(completed.type === "plan.updated" && completed.plan.status, "completed");
+        const item = yield* s.next(
+          (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+        );
+        assert.equal(item.type === "turn_item.updated" && item.turnItem.status, "completed");
+        assert.isNotNull(item.type === "turn_item.updated" ? item.turnItem.completedAt : null);
+        yield* s.next(terminal);
+      }),
+    );
+
+    it.effect.each(kinds)("%s preserves provider-originated cancelled status", (kind) =>
+      Effect.gen(function* () {
+        const h = yield* harness(kind);
+        const s = yield* h.open;
+        const thread = yield* s.ensure;
+        yield* s.runtime.startTurn(s.turn(thread, "provider-cancel"));
+        const cancelled = yield* s.next(terminal);
+        assert.equal(cancelled.type === "turn.terminal" && cancelled.status, "cancelled");
+      }),
+    );
+
+    it.effect.each(
+      kinds.flatMap((kind) => ["end_turn", "crash"].map((outcome) => ({ kind, outcome }))),
+    )("$kind gives explicit Stop priority over $outcome", ({ kind, outcome }) =>
+      Effect.gen(function* () {
+        const source = fixture.replace(
+          'if (method === "session/cancel") return finish("", "cancelled");',
+          outcome === "crash"
+            ? 'if (method === "session/cancel") return process.exit(17);'
+            : 'if (method === "session/cancel") return finish("", "end_turn");',
+        );
+        const h = yield* harness(kind, source);
+        const s = yield* h.open;
+        const thread = yield* s.ensure;
+        yield* s.runtime.startTurn(s.turn(thread, "hold"));
+        const started = yield* s.next(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+        );
+        if (started.type !== "provider_turn.updated") return;
+        yield* s.runtime
+          .interruptTurn({ providerThread: thread, providerTurnId: started.providerTurn.id })
+          .pipe(Effect.result);
+        const interrupted = yield* s.next(terminal);
+        assert.equal(interrupted.type === "turn.terminal" && interrupted.status, "interrupted");
+        assert.equal(
+          interrupted.type === "turn.terminal" && interrupted.threadDisposition,
+          outcome === "crash" ? "broken" : "reusable",
+        );
+      }),
+    );
+
+    it.effect.each(
+      kinds.flatMap((kind) =>
+        ["cancel", "close"].flatMap((action) =>
+          [false, true].map((answered) => ({ kind, action, answered })),
+        ),
+      ),
+    )(
+      "$kind waits for a written permission response before $action (answered=$answered)",
+      ({ kind, action, answered }) =>
+        Effect.gen(function* () {
+          const written = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const order: Array<string> = [];
+          const h = yield* harness(kind, fixture, true, undefined, {
+            onResponse: ({ requestId, acknowledge }) =>
+              Effect.gen(function* () {
+                assert.equal(requestId, "native-permission");
+                order.push("written");
+                yield* Deferred.succeed(written, undefined);
+                yield* Deferred.await(release);
+                order.push("acknowledged");
+                yield* acknowledge;
+              }),
+            beforeCancel: Effect.sync(() => {
+              order.push("cancel");
+            }),
+            onClosed: Effect.sync(() => {
+              order.push("closed");
+            }),
+          });
+          const s = yield* h.open;
+          const thread = yield* s.ensure;
+          yield* s.runtime.startTurn(s.turn(thread, "permission"));
+          const request = yield* s.next(
+            (event) =>
+              event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+          );
+          if (
+            request.type !== "runtime_request.updated" ||
+            request.runtimeRequest.providerTurnId === null
+          )
+            return;
+          const response = answered
+            ? yield* s.runtime
+                .respondToRuntimeRequest({
+                  requestId: request.runtimeRequest.id,
+                  decision: "accept",
+                })
+                .pipe(Effect.result, Effect.forkChild)
+            : undefined;
+          if (answered) yield* Deferred.await(written);
+          const actionFiber = yield* (
+            action === "close"
+              ? s.close
+              : s.runtime.interruptTurn({
+                  providerThread: thread,
+                  providerTurnId: request.runtimeRequest.providerTurnId,
+                })
+          ).pipe(Effect.result, Effect.forkChild);
+          yield* Deferred.await(written);
+          yield* Effect.yieldNow;
+          const blockedUntilAcknowledged =
+            actionFiber.pollUnsafe() === undefined &&
+            !order.includes("cancel") &&
+            !order.includes("closed");
+          yield* Deferred.succeed(release, undefined);
+          const result = yield* Fiber.join(actionFiber);
+          assert.equal(result._tag, "Success");
+          if (response) assert.equal((yield* Fiber.join(response))._tag, "Success");
+          assert.isTrue(blockedUntilAcknowledged);
+          if (action === "close")
+            assert.isTrue(order.indexOf("closed") > order.indexOf("acknowledged"));
+          if (order.includes("cancel"))
+            assert.isTrue(order.indexOf("cancel") > order.indexOf("acknowledged"));
+        }),
+    );
+
+    it.effect.each(kinds)(
+      "%s retires failed permission writes without leaving a running turn",
+      (kind) =>
+        Effect.gen(function* () {
+          const closed = yield* Deferred.make<void>();
+          const source = fixture.replace(
+            'return finish(message.result?.outcome?.optionId === "opaque-allow-42" ? "approved" : "rejected");',
+            "return;",
+          );
+          const h = yield* harness(kind, source, true, undefined, {
+            onResponse: ({ fail }) =>
+              fail(
+                new EffectAcpErrors.AcpTransportError({
+                  detail: "fixture permission write failed",
+                  cause: undefined,
+                }),
+              ),
+            onClosed: Deferred.succeed(closed, undefined).pipe(Effect.asVoid),
+          });
+          const s = yield* h.open;
+          const thread = yield* s.ensure;
+          yield* s.runtime.startTurn(s.turn(thread, "permission"));
+          const request = yield* s.next(
+            (event) =>
+              event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+          );
+          if (request.type !== "runtime_request.updated") return;
+          const response = yield* s.runtime
+            .respondToRuntimeRequest({ requestId: request.runtimeRequest.id, decision: "accept" })
+            .pipe(Effect.flip);
+          assert.equal(response._tag, "ProviderAdapterProtocolError");
+          const failed = yield* s.next(terminal);
+          assert.equal(failed.type === "turn.terminal" && failed.status, "failed");
+          assert.equal(failed.type === "turn.terminal" && failed.threadDisposition, "broken");
+          yield* Deferred.await(closed);
+          const refused = yield* s.runtime.startTurn(s.turn(thread, "next", 2)).pipe(Effect.flip);
+          assert.equal(refused._tag, "ProviderAdapterProtocolError");
+        }),
+    );
+
+    it.effect.each(
+      kinds.flatMap((kind) => ["cancel", "close"].map((action) => ({ kind, action }))),
+    )("$kind drains permission admission paused before $action", ({ kind, action }) =>
+      Effect.gen(function* () {
+        const allocating = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const ids = yield* IdAllocator.IdAllocatorV2;
+        const order: Array<string> = [];
+        const h = yield* harness(kind, fixture, true, undefined, {
+          idAllocator: {
+            ...ids,
+            allocate: {
+              ...ids.allocate,
+              runtimeRequest: (input) =>
+                Deferred.succeed(allocating, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(ids.allocate.runtimeRequest(input)),
+                ),
+            },
+          },
+          onResponse: ({ acknowledge }) =>
+            Effect.sync(() => {
+              order.push("acknowledged");
+            }).pipe(Effect.andThen(acknowledge)),
+          beforeCancel: Effect.sync(() => {
+            order.push("cancel");
+          }),
+          onClosed: Effect.sync(() => {
+            order.push("closed");
+          }),
+        });
+        const s = yield* h.open;
+        const thread = yield* s.ensure;
+        yield* s.runtime.startTurn(s.turn(thread, "permission"));
+        const started = yield* s.next(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+        );
+        if (started.type !== "provider_turn.updated") return;
+        yield* Deferred.await(allocating);
+        const operation = yield* (
+          action === "close"
+            ? s.close
+            : s.runtime.interruptTurn({
+                providerThread: thread,
+                providerTurnId: started.providerTurn.id,
+              })
+        ).pipe(Effect.result, Effect.forkChild);
+        yield* Effect.yieldNow;
+        const blockedDuringAdmission = operation.pollUnsafe() === undefined && order.length === 0;
+        yield* Deferred.succeed(release, undefined);
+        assert.equal((yield* Fiber.join(operation))._tag, "Success");
+        assert.isTrue(blockedDuringAdmission);
+        assert.equal(order[0], "acknowledged");
+      }),
+    );
+
+    it.effect.each(kinds)(
+      "%s closes an unresponsive native prompt after the cancellation timeout",
+      (kind) =>
+        Effect.gen(function* () {
+          const cancelling = yield* Deferred.make<void>();
+          const closed = yield* Deferred.make<void>();
+          const source = fixture.replace(
+            'if (method === "session/cancel") return finish("", "cancelled");',
+            'if (method === "session/cancel") return;',
+          );
+          const h = yield* harness(kind, source, true, undefined, {
+            beforeCancel: Deferred.succeed(cancelling, undefined).pipe(Effect.asVoid),
+            onClosed: Deferred.succeed(closed, undefined).pipe(Effect.asVoid),
+          });
+          const s = yield* h.open;
+          const thread = yield* s.ensure;
+          yield* s.runtime.startTurn(s.turn(thread, "hold"));
+          yield* s.next((event) => event.type === "message.updated");
+          const closing = yield* s.close.pipe(Effect.forkChild);
+          yield* Deferred.await(cancelling);
+          yield* TestClock.adjust("16 seconds");
+          yield* Fiber.join(closing);
+          assert.isTrue(yield* Deferred.isDone(closed));
+        }),
+    );
+
     it.effect.each(kinds)("%s rejects duplicate approval replies", (kind) =>
       Effect.gen(function* () {
         const h = yield* harness(kind);
@@ -408,7 +781,7 @@ it.layer(Layer.merge(NodeServices.layer, IdAllocator.layer))(
           providerTurnId: started.providerTurn.id,
         });
         const cancelled = yield* s.next(terminal);
-        assert.equal(cancelled.type === "turn.terminal" && cancelled.status, "cancelled");
+        assert.equal(cancelled.type === "turn.terminal" && cancelled.status, "interrupted");
         yield* s.runtime.startTurn(s.turn(thread, "next", 2));
         const completed = yield* s.next(terminal);
         assert.equal(completed.type === "turn.terminal" && completed.status, "completed");

@@ -18,6 +18,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
@@ -25,7 +26,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import type * as EffectAcpErrors from "effect-acp/errors";
+import * as EffectAcpErrors from "effect-acp/errors";
 import { parsePermissionRequest } from "../../provider/acp/AcpRuntimeModel.ts";
 import type * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import {
@@ -156,6 +157,8 @@ interface ActiveTurn {
   readonly items: Map<string, OrchestrationV2TurnItem>;
   nextOrdinal: number;
   cancelling: boolean;
+  interrupted: boolean;
+  promptSettled: boolean;
 }
 
 export function makeExternalAcpAdapterV2(options: {
@@ -173,6 +176,10 @@ export function makeExternalAcpAdapterV2(options: {
     scope: Scope.Closeable,
     resume?: string,
     canonicalHome?: string,
+    transport?: Pick<
+      AcpSessionRuntime.AcpSessionRuntimeOptions,
+      "onOutgoingResponse" | "onOutgoingResponseFailure" | "onTermination"
+    >,
   ) => Effect.Effect<NativeRuntime, EffectAcpErrors.AcpError>;
 }): Adapter.ProviderAdapterV2Shape {
   const { driver, instanceId, idAllocator } = options;
@@ -243,15 +250,22 @@ export function makeExternalAcpAdapterV2(options: {
         if (homeInfo.type !== "Directory")
           return yield* invalid("The CLI home must be a directory");
         const expected = { version: 1 as const, driver, instanceId, cwd, home };
-        const scope = yield* Effect.scope;
+        // Native transport failures close the native scope. Keep turn finalization alive there,
+        // while keeping it out of the parent's LIFO teardown until permissions are drained.
+        const turnScope = yield* Scope.make();
         const events = yield* Queue.unbounded<Adapter.ProviderAdapterV2Event, Cause.Done>();
         const lifecycle = yield* Semaphore.make(1);
         const pending = new Map<
           RuntimeRequestId,
           {
             readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
-            readonly done: Deferred.Deferred<void>;
+            readonly transportRequestId: string;
+            readonly done: Deferred.Deferred<void, EffectAcpErrors.AcpError>;
           }
+        >();
+        const responseAcknowledgements = new Map<
+          string,
+          Deferred.Deferred<void, EffectAcpErrors.AcpError>
         >();
         let active: ActiveTurn | undefined;
         let native: NativeRuntime | undefined;
@@ -287,16 +301,100 @@ export function makeExternalAcpAdapterV2(options: {
             };
             yield* emit({ type: "provider_session.updated", driver, providerSession });
           });
+        const failPermissionResponses = (error: EffectAcpErrors.AcpError) =>
+          Effect.gen(function* () {
+            broken = true;
+            const requests = [...pending.values()];
+            const acknowledgements = [...responseAcknowledgements.values()];
+            pending.clear();
+            responseAcknowledgements.clear();
+            yield* Effect.forEach(
+              requests,
+              (request) => Deferred.succeed(request.decision, "cancel"),
+              { discard: true },
+            );
+            yield* Effect.forEach(
+              acknowledgements,
+              (acknowledgement) => Deferred.fail(acknowledgement, error),
+              { discard: true },
+            );
+            if (!stopped)
+              yield* sessionStatus(
+                "error",
+                "The native permission response could not be delivered; restart the session.",
+              );
+          });
+        const retirePermissionTransport = (error: EffectAcpErrors.AcpError) =>
+          failPermissionResponses(error).pipe(
+            Effect.andThen(
+              Effect.suspend(() =>
+                nativeScope === undefined
+                  ? Effect.void
+                  : Scope.close(nativeScope, Exit.fail(error)).pipe(
+                      Effect.uninterruptible,
+                      Effect.forkIn(turnScope),
+                      Effect.asVoid,
+                    ),
+              ),
+            ),
+          );
+        const acknowledgePermissionResponse = (transportRequestId: string) =>
+          Effect.gen(function* () {
+            const acknowledgement = responseAcknowledgements.get(transportRequestId);
+            if (acknowledgement === undefined) return;
+            responseAcknowledgements.delete(transportRequestId);
+            for (const [requestId, request] of pending) {
+              if (request.transportRequestId === transportRequestId) pending.delete(requestId);
+            }
+            yield* Deferred.succeed(acknowledgement, undefined);
+          });
+        const awaitPermissionResponses = (
+          acknowledgements: ReadonlyArray<Deferred.Deferred<void, EffectAcpErrors.AcpError>>,
+        ) =>
+          Effect.gen(function* () {
+            if (acknowledgements.length === 0) return !broken;
+            // A finalizer runs uninterruptibly. Separate interruptible workers keep the timeout
+            // effective during Scope.close as well as ordinary approval/Stop requests.
+            const completed = yield* Deferred.make<boolean>();
+            const watcher = yield* Effect.forEach(
+              acknowledgements,
+              (acknowledgement) => Deferred.await(acknowledgement).pipe(Effect.exit),
+              { concurrency: "unbounded" },
+            ).pipe(
+              Effect.flatMap((results) =>
+                Deferred.succeed(completed, results.every(Exit.isSuccess)),
+              ),
+              Effect.interruptible,
+              Effect.forkDetach,
+            );
+            const timer = yield* Effect.sleep("2 seconds").pipe(
+              Effect.andThen(Deferred.succeed(completed, false)),
+              Effect.interruptible,
+              Effect.forkDetach,
+            );
+            const success = yield* Deferred.await(completed).pipe(
+              Effect.ensuring(
+                Fiber.interrupt(watcher).pipe(Effect.andThen(Fiber.interrupt(timer))),
+              ),
+            );
+            if (!success)
+              yield* retirePermissionTransport(
+                new EffectAcpErrors.AcpTransportError({
+                  detail:
+                    "The ACP permission response failed or timed out before its transport write was acknowledged",
+                  cause: undefined,
+                }),
+              );
+            return success && !broken;
+          });
         const drainPermissions = Effect.gen(function* () {
-          const requests = [...pending.values()];
+          const acknowledgements = [...responseAcknowledgements.values()];
           yield* Effect.forEach(
-            requests,
+            [...pending.values()],
             (request) => Deferred.succeed(request.decision, "cancel"),
             { discard: true },
           );
-          yield* Effect.forEach(requests, (request) => Deferred.await(request.done), {
-            discard: true,
-          });
+          return yield* awaitPermissionResponses(acknowledgements);
         });
         const itemBase = (ctx: ActiveTurn, key: string, now: DateTime.Utc): ItemBase => {
           const previous = ctx.items.get(key);
@@ -446,6 +544,8 @@ export function makeExternalAcpAdapterV2(options: {
                     text: step.step,
                     status: step.status === "inProgress" ? ("running" as const) : step.status,
                   }));
+                  const completed =
+                    steps.length > 0 && steps.every((step) => step.status === "completed");
                   yield* emit({
                     type: "plan.updated",
                     driver,
@@ -455,11 +555,18 @@ export function makeExternalAcpAdapterV2(options: {
                       runId: ctx.input.runId,
                       nodeId: ctx.input.rootNodeId,
                       kind: "todo_list",
-                      status: "active",
+                      status: completed ? "completed" : "active",
                       steps,
                     },
                   });
-                  yield* publishItem(ctx, key, { ...base, type: "todo_list", planId, steps });
+                  yield* publishItem(ctx, key, {
+                    ...base,
+                    type: "todo_list",
+                    planId,
+                    steps,
+                    status: completed ? "completed" : "running",
+                    completedAt: completed ? now : null,
+                  });
                 } else {
                   yield* emit({
                     type: "plan.updated",
@@ -537,14 +644,21 @@ export function makeExternalAcpAdapterV2(options: {
               );
             const nextScope = yield* Scope.make();
             const result = yield* Effect.gen(function* () {
-              const runtime = yield* options.openRuntime(cwd, nextScope, cursor?.sessionId, home);
-              yield* runtime.handleRequestPermission((params) =>
+              const runtime = yield* options.openRuntime(cwd, nextScope, cursor?.sessionId, home, {
+                onOutgoingResponse: acknowledgePermissionResponse,
+                onOutgoingResponseFailure: (_requestId, error) => retirePermissionTransport(error),
+                onTermination: failPermissionResponses,
+              });
+              yield* runtime.handleRequestPermission((params, requestContext) =>
                 Effect.gen(function* () {
+                  const responseDone = yield* Deferred.make<void, EffectAcpErrors.AcpError>();
+                  responseAcknowledgements.set(requestContext.requestId, responseDone);
                   const ctx = active;
                   if (
                     !ctx ||
                     stopped ||
                     ctx.cancelling ||
+                    ctx.promptSettled ||
                     params.sessionId !== thread?.nativeThreadRef?.nativeId
                   )
                     return { outcome: { outcome: "cancelled" as const } };
@@ -556,8 +670,9 @@ export function makeExternalAcpAdapterV2(options: {
                       nativeRequestId: params.toolCall.toolCallId,
                     })
                     .pipe(Effect.orDie);
+                  if (stopped || broken || active !== ctx || ctx.cancelling || ctx.promptSettled)
+                    return { outcome: { outcome: "cancelled" as const } };
                   const decision = yield* Deferred.make<ProviderApprovalDecision>();
-                  const responseDone = yield* Deferred.make<void>();
                   const now = yield* DateTime.now;
                   const requestKind =
                     parsed.kind === "edit" || parsed.kind === "delete" || parsed.kind === "move"
@@ -614,7 +729,11 @@ export function makeExternalAcpAdapterV2(options: {
                     startedAt: now,
                     completedAt: null,
                   };
-                  pending.set(requestId, { decision, done: responseDone });
+                  pending.set(requestId, {
+                    decision,
+                    transportRequestId: requestContext.requestId,
+                    done: responseDone,
+                  });
                   return yield* Effect.gen(function* () {
                     yield* emit({ type: "node.updated", driver, node });
                     yield* emit({
@@ -661,14 +780,7 @@ export function makeExternalAcpAdapterV2(options: {
                       updatedAt: resolvedAt,
                     });
                     return { outcome };
-                  }).pipe(
-                    Effect.ensuring(
-                      Effect.gen(function* () {
-                        pending.delete(requestId);
-                        yield* Deferred.succeed(responseDone, undefined);
-                      }),
-                    ),
-                  );
+                  });
                 }),
               );
               yield* runtime.getEvents().pipe(Stream.runForEach(consume), Effect.forkIn(nextScope));
@@ -743,11 +855,18 @@ export function makeExternalAcpAdapterV2(options: {
           Effect.gen(function* () {
             stopped = true;
             if (active) active.cancelling = true;
-            yield* drainPermissions;
-            if (active && native) yield* native.cancel.pipe(Effect.ignore);
-            if (nativeScope) yield* Scope.close(nativeScope, Exit.void);
-            yield* Queue.end(events);
-          }),
+            const drained = yield* drainPermissions;
+            if (drained && active && native)
+              yield* native.cancel.pipe(Effect.interruptible, Effect.ignore);
+          }).pipe(
+            Effect.ensuring(
+              Effect.gen(function* () {
+                if (nativeScope) yield* Scope.close(nativeScope, Exit.void);
+                yield* Scope.close(turnScope, Exit.void);
+                yield* Queue.end(events);
+              }),
+            ),
+          ),
         );
         const validateCurrent = (
           selection: ModelSelection,
@@ -820,6 +939,8 @@ export function makeExternalAcpAdapterV2(options: {
                   items: new Map(),
                   nextOrdinal: 1,
                   cancelling: false,
+                  interrupted: false,
+                  promptSettled: false,
                   turn: {
                     id: idAllocator.derive.providerTurn({ driver, nativeTurnId }),
                     providerThreadId: thread.id,
@@ -847,14 +968,17 @@ export function makeExternalAcpAdapterV2(options: {
                       { dispatched },
                     )
                     .pipe(Effect.exit);
+                  ctx.promptSettled = true;
                   yield* runtime.drainEvents;
-                  yield* drainPermissions;
+                  const permissionsDrained = yield* drainPermissions;
                   const completedAt = yield* DateTime.now;
-                  const status = Exit.isFailure(result)
-                    ? "failed"
-                    : result.value.stopReason === "cancelled" || ctx.cancelling
-                      ? "cancelled"
-                      : "completed";
+                  const status = ctx.interrupted
+                    ? "interrupted"
+                    : Exit.isFailure(result) || !permissionsDrained
+                      ? "failed"
+                      : result.value.stopReason === "cancelled" || ctx.cancelling
+                        ? "cancelled"
+                        : "completed";
                   for (const [key, item] of ctx.items) {
                     if (
                       item.status === "completed" ||
@@ -906,13 +1030,16 @@ export function makeExternalAcpAdapterV2(options: {
                 }).pipe(
                   Effect.ensuring(
                     Effect.gen(function* () {
-                      if (active === ctx) active = undefined;
-                      yield* drainPermissions;
+                      if (active === ctx) {
+                        ctx.promptSettled = true;
+                        yield* drainPermissions;
+                        if (active === ctx) active = undefined;
+                      }
                       yield* Deferred.succeed(done, undefined);
                     }),
                   ),
                 );
-                yield* run.pipe(Effect.forkIn(scope));
+                yield* run.pipe(Effect.forkIn(turnScope));
                 yield* Effect.raceFirst(Deferred.await(dispatched), Deferred.await(done));
               }),
             ),
@@ -934,7 +1061,12 @@ export function makeExternalAcpAdapterV2(options: {
               )
                 return yield* invalid("The requested turn is no longer active");
               ctx.cancelling = true;
-              yield* drainPermissions;
+              ctx.interrupted = true;
+              const drained = yield* drainPermissions;
+              if (!drained)
+                return yield* invalid(
+                  "The native permission response could not be delivered; restart the session",
+                );
               yield* native!.cancel.pipe(
                 Effect.mapError(() =>
                   invalid("Cancellation did not settle; restart the native session"),
@@ -957,6 +1089,10 @@ export function makeExternalAcpAdapterV2(options: {
               )
                 return yield* invalid(
                   "The approval expired, was already answered or belongs to another session",
+                );
+              if (!(yield* awaitPermissionResponses([pendingRequest.done])))
+                return yield* invalid(
+                  "The native permission response could not be delivered; restart the session",
                 );
             }),
           readThreadSnapshot: () =>
