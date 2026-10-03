@@ -165,7 +165,13 @@ const providerTurnControlServiceProvided = providerTurnControlServiceLayer.pipe(
   Layer.provide(Layer.merge(projectionStoreLayer, providerSessionManagerProvided)),
 );
 const runtimeRequestServiceProvided = runtimeRequestServiceLayer.pipe(
-  Layer.provide(Layer.merge(projectionStoreLayer, providerSessionManagerProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      projectionStoreLayer,
+      providerSessionManagerProvided,
+      providerEventIngestorProvided,
+    ),
+  ),
 );
 const checkpointRollbackServiceProvided = checkpointRollbackServiceLayer.pipe(
   Layer.provide(

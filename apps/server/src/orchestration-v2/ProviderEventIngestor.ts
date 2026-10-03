@@ -17,7 +17,9 @@ import {
   RawEventId,
   RunAttemptId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
+  type OrchestrationV2RuntimeRequest,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -33,6 +35,7 @@ import * as IdAllocator from "./IdAllocator.ts";
 import { ProviderAdapterV2Event } from "./ProviderAdapter.ts";
 import { makeProviderFailureTurnItem } from "./ProviderFailure.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as ProviderRuntimeLifetime from "./ProviderRuntimeLifetime.ts";
 
 export class ProviderEventNormalizeError extends Schema.TaggedError<ProviderEventNormalizeError>()(
   "ProviderEventNormalizeError",
@@ -208,12 +211,19 @@ export interface ProviderEventIngestInput {
   readonly analyticsContext?: ProviderTurnAnalyticsContext;
 }
 
-export interface ProviderEventIngestorV2Shape {
+export interface ProviderEventIngestorV2Shape
+  extends ProviderRuntimeLifetime.ProviderRuntimeLifetimeLifecycle {
+  /** Omitted runId discards only the manager's runless consumer buffers. */
+  readonly discardBufferedRequests: (
+    token: ProviderRuntimeLifetime.ProviderRuntimeLifetime,
+    runId?: RunId,
+  ) => void;
   readonly normalize: (
     input: ProviderEventIngestInput,
   ) => Effect.Effect<ReadonlyArray<OrchestrationV2DomainEvent>, ProviderEventIngestorV2Error>;
   readonly ingestNormalized: (
     input: ProviderEventIngestInput & {
+      readonly runtimeLifetime: ProviderRuntimeLifetime.ProviderRuntimeLifetime;
       /**
        * Atomically reject mutable provider state emitted by an attempt that
        * lost ownership while the adapter event was in flight.
@@ -264,6 +274,19 @@ export const layer: Layer.Layer<
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const analytics = yield* ProviderTurnAnalytics;
     const completedTurnAnalytics = new Set<string>();
+    const lifetimes = yield* ProviderRuntimeLifetime.make;
+    type IngestInput = Parameters<ProviderEventIngestorV2Shape["ingestNormalized"]>[0];
+    interface BufferedSiblings {
+      readonly groups: Map<RuntimeRequestId, Map<string, OrchestrationV2DomainEvent>>;
+      readonly sourceRuns: Map<RuntimeRequestId, RunId | undefined>;
+      size: number;
+      bytes: number;
+      failed: boolean;
+    }
+    const siblingBuffers = new WeakMap<
+      ProviderRuntimeLifetime.ProviderRuntimeLifetime,
+      BufferedSiblings
+    >();
 
     const makeDomainEvent = (
       input: ProviderEventIngestInput,
@@ -546,51 +569,531 @@ export const layer: Layer.Layer<
         ),
       );
 
+    const publish = (
+      input: IngestInput,
+      events: ReadonlyArray<OrchestrationV2DomainEvent>,
+      guardPendingUserInputCancellations = true,
+    ) =>
+      Effect.gen(function* () {
+        if (events.length === 0) return [];
+        if (input.writeIfProviderThreadOwner !== undefined) {
+          return (yield* eventSink.writeIfProviderThreadOwner({
+            guardPendingUserInputCancellations,
+            ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+            ...input.writeIfProviderThreadOwner,
+            events,
+          })).storedEvents;
+        }
+        if (input.writeIfRunCurrent !== undefined) {
+          return (yield* eventSink.writeIfRunCurrent({
+            guardPendingUserInputCancellations,
+            ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+            threadId: input.threadId,
+            ...input.writeIfRunCurrent,
+            events,
+          })).storedEvents;
+        }
+        return yield* eventSink.write({
+          guardPendingUserInputCancellations,
+          ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+          events,
+        });
+      });
+
+    const linkedRequestId = (event: ProviderAdapterV2Event): RuntimeRequestId | undefined => {
+      switch (event.type) {
+        case "runtime_request.updated":
+          return event.runtimeRequest.id;
+        case "node.updated":
+          return event.node.runtimeRequestId ?? undefined;
+        case "turn_item.updated":
+          return event.turnItem.type === "approval_request" ||
+            event.turnItem.type === "user_input_request"
+            ? event.turnItem.requestId
+            : undefined;
+        default:
+          return undefined;
+      }
+    };
+    // Count retained strings without serializing (and copying) prompt content.
+    const bufferedSize = (value: unknown): number => {
+      if (typeof value === "string") return value.length * 2;
+      if (value === null || typeof value !== "object") return 8;
+      if (Array.isArray(value))
+        return 64 + value.reduce((total, item) => total + bufferedSize(item), 0);
+      return (
+        64 +
+        Object.entries(value).reduce(
+          (total, [key, entry]) => total + key.length * 2 + bufferedSize(entry),
+          0,
+        )
+      );
+    };
+    const isMutableArtifactStatus = (status: string) =>
+      ["idle", "pending", "running", "waiting"].includes(status);
+    const siblingKey = (event: OrchestrationV2DomainEvent) =>
+      `${event.type}:${"id" in event.payload ? event.payload.id : ""}`;
+    const removeBuffer = (
+      token: ProviderRuntimeLifetime.ProviderRuntimeLifetime,
+      requestId: RuntimeRequestId,
+    ) => {
+      const buffer = siblingBuffers.get(token);
+      const group = buffer?.groups.get(requestId);
+      if (buffer === undefined || group === undefined) return;
+      buffer.size -= group.size;
+      for (const event of group.values()) buffer.bytes -= bufferedSize(event);
+      buffer.groups.delete(requestId);
+      buffer.sourceRuns.delete(requestId);
+    };
+    const requestIdentityMatches = (
+      group: ProviderRuntimeLifetime.OwnedRuntimeRequestGroup,
+      threadId: ThreadId,
+      request: OrchestrationV2RuntimeRequest,
+    ) =>
+      group.threadId === threadId &&
+      group.requestId === request.id &&
+      group.nodeId === request.nodeId &&
+      group.providerTurnId === request.providerTurnId &&
+      group.kind === request.kind;
+
+    const ingestRequestGroup = (input: IngestInput, requestId: RuntimeRequestId) =>
+      lifetimes.lifecycle.withLifetimeWrite(
+        input.runtimeLifetime,
+        lifetimes.withAdmission(
+          Effect.gen(function* () {
+            const token = input.runtimeLifetime;
+            const group = lifetimes.group(token, requestId);
+            const owner = lifetimes.requestOwner(requestId);
+            if (owner !== undefined && owner !== token) return [];
+            if (group === undefined && siblingBuffers.get(token)?.failed === true) return [];
+            const incomingRequest =
+              input.event.type === "runtime_request.updated"
+                ? input.event.runtimeRequest
+                : undefined;
+            const threadId =
+              input.event.type === "node.updated"
+                ? input.event.node.threadId
+                : input.event.type === "turn_item.updated"
+                  ? input.event.turnItem.threadId
+                  : input.event.type === "runtime_request.updated"
+                    ? (input.event.threadId ?? input.threadId)
+                    : input.threadId;
+            const persisted = yield* projections.getRuntimeRequestById(threadId, requestId);
+            // Existing SQL identities are never adopted by a new runtime, even if
+            // the application thread and provider's native request ID happen to match.
+            if (group === undefined && persisted !== undefined) {
+              removeBuffer(token, requestId);
+              return [];
+            }
+            if (
+              group !== undefined &&
+              (persisted === undefined
+                ? incomingRequest === undefined
+                : !requestIdentityMatches(group, persisted.threadId, persisted.request))
+            )
+              return [];
+            if (
+              incomingRequest !== undefined &&
+              ((group !== undefined && !requestIdentityMatches(group, threadId, incomingRequest)) ||
+                (incomingRequest.responseCapability.type === "live" &&
+                  incomingRequest.responseCapability.providerSessionId !== input.providerSessionId))
+            )
+              return [];
+            if (
+              group !== undefined &&
+              incomingRequest !== undefined &&
+              incomingRequest.responseCapability.type !== group.capability &&
+              incomingRequest.responseCapability.type !== "not_resumable"
+            )
+              return [];
+            const capability = group?.capability ?? incomingRequest?.responseCapability.type;
+            if (
+              capability === "live" &&
+              !lifetimes.isActive(token) &&
+              (incomingRequest?.status ?? persisted?.request.status ?? "pending") === "pending" &&
+              incomingRequest?.responseCapability.type !== "not_resumable"
+            ) {
+              removeBuffer(token, requestId);
+              return [];
+            }
+            const normalized = yield* normalize(input);
+            if (group === undefined && incomingRequest === undefined) {
+              let buffer = siblingBuffers.get(token);
+              if (buffer === undefined) {
+                buffer = {
+                  groups: new Map(),
+                  sourceRuns: new Map(),
+                  size: 0,
+                  bytes: 0,
+                  failed: false,
+                };
+                siblingBuffers.set(token, buffer);
+              }
+              // Waiting for classification must never block the sequential provider
+              // stream. Keep only the latest sibling reference, with a hard bound.
+              let siblings = buffer.groups.get(requestId);
+              if (siblings === undefined) {
+                siblings = new Map();
+                buffer.groups.set(requestId, siblings);
+                buffer.sourceRuns.set(requestId, input.runId);
+              }
+              for (const event of normalized) {
+                const key = siblingKey(event);
+                const previous = siblings.get(key);
+                if (
+                  previous !== undefined &&
+                  "status" in previous.payload &&
+                  "status" in event.payload &&
+                  !isMutableArtifactStatus(String(previous.payload.status)) &&
+                  isMutableArtifactStatus(String(event.payload.status))
+                )
+                  continue;
+                if (previous === undefined) buffer.size += 1;
+                else buffer.bytes -= bufferedSize(previous);
+                buffer.bytes += bufferedSize(event);
+                siblings.set(key, event);
+              }
+              if (buffer.size > 256 || buffer.bytes > 1_048_576) {
+                buffer.groups.clear();
+                buffer.sourceRuns.clear();
+                buffer.size = 0;
+                buffer.bytes = 0;
+                buffer.failed = true;
+                return yield* new ProviderEventPublishError({
+                  providerSessionId: input.providerSessionId,
+                  eventCount: 0,
+                  cause: new Error("Provider request sibling buffer capacity exceeded"),
+                });
+              }
+              return [];
+            }
+            if (group === undefined && !lifetimes.canRegister(token)) {
+              removeBuffer(token, requestId);
+              return yield* new ProviderEventPublishError({
+                providerSessionId: input.providerSessionId,
+                eventCount: 0,
+                cause: new Error("Provider runtime request ownership capacity exceeded"),
+              });
+            }
+            const request = persisted?.request ?? incomingRequest!;
+            const requestEvent = normalized.find(
+              (event) => event.type === "runtime-request.updated",
+            );
+            const siblings = [
+              ...(siblingBuffers.get(token)?.groups.get(requestId)?.values() ?? []),
+              ...normalized.filter((event) => event.type !== "runtime-request.updated"),
+            ];
+            const nextRequest =
+              request.status !== "pending" ? request : (incomingRequest ?? request);
+            const terminal =
+              nextRequest.status !== "pending" ||
+              nextRequest.responseCapability.type === "not_resumable";
+            const terminalStatus =
+              nextRequest.status === "resolved" ? ("completed" as const) : ("cancelled" as const);
+            const now = yield* DateTime.now;
+            if (terminal && group !== undefined) {
+              const node = yield* projections.getNodeById(threadId, group.nodeId);
+              if (
+                node !== undefined &&
+                node.runtimeRequestId === requestId &&
+                !siblings.some(
+                  (event) => event.type === "node.updated" && event.payload.id === node.id,
+                )
+              ) {
+                siblings.push(
+                  yield* makeDomainEvent(input, {
+                    type: "node.updated",
+                    threadId,
+                    runId: node.runId,
+                    nodeId: node.id,
+                    payload: node,
+                  }),
+                );
+              }
+              for (const itemId of group.itemIds) {
+                const item = yield* projections.getTurnItemById(threadId, itemId);
+                if (
+                  item !== undefined &&
+                  (item.type === "approval_request" || item.type === "user_input_request") &&
+                  item.requestId === requestId &&
+                  !siblings.some(
+                    (event) => event.type === "turn-item.updated" && event.payload.id === item.id,
+                  )
+                ) {
+                  siblings.push(
+                    yield* makeDomainEvent(input, {
+                      type: "turn-item.updated",
+                      threadId,
+                      runId: item.runId,
+                      nodeId: item.nodeId,
+                      payload: item,
+                    }),
+                  );
+                }
+              }
+            }
+            const events: Array<OrchestrationV2DomainEvent> = [];
+            if (
+              requestEvent !== undefined &&
+              (persisted === undefined || request.status === "pending")
+            ) {
+              events.push(
+                requestEvent.type === "runtime-request.updated" &&
+                  nextRequest.status === "pending" &&
+                  nextRequest.responseCapability.type === "not_resumable"
+                  ? {
+                      ...requestEvent,
+                      payload: { ...nextRequest, status: "cancelled", resolvedAt: now },
+                    }
+                  : requestEvent,
+              );
+            }
+            const itemIds = new Set(group?.itemIds ?? []);
+            // The request's node key can collide before its node event arrives.
+            const nodeReservation = lifetimes.nodeRequestId(request.nodeId);
+            if (nodeReservation !== undefined && nodeReservation !== requestId) return [];
+            const existingRequestNode = yield* projections.getNodeById(threadId, request.nodeId);
+            if (
+              existingRequestNode !== undefined &&
+              (persisted === undefined ||
+                existingRequestNode.threadId !== threadId ||
+                existingRequestNode.runtimeRequestId !== requestId)
+            )
+              return [];
+            if (persisted === undefined) {
+              const priorNodeRequest = yield* projections.getRuntimeRequestByNodeId(
+                threadId,
+                request.nodeId,
+              );
+              if (priorNodeRequest !== undefined) return [];
+            }
+            for (const event of siblings) {
+              if (event.threadId !== threadId) return [];
+              if (event.type === "node.updated") {
+                if (
+                  event.payload.id !== request.nodeId ||
+                  event.payload.runtimeRequestId !== requestId
+                )
+                  return [];
+                const existing = yield* projections.getNodeById(threadId, event.payload.id);
+                if (
+                  existing !== undefined &&
+                  (existing.threadId !== threadId || existing.runtimeRequestId !== requestId)
+                )
+                  return [];
+                if (
+                  existing !== undefined &&
+                  !isMutableArtifactStatus(existing.status) &&
+                  (terminal || isMutableArtifactStatus(event.payload.status))
+                )
+                  continue;
+                events.push(
+                  terminal
+                    ? {
+                        ...event,
+                        payload: {
+                          ...event.payload,
+                          status: terminalStatus,
+                          completedAt: nextRequest.resolvedAt ?? now,
+                        },
+                      }
+                    : event,
+                );
+              } else if (
+                event.type === "turn-item.updated" &&
+                (event.payload.type === "approval_request" ||
+                  event.payload.type === "user_input_request")
+              ) {
+                if (
+                  event.payload.requestId !== requestId ||
+                  event.payload.nodeId !== request.nodeId
+                )
+                  return [];
+                const existing = yield* projections.getTurnItemById(threadId, event.payload.id);
+                if (
+                  existing !== undefined &&
+                  (existing.threadId !== threadId ||
+                    (existing.type !== "approval_request" &&
+                      existing.type !== "user_input_request") ||
+                    existing.requestId !== requestId ||
+                    existing.nodeId !== request.nodeId ||
+                    existing.type !== event.payload.type)
+                )
+                  return [];
+                itemIds.add(event.payload.id);
+                if (itemIds.size > 64)
+                  return yield* new ProviderEventPublishError({
+                    providerSessionId: input.providerSessionId,
+                    eventCount: 0,
+                    cause: new Error("Provider request artifact identity capacity exceeded"),
+                  });
+                if (
+                  existing !== undefined &&
+                  !isMutableArtifactStatus(existing.status) &&
+                  (terminal || isMutableArtifactStatus(event.payload.status))
+                )
+                  continue;
+                events.push(
+                  terminal
+                    ? {
+                        ...event,
+                        payload: {
+                          ...event.payload,
+                          status: terminalStatus,
+                          completedAt: nextRequest.resolvedAt ?? now,
+                          updatedAt: now,
+                        },
+                      }
+                    : event,
+                );
+              }
+            }
+            // Record the obligation before the commit can yield or be interrupted.
+            // A failed write retains its identity, and cleanup re-reads under this
+            // same lane rather than assuming a failed attempt committed nothing.
+            lifetimes.register(token, {
+              threadId,
+              requestId,
+              nodeId: request.nodeId,
+              providerTurnId: request.providerTurnId,
+              kind: request.kind,
+              capability: capability!,
+              itemIds: [...itemIds],
+            });
+            const storedEvents =
+              persisted === undefined
+                ? yield* publish(input, events, false)
+                : (yield* eventSink.writeIfRuntimeRequestCurrent({
+                    threadId,
+                    expectedRequest: request,
+                    events,
+                  })).storedEvents;
+            if (storedEvents.length > 0) removeBuffer(token, requestId);
+            return storedEvents;
+          }),
+        ),
+      );
+
     return ProviderEventIngestorV2.of({
+      ...lifetimes.lifecycle,
+      discardBufferedRequests: (token, runId) => {
+        const buffer = siblingBuffers.get(token);
+        if (buffer === undefined) return;
+        for (const [requestId, sourceRunId] of buffer.sourceRuns) {
+          if (sourceRunId === runId) removeBuffer(token, requestId);
+        }
+      },
       normalize,
       ingestNormalized: (input) =>
         Effect.gen(function* () {
+          if (lifetimes.sessionId(input.runtimeLifetime) !== input.providerSessionId) return [];
+          const requestId = linkedRequestId(input.event);
+          if (requestId !== undefined) return yield* ingestRequestGroup(input, requestId);
           const events = yield* normalize(input);
-          if (events.length === 0) {
-            return [];
+          // Turn-terminal normalization may cancel user inputs. Only the
+          // originating lifetime may contribute those mutable artifact groups.
+          const ownedRequestIds = new Set(
+            events.flatMap((event) =>
+              event.type === "runtime-request.updated" &&
+              lifetimes.group(input.runtimeLifetime, event.payload.id) !== undefined
+                ? [event.payload.id]
+                : [],
+            ),
+          );
+          const cancellationEvents: Array<OrchestrationV2StoredEvent> = [];
+          for (const requestEvent of events) {
+            if (
+              requestEvent.type !== "runtime-request.updated" ||
+              !ownedRequestIds.has(requestEvent.payload.id)
+            )
+              continue;
+            const group = lifetimes.group(input.runtimeLifetime, requestEvent.payload.id)!;
+            const groupEvents = events.filter(
+              (event) =>
+                event === requestEvent ||
+                (event.type === "node.updated" &&
+                  event.payload.runtimeRequestId === group.requestId) ||
+                (event.type === "turn-item.updated" &&
+                  (event.payload.type === "approval_request" ||
+                    event.payload.type === "user_input_request") &&
+                  event.payload.requestId === group.requestId),
+            );
+            const result = yield* lifetimes.lifecycle.withLifetimeWrite(
+              input.runtimeLifetime,
+              eventSink.writeIfRuntimeRequestCurrent({
+                threadId: group.threadId,
+                expectedRequest: { ...requestEvent.payload, status: "pending" },
+                events: groupEvents,
+              }),
+            );
+            cancellationEvents.push(...result.storedEvents);
           }
-          const mapWriteError = (cause: unknown) =>
-            new ProviderEventPublishError({
-              providerSessionId: input.providerSessionId,
-              eventCount: events.length,
-              cause,
-            });
-          if (input.writeIfProviderThreadOwner !== undefined) {
-            const ownerResult = yield* eventSink
-              .writeIfProviderThreadOwner({
-                guardPendingUserInputCancellations: true,
-                ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
-                ...input.writeIfProviderThreadOwner,
-                events,
-              })
-              .pipe(Effect.mapError(mapWriteError));
-            return ownerResult.storedEvents;
+          const filtered = events.filter(
+            (event) =>
+              event.type !== "runtime-request.updated" &&
+              !(event.type === "node.updated" && event.payload.runtimeRequestId !== null) &&
+              !(
+                event.type === "turn-item.updated" &&
+                (event.payload.type === "approval_request" ||
+                  event.payload.type === "user_input_request")
+              ),
+          );
+          if (input.event.type === "provider_session.updated") {
+            return (
+              (yield* lifetimes.lifecycle.withSessionWrite(
+                input.runtimeLifetime,
+                Effect.suspend(() =>
+                  lifetimes.isActive(input.runtimeLifetime)
+                    ? publish(input, filtered)
+                    : Effect.succeed([]),
+                ),
+              )) ?? []
+            );
           }
-          if (input.writeIfRunCurrent === undefined) {
-            return yield* eventSink
-              .write({
-                guardPendingUserInputCancellations: true,
-                ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
-                events,
-              })
-              .pipe(Effect.mapError(mapWriteError));
+          // Ordinary transcript updates remain allowed after retirement, but
+          // may not steal an identity already assigned to a request artifact.
+          if (input.event.type === "node.updated" || input.event.type === "turn_item.updated") {
+            return yield* lifetimes.withAdmission(
+              Effect.gen(function* () {
+                if (input.event.type === "node.updated") {
+                  const existing = yield* projections.getNodeById(
+                    input.event.node.threadId,
+                    input.event.node.id,
+                  );
+                  if (existing?.runtimeRequestId != null) return [];
+                  if (lifetimes.nodeRequestId(input.event.node.id) !== undefined) return [];
+                  if (existing === undefined) {
+                    const reservation = yield* projections.getRuntimeRequestByNodeId(
+                      input.event.node.threadId,
+                      input.event.node.id,
+                    );
+                    if (reservation !== undefined) return [];
+                  }
+                } else if (input.event.type === "turn_item.updated") {
+                  const existing = yield* projections.getTurnItemById(
+                    input.event.turnItem.threadId,
+                    input.event.turnItem.id,
+                  );
+                  if (
+                    existing?.type === "approval_request" ||
+                    existing?.type === "user_input_request"
+                  )
+                    return [];
+                }
+                return yield* publish(input, filtered);
+              }),
+            );
           }
-          const result = yield* eventSink
-            .writeIfRunCurrent({
-              guardPendingUserInputCancellations: true,
-              ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
-              threadId: input.threadId,
-              ...input.writeIfRunCurrent,
-              events,
-            })
-            .pipe(Effect.mapError(mapWriteError));
-          return result.storedEvents;
+          return [...cancellationEvents, ...(yield* publish(input, filtered))];
         }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderEventPublishError({
+                providerSessionId: input.providerSessionId,
+                eventCount: 1,
+                cause,
+              }),
+          ),
           Effect.flatMap((storedEvents) =>
             storedEvents.length === 0 || input.event.type !== "subagent.updated"
               ? Effect.succeed(storedEvents)

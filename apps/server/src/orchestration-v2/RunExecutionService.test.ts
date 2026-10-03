@@ -53,7 +53,19 @@ import {
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
+import type { ManagedProviderSessionRuntime } from "./ProviderSessionManager.ts";
+import type { ProviderRuntimeLifetime } from "./ProviderRuntimeLifetime.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+
+const unexpectedLifetimeMethod = (): never => {
+  throw new Error("This test must not manage provider runtime lifetimes");
+};
+const unusedLifetimeMethods = {
+  activateLifetime: unexpectedLifetimeMethod,
+  retireLifetime: unexpectedLifetimeMethod,
+  getOwnedRequestGroups: unexpectedLifetimeMethod,
+  settleOwnedRequestGroups: unexpectedLifetimeMethod,
+};
 
 const driver = ProviderDriverKind.make("codex");
 
@@ -64,6 +76,8 @@ const RunExecutionTestLayer = RunExecutionService.layer.pipe(
       Layer.mock(EventSink.EventSinkV2)({}),
       IdAllocator.layer,
       Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+        ...unusedLifetimeMethods,
+        discardBufferedRequests: () => {},
         ingestNormalized: () => Effect.succeed([]),
       }),
       ServerSettings.layerTest(),
@@ -547,7 +561,7 @@ it.effect("rechecks run ownership immediately before calling the provider", () =
     const session = {
       events: Stream.never,
       startTurn: () => Ref.update(providerStarts, (count) => count + 1),
-    } as unknown as ProviderAdapterV2SessionRuntime;
+    } as unknown as ManagedProviderSessionRuntime;
 
     yield* runExecution.startRootRun({
       commandId: CommandId.make("command:run-execution-start-guard"),
@@ -612,6 +626,8 @@ it.effect("fails the run when its ownership check cannot be read before calling 
           }),
           IdAllocator.layer,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            ...unusedLifetimeMethods,
+            discardBufferedRequests: () => {},
             ingestNormalized: () => Effect.succeed([]),
           }),
           ServerSettings.layerTest(),
@@ -626,9 +642,10 @@ it.effect("fails the run when its ownership check cannot be read before calling 
         appThread: { id: threadId } as OrchestrationV2AppThread,
         providerSessionId: ProviderSessionId.make("session:run-execution-start-guard-read"),
         session: {
+          runtimeLifetime: {} as ProviderRuntimeLifetime,
           events: Stream.never,
           startTurn: () => Ref.update(providerStarts, (count) => count + 1),
-        } as unknown as ProviderAdapterV2SessionRuntime,
+        } as unknown as ManagedProviderSessionRuntime,
         run: { id: runId, threadId, ordinal: 1, providerInstanceId } as OrchestrationV2Run,
         rootNode: {
           id: NodeId.make("node:run-execution-start-guard-read"),
@@ -724,6 +741,7 @@ it.effect(
           appThread: { id: threadId } as OrchestrationV2AppThread,
           providerSessionId: ProviderSessionId.make(`session:compact-routing:${index}`),
           session: {
+            runtimeLifetime: {} as ProviderRuntimeLifetime,
             events: Stream.never,
             startTurn: () =>
               Effect.sync(() => {
@@ -733,7 +751,7 @@ it.effect(
               Effect.sync(() => {
                 calls.push("compact");
               }),
-          } as unknown as ProviderAdapterV2SessionRuntime,
+          } as unknown as ManagedProviderSessionRuntime,
           run: {
             id: RunId.make(`run:compact-routing:${index}`),
             threadId,
@@ -798,9 +816,10 @@ it.effect("refreshes MCP credential liveness before calling the provider", () =>
         appThread: { id: threadId } as OrchestrationV2AppThread,
         providerSessionId: ProviderSessionId.make("session:run-execution-mcp-liveness"),
         session: {
+          runtimeLifetime: {} as ProviderRuntimeLifetime,
           events: Stream.never,
           startTurn: () => Ref.update(order, (entries) => [...entries, "start-turn"]),
-        } as unknown as ProviderAdapterV2SessionRuntime,
+        } as unknown as ManagedProviderSessionRuntime,
         run: {
           id: RunId.make("run:run-execution-mcp-liveness"),
           threadId,
@@ -895,6 +914,8 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
           }),
           IdAllocator.layer,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            ...unusedLifetimeMethods,
+            discardBufferedRequests: () => {},
             ingestNormalized: () => Effect.succeed([]),
           }),
           ServerSettings.layerTest(),
@@ -909,9 +930,10 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
         appThread: { id: threadId } as OrchestrationV2AppThread,
         providerSessionId,
         session: {
+          runtimeLifetime: {} as ProviderRuntimeLifetime,
           events: Stream.never,
           startTurn: () => Ref.update(providerStarts, (count) => count + 1),
-        } as unknown as ProviderAdapterV2SessionRuntime,
+        } as unknown as ManagedProviderSessionRuntime,
         run: {
           id: runId,
           threadId,
@@ -1014,6 +1036,8 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
             }),
             IdAllocator.layer,
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+              ...unusedLifetimeMethods,
+              discardBufferedRequests: () => {},
               ingestNormalized: () => Effect.succeed([]),
             }),
             scenario === "start-guard"
@@ -1045,9 +1069,10 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
           appThread: { id: threadId } as OrchestrationV2AppThread,
           providerSessionId,
           session: {
+            runtimeLifetime: {} as ProviderRuntimeLifetime,
             events: Stream.never,
             startTurn: () => Ref.update(providerStarts, (count) => count + 1),
-          } as unknown as ProviderAdapterV2SessionRuntime,
+          } as unknown as ManagedProviderSessionRuntime,
           run: {
             id: runId,
             threadId,
@@ -1181,6 +1206,8 @@ it.effect("keeps ingesting owned child events after the root turn terminalizes",
           }),
           IdAllocator.layer,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            ...unusedLifetimeMethods,
+            discardBufferedRequests: () => {},
             ingestNormalized: (input) =>
               Effect.gen(function* () {
                 if (
@@ -1294,9 +1321,10 @@ it.effect("keeps ingesting owned child events after the root turn terminalizes",
         appThread: { id: threadId } as OrchestrationV2AppThread,
         providerSessionId,
         session: {
+          runtimeLifetime: {} as ProviderRuntimeLifetime,
           events: Stream.fromIterable(events),
           startTurn: () => Effect.void,
-        } as unknown as ProviderAdapterV2SessionRuntime,
+        } as unknown as ManagedProviderSessionRuntime,
         run: {
           id: runId,
           threadId,
@@ -1610,6 +1638,8 @@ it.effect(
             }),
             IdAllocator.layer,
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+              ...unusedLifetimeMethods,
+              discardBufferedRequests: () => {},
               ingestNormalized: (input) =>
                 Effect.gen(function* () {
                   const event = input.event;
@@ -1674,6 +1704,7 @@ it.effect(
           appThread: { id: ids.threadId } as OrchestrationV2AppThread,
           providerSessionId: ProviderSessionId.make(`session:${key}`),
           session: {
+            runtimeLifetime: {} as ProviderRuntimeLifetime,
             events: Stream.empty,
             // Session-wide stays true forever; the root must consult the
             // thread-scoped probe instead of being pinned by siblings.
@@ -1712,7 +1743,7 @@ it.effect(
               close: Deferred.succeed(ingestionDone, undefined),
             }),
             startTurn: () => Effect.void,
-          } as unknown as ProviderAdapterV2SessionRuntime,
+          } as unknown as ManagedProviderSessionRuntime,
           run: {
             id: ids.runId,
             threadId: ids.threadId,
@@ -1825,6 +1856,8 @@ it.effect("drops late root provider-thread writes from a superseded attempt", ()
           }),
           IdAllocator.layer,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            ...unusedLifetimeMethods,
+            discardBufferedRequests: () => {},
             ingestNormalized: (input) =>
               Effect.gen(function* () {
                 const event = input.event;
@@ -1891,6 +1924,7 @@ it.effect("drops late root provider-thread writes from a superseded attempt", ()
         appThread: { id: ids.threadId } as OrchestrationV2AppThread,
         providerSessionId: ProviderSessionId.make(`session:${key}`),
         session: {
+          runtimeLifetime: {} as ProviderRuntimeLifetime,
           events: Stream.empty,
           hasPendingBackgroundWork: Effect.succeed(true),
           hasPendingBackgroundWorkForThread: () => Effect.succeed(true),
@@ -1928,7 +1962,7 @@ it.effect("drops late root provider-thread writes from a superseded attempt", ()
             close: Deferred.succeed(ingestionDone, undefined),
           }),
           startTurn: () => Effect.void,
-        } as unknown as ProviderAdapterV2SessionRuntime,
+        } as unknown as ManagedProviderSessionRuntime,
         run: {
           id: ids.runId,
           threadId: ids.threadId,
@@ -2031,6 +2065,8 @@ it.effect(
             }),
             IdAllocator.layer,
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+              ...unusedLifetimeMethods,
+              discardBufferedRequests: () => {},
               ingestNormalized: (input) =>
                 Effect.gen(function* () {
                   const event = input.event;
@@ -2083,6 +2119,7 @@ it.effect(
           appThread: { id: ids.threadId } as OrchestrationV2AppThread,
           providerSessionId: ProviderSessionId.make(`session:${key}`),
           session: {
+            runtimeLifetime: {} as ProviderRuntimeLifetime,
             events: Stream.empty,
             hasPendingBackgroundWork: Effect.succeed(true),
             hasPendingBackgroundWorkForThread: () => Effect.succeed(true),
@@ -2111,7 +2148,7 @@ it.effect(
               close: Deferred.succeed(ingestionDone, undefined),
             }),
             startTurn: () => Effect.void,
-          } as unknown as ProviderAdapterV2SessionRuntime,
+          } as unknown as ManagedProviderSessionRuntime,
           run: {
             id: ids.runId,
             threadId: ids.threadId,
@@ -2200,6 +2237,8 @@ it.effect(
             }),
             IdAllocator.layer,
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+              ...unusedLifetimeMethods,
+              discardBufferedRequests: () => {},
               ingestNormalized: (input) =>
                 Effect.gen(function* () {
                   if (input.event.type === "turn.terminal") {
@@ -2243,6 +2282,7 @@ it.effect(
           appThread: { id: ids.threadId } as OrchestrationV2AppThread,
           providerSessionId: ProviderSessionId.make(`session:${key}`),
           session: {
+            runtimeLifetime: {} as ProviderRuntimeLifetime,
             events: Stream.empty,
             // Session-wide stays true (sibling has work). Stop must use only
             // the scoped probe for this root's provider thread.
@@ -2281,7 +2321,7 @@ it.effect(
               close: Deferred.succeed(ingestionDone, undefined),
             }),
             startTurn: () => Effect.void,
-          } as unknown as ProviderAdapterV2SessionRuntime,
+          } as unknown as ManagedProviderSessionRuntime,
           run: {
             id: ids.runId,
             threadId: ids.threadId,
@@ -2363,6 +2403,8 @@ it.effect(
             }),
             IdAllocator.layer,
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+              ...unusedLifetimeMethods,
+              discardBufferedRequests: () => {},
               ingestNormalized: (input) =>
                 Ref.update(ingested, (current) => [...current, input.event]).pipe(Effect.as([])),
             }),
@@ -2427,6 +2469,7 @@ it.effect(
           appThread: { id: ids.threadId } as OrchestrationV2AppThread,
           providerSessionId: ProviderSessionId.make("session:subagent-interrupt-cascade"),
           session: {
+            runtimeLifetime: {} as ProviderRuntimeLifetime,
             events: Stream.empty,
             subscribeEvents: Effect.succeed({
               events: Stream.fromIterable([
@@ -2517,7 +2560,7 @@ it.effect(
               close: Deferred.succeed(ingestionDone, undefined),
             }),
             startTurn: () => Effect.void,
-          } as unknown as ProviderAdapterV2SessionRuntime,
+          } as unknown as ManagedProviderSessionRuntime,
           run: {
             id: ids.runId,
             threadId: ids.threadId,
@@ -2736,6 +2779,8 @@ it.effect(
             }),
             IdAllocator.layer,
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+              ...unusedLifetimeMethods,
+              discardBufferedRequests: () => {},
               ingestNormalized: () => Effect.succeed([]),
             }),
             ServerSettings.layerTest(),
@@ -2781,6 +2826,7 @@ it.effect(
           appThread: { id: ids.threadId } as OrchestrationV2AppThread,
           providerSessionId: ProviderSessionId.make("session:subagent-link-survives-terminal"),
           session: {
+            runtimeLifetime: {} as ProviderRuntimeLifetime,
             events: Stream.empty,
             subscribeEvents: Effect.succeed({
               events: Stream.fromIterable([
@@ -2847,7 +2893,7 @@ it.effect(
               close: Deferred.succeed(ingestionDone, undefined),
             }),
             startTurn: () => Effect.void,
-          } as unknown as ProviderAdapterV2SessionRuntime,
+          } as unknown as ManagedProviderSessionRuntime,
           run: {
             id: ids.runId,
             threadId: ids.threadId,
@@ -3438,6 +3484,8 @@ function captureRootRunTermination(input: {
           }),
           IdAllocator.layer,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            ...unusedLifetimeMethods,
+            discardBufferedRequests: () => {},
             ingestNormalized: () => Effect.succeed([]),
           }),
           ServerSettings.layerTest(),
@@ -3459,6 +3507,7 @@ function captureRootRunTermination(input: {
         appThread: { id: ids.threadId } as OrchestrationV2AppThread,
         providerSessionId: ProviderSessionId.make(`session:${input.key}`),
         session: {
+          runtimeLifetime: {} as ProviderRuntimeLifetime,
           events: Stream.empty,
           subscribeEvents: Effect.succeed({
             events:
@@ -3490,7 +3539,7 @@ function captureRootRunTermination(input: {
             close: Deferred.succeed(ingestionDone, undefined),
           }),
           startTurn: input.startTurn ?? (() => Effect.void),
-        } as unknown as ProviderAdapterV2SessionRuntime,
+        } as unknown as ManagedProviderSessionRuntime,
         run: {
           id: ids.runId,
           threadId: ids.threadId,
@@ -3897,6 +3946,8 @@ function runBackgroundItemScenario(
           }),
           IdAllocator.layer,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+            ...unusedLifetimeMethods,
+            discardBufferedRequests: () => {},
             ingestNormalized: (input) =>
               Effect.gen(function* () {
                 const event = input.event;
@@ -3927,6 +3978,7 @@ function runBackgroundItemScenario(
         appThread: { id: ids.threadId } as OrchestrationV2AppThread,
         providerSessionId: ProviderSessionId.make(`session:${key}`),
         session: {
+          runtimeLifetime: {} as ProviderRuntimeLifetime,
           events: Stream.empty,
           subscribeEvents: Effect.gen(function* () {
             yield* options?.onSubscribe ?? Effect.void;
@@ -3940,7 +3992,7 @@ function runBackgroundItemScenario(
             };
           }),
           startTurn: () => Effect.void,
-        } as unknown as ProviderAdapterV2SessionRuntime,
+        } as unknown as ManagedProviderSessionRuntime,
         run: {
           id: ids.runId,
           threadId: ids.threadId,

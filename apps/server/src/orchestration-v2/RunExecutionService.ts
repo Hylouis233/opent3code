@@ -43,11 +43,11 @@ import * as IdAllocator from "./IdAllocator.ts";
 import type {
   ProviderAdapterV2Event,
   ProviderAdapterV2RuntimePolicy,
-  ProviderAdapterV2SessionRuntime,
   ProviderAdapterV2TurnMessage,
 } from "./ProviderAdapter.ts";
 import { ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
+import type { ManagedProviderSessionRuntime } from "./ProviderSessionManager.ts";
 import type { ProjectionStoreV2Error } from "./ProjectionStore.ts";
 import { makeProviderFailure, makeProviderFailureTurnItem } from "./ProviderFailure.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
@@ -499,7 +499,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly commandId: CommandId;
   readonly appThread: OrchestrationV2AppThread;
   readonly providerSessionId: ProviderSessionId;
-  readonly session: ProviderAdapterV2SessionRuntime;
+  readonly session: ManagedProviderSessionRuntime;
   readonly run: OrchestrationV2Run;
   readonly rootNode: OrchestrationV2ExecutionNode;
   readonly checkpointScope: OrchestrationV2CheckpointScope;
@@ -1191,6 +1191,7 @@ export const layer: Layer.Layer<
                     event.type === "provider_thread.updated" &&
                     event.providerThread.id === input.providerThread.id;
                   const storedEvents = yield* providerEventIngestor.ingestNormalized({
+                    runtimeLifetime: input.session.runtimeLifetime,
                     analyticsContext: {
                       modelSelection: input.modelSelection,
                       runtimeMode: input.runtimePolicy.runtimeMode,
@@ -1324,6 +1325,14 @@ export const layer: Layer.Layer<
               ),
             ),
             Effect.ensuring(eventSubscription.close),
+            Effect.ensuring(
+              Effect.sync(() =>
+                providerEventIngestor.discardBufferedRequests(
+                  input.session.runtimeLifetime,
+                  input.run.id,
+                ),
+              ),
+            ),
             Effect.forkDetach,
           );
 

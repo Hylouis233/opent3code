@@ -381,7 +381,9 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     Layer.provide(Layer.merge(storesLayer, providerSessionManagerProvided)),
   );
   const runtimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
-    Layer.provide(Layer.merge(storesLayer, providerSessionManagerProvided)),
+    Layer.provide(
+      Layer.mergeAll(storesLayer, providerSessionManagerProvided, providerEventIngestorProvided),
+    ),
   );
   const checkpointRollbackServiceProvided = CheckpointRollbackService.layer.pipe(
     Layer.provide(

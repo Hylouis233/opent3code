@@ -1,6 +1,7 @@
 import {
   CommandId,
   type OrchestrationV2Run,
+  type OrchestrationV2RuntimeRequest,
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
   ProviderThreadId,
@@ -82,6 +83,19 @@ export interface EventSinkV2Shape {
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
+  /** Commit a request and its linked artifacts only while the observed request is current. */
+  readonly writeIfRuntimeRequestCurrent: (input: {
+    readonly commandId?: CommandId;
+    readonly threadId: ThreadId;
+    readonly expectedRequest: OrchestrationV2RuntimeRequest;
+    readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+  }) => Effect.Effect<
+    {
+      readonly committed: boolean;
+      readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+    },
+    EventSinkV2Error
+  >;
   readonly writeIfRunCurrent: (input: {
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
@@ -125,6 +139,7 @@ export interface EventSinkV2Shape {
     readonly acceptedAt: DateTime.Utc;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
+    readonly expectedRuntimeRequests?: ReadonlyArray<OrchestrationV2RuntimeRequest>;
     readonly cancelUnsettledEffects?: {
       readonly effectTypes: ReadonlyArray<EffectOutbox.OrchestrationEffectRequestV2["type"]>;
       readonly reason: string;
@@ -358,6 +373,50 @@ const baseLayer: Layer.Layer<
         }
       });
 
+    // Request IDs are globally claimed at admission. The remaining fields
+    // identify the exact request observed by the caller, without relying on
+    // clock ordering. This read must stay inside the event-write transaction.
+    const runtimeRequestIsCurrent = (threadId: ThreadId, expected: OrchestrationV2RuntimeRequest) =>
+      Effect.gen(function* () {
+        const current = yield* projectionStore.getRuntimeRequest(threadId, expected.id);
+        return (
+          current !== undefined &&
+          current.id === expected.id &&
+          current.nodeId === expected.nodeId &&
+          current.providerTurnId === expected.providerTurnId &&
+          current.kind === expected.kind &&
+          current.status === expected.status &&
+          current.responseCapability.type === expected.responseCapability.type &&
+          (expected.responseCapability.type !== "live" ||
+            (current.responseCapability.type === "live" &&
+              current.responseCapability.providerSessionId ===
+                expected.responseCapability.providerSessionId))
+        );
+      });
+
+    const writeIfRuntimeRequestCurrentEffect = Effect.fn(
+      "orchestrationV2.EventSink.writeIfRuntimeRequestCurrent",
+    )(function* (input: Parameters<EventSinkV2Shape["writeIfRuntimeRequestCurrent"]>[0]) {
+      return yield* commitThenPublish(
+        Effect.gen(function* () {
+          if (!(yield* runtimeRequestIsCurrent(input.threadId, input.expectedRequest))) {
+            return {
+              committed: false as const,
+              storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
+            };
+          }
+          const normalized = yield* normalizeEvents(input.events);
+          const storedEvents = yield* eventStore.append({
+            ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+            events: normalized,
+          });
+          yield* applyStoredEvents(storedEvents);
+          return { committed: true as const, storedEvents };
+        }),
+        (result) => (result.committed ? publishStoredEvents(result.storedEvents) : Effect.void),
+      );
+    });
+
     const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
       input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],
     ) {
@@ -532,6 +591,32 @@ const baseLayer: Layer.Layer<
           if (!reserved) {
             const existing = yield* existingCommandResult(input.commandId);
             return { ...existing, committed: false as const, cancelledEffectIds: [] };
+          }
+
+          for (const expected of input.expectedRuntimeRequests ?? []) {
+            if (
+              expected.status === "pending" &&
+              expected.responseCapability.type !== "not_resumable" &&
+              (yield* runtimeRequestIsCurrent(input.threadId, expected))
+            ) {
+              continue;
+            }
+            const receipt: CommandReceiptStore.CommandReceiptV2 = {
+              commandId: input.commandId,
+              threadId: input.threadId,
+              commandType: input.commandType,
+              acceptedAt: input.acceptedAt,
+              resultSequence: yield* eventStore.latestSequence({ threadId: input.threadId }),
+              status: "rejected",
+              error: `Runtime request ${expected.id} changed before its response committed.`,
+            };
+            yield* commandReceipts.upsert(receipt);
+            return {
+              receipt,
+              storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
+              committed: false as const,
+              cancelledEffectIds: [],
+            };
           }
 
           const normalized = yield* normalizeEvents(input.events);
@@ -764,6 +849,17 @@ const baseLayer: Layer.Layer<
         ),
       writeWithEffects: (input) =>
         writeEffect(input).pipe(
+          Effect.mapError(
+            (cause) =>
+              new EventSinkWriteError({
+                eventCount: input.events.length,
+                ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+                cause,
+              }),
+          ),
+        ),
+      writeIfRuntimeRequestCurrent: (input) =>
+        writeIfRuntimeRequestCurrentEffect(input).pipe(
           Effect.mapError(
             (cause) =>
               new EventSinkWriteError({
