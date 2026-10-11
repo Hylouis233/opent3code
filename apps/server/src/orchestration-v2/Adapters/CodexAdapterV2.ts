@@ -5525,22 +5525,30 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             const terminalStatus = providerTurnStatusToTerminal(input.status);
             if (terminalStatus === "failed") {
               const previousFailure = input.context.latestProviderFailure ?? input.providerRetry;
+              const completionFailureClass =
+                input.failureCode === "usageLimitExceeded" ||
+                input.failureCode === "rateLimitExceeded" ||
+                codexExhaustedOnRateLimit(input.failureCode ?? null, input.failureInfo)
+                  ? "usage_limit"
+                  : "provider_error";
+              const completionHasExhaustionStatus =
+                input.failureCode === "responseTooManyFailedAttempts" &&
+                codexErrorInfoHttpStatus(input.failureInfo, input.failureCode) !== null;
+              // Keep richer notification evidence unless an explicit completion status
+              // contradicts its classification. Missing status is not new evidence.
               const failure =
                 previousFailure !== undefined &&
                 (input.failureMessage === undefined ||
                   input.failureMessage === previousFailure.nativeMessage) &&
                 (input.failureCode === undefined ||
-                  input.failureCode === previousFailure.failure.code)
+                  input.failureCode === previousFailure.failure.code) &&
+                (!completionHasExhaustionStatus ||
+                  previousFailure.failure.class === completionFailureClass)
                   ? previousFailure.failure
                   : makeProviderFailure({
                       message: input.failureMessage,
                       code: input.failureCode,
-                      class:
-                        input.failureCode === "usageLimitExceeded" ||
-                        input.failureCode === "rateLimitExceeded" ||
-                        codexExhaustedOnRateLimit(input.failureCode ?? null, input.failureInfo)
-                          ? "usage_limit"
-                          : "provider_error",
+                      class: completionFailureClass,
                     });
               return {
                 type: "turn.terminal",

@@ -6271,6 +6271,98 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect.each(
+    (
+      [
+        { notificationStatus: 500, completionStatus: 429, expectedClass: "usage_limit" },
+        { notificationStatus: 429, completionStatus: 500, expectedClass: "provider_error" },
+        { notificationStatus: null, completionStatus: 429, expectedClass: "usage_limit" },
+        { notificationStatus: 429, completionStatus: null, expectedClass: "usage_limit" },
+        { notificationStatus: 429, completionStatus: 429, expectedClass: "usage_limit" },
+        { notificationStatus: 500, completionStatus: 500, expectedClass: "provider_error" },
+      ] as const
+    ).flatMap((scenario) => [false, true].map((willRetry) => ({ ...scenario, willRetry }))),
+  )(
+    "honors completion HTTP status from $notificationStatus to $completionStatus (retry: $willRetry)",
+    ({ notificationStatus, completionStatus, expectedClass, willRetry }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const name = `${notificationStatus}-${completionStatus}-${willRetry}`;
+          const nativeThreadId = `native-exhaustion-status-${name}`;
+          const nativeTurnId = `turn-exhaustion-status-${name}`;
+          const message = "Provider stopped this request.";
+          const additionalDetails = "Detailed notification evidence.";
+          const transcript = makeCodexReplayTranscript({
+            scenario: `codex-exhaustion-status-${name}`,
+            entries: [
+              ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Continue." }),
+              {
+                type: "emit_inbound",
+                label: "error",
+                frame: {
+                  method: "error",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    willRetry,
+                    error: {
+                      message,
+                      codexErrorInfo: {
+                        responseTooManyFailedAttempts: { httpStatusCode: notificationStatus },
+                      },
+                      additionalDetails,
+                    },
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/completed",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: {
+                      ...makeCodexReplayTurn({ id: nativeTurnId, status: "failed" }),
+                      error: {
+                        message,
+                        codexErrorInfo: {
+                          responseTooManyFailedAttempts: { httpStatusCode: completionStatus },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(transcript);
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              text: "Continue.",
+              attemptId: RunAttemptId.make(`attempt-exhaustion-status-${name}`),
+            }),
+          );
+          yield* harness.firstTerminal;
+          const terminal = harness.terminalEvents()[0];
+          assert.equal(terminal?.status, "failed");
+          if (terminal?.status !== "failed") return;
+          assert.equal(terminal.failure.class, expectedClass);
+          assert.equal(terminal.failure.code, "responseTooManyFailedAttempts");
+          assert.equal(terminal.threadDisposition, "reusable");
+          const notificationClass = notificationStatus === 429 ? "usage_limit" : "provider_error";
+          assert.equal(
+            terminal.failure.message,
+            expectedClass === notificationClass ? additionalDetails : message,
+          );
+          if (willRetry) assert.equal(terminal.retry?.attempt, 1);
+        }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+      ),
+  );
+
   const FAILED_SCENARIO = "codex-failed-mid-command";
   const FAILED_NATIVE_THREAD = "native-codex-failed-thread";
   const FAILED_NATIVE_TURN = "native-codex-failed-turn";
