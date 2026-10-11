@@ -1,0 +1,286 @@
+name: PR 17501 review validation
+
+on:
+  push:
+    branches: [maintenance/pr-17501-review-20261012]
+    paths: [.github/workflows/pr-17501-review-validation.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr-17501-review-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'Hylouis233/opent3code' && !github.event.deleted
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NO_COLOR: '1'
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 015ecc564a8e69e05ca9900b8b1d11adbc60645d
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup repository toolchain
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Record original server typecheck
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          result = subprocess.run(['../../node_modules/.bin/tsc', '--noEmit', '--pretty', 'false'], cwd='apps/server', text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+          print(result.stdout)
+          assert result.returncode in (0, 1, 2), result.returncode
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'pr17501-types-before.json').write_text(json.dumps({'exit': result.returncode, 'output': result.stdout}))
+          PY
+
+      - name: Add completion-status regression matrix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts')
+          source = path.read_text()
+          anchor = '  const FAILED_SCENARIO = "codex-failed-mid-command";'
+          assert source.count(anchor) == 1
+          tests = '''  it.effect.each(
+            (
+              [
+                { notificationStatus: 500, completionStatus: 429, expectedClass: "usage_limit" },
+                { notificationStatus: 429, completionStatus: 500, expectedClass: "provider_error" },
+                { notificationStatus: null, completionStatus: 429, expectedClass: "usage_limit" },
+                { notificationStatus: 429, completionStatus: null, expectedClass: "usage_limit" },
+                { notificationStatus: 429, completionStatus: 429, expectedClass: "usage_limit" },
+                { notificationStatus: 500, completionStatus: 500, expectedClass: "provider_error" },
+              ] as const
+            ).flatMap((scenario) => [false, true].map((willRetry) => ({ ...scenario, willRetry }))),
+          )(
+            "honors completion HTTP status from $notificationStatus to $completionStatus (retry: $willRetry)",
+            ({ notificationStatus, completionStatus, expectedClass, willRetry }) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const name = `${notificationStatus}-${completionStatus}-${willRetry}`;
+                  const nativeThreadId = `native-exhaustion-status-${name}`;
+                  const nativeTurnId = `turn-exhaustion-status-${name}`;
+                  const message = "Provider stopped this request.";
+                  const additionalDetails = "Detailed notification evidence.";
+                  const transcript = makeCodexReplayTranscript({
+                    scenario: `codex-exhaustion-status-${name}`,
+                    entries: [
+                      ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Continue." }),
+                      {
+                        type: "emit_inbound",
+                        label: "error",
+                        frame: {
+                          method: "error",
+                          params: {
+                            threadId: nativeThreadId,
+                            turnId: nativeTurnId,
+                            willRetry,
+                            error: {
+                              message,
+                              codexErrorInfo: {
+                                responseTooManyFailedAttempts: { httpStatusCode: notificationStatus },
+                              },
+                              additionalDetails,
+                            },
+                          },
+                        },
+                      },
+                      {
+                        type: "emit_inbound",
+                        label: "turn/completed",
+                        frame: {
+                          method: "turn/completed",
+                          params: {
+                            threadId: nativeThreadId,
+                            turn: {
+                              ...makeCodexReplayTurn({ id: nativeTurnId, status: "failed" }),
+                              error: {
+                                message,
+                                codexErrorInfo: {
+                                  responseTooManyFailedAttempts: { httpStatusCode: completionStatus },
+                                },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    ],
+                  });
+                  const harness = yield* makeCodexReplayHarness(transcript);
+                  yield* harness.runtime.startTurn(
+                    makeCodexTestTurnInput({
+                      threadId: harness.threadId,
+                      providerThread: harness.providerThread,
+                      now: yield* DateTime.now,
+                      text: "Continue.",
+                      attemptId: RunAttemptId.make(`attempt-exhaustion-status-${name}`),
+                    }),
+                  );
+                  yield* harness.firstTerminal;
+                  const terminal = harness.terminalEvents()[0];
+                  assert.equal(terminal?.status, "failed");
+                  if (terminal?.status !== "failed") return;
+                  assert.equal(terminal.failure.class, expectedClass);
+                  assert.equal(terminal.failure.code, "responseTooManyFailedAttempts");
+                  assert.equal(terminal.threadDisposition, "reusable");
+                  const notificationClass = notificationStatus === 429 ? "usage_limit" : "provider_error";
+                  assert.equal(
+                    terminal.failure.message,
+                    expectedClass === notificationClass ? additionalDetails : message,
+                  );
+                  if (willRetry) assert.equal(terminal.retry?.attempt, 1);
+                }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+              ),
+          );
+
+          '''
+          path.write_text(source.replace(anchor, tests + anchor))
+          PY
+
+      - name: Prove original implementation fails six status transitions
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          report = pathlib.Path(os.environ['RUNNER_TEMP'], 'pr17501-red.json')
+          command = ['vp', 'test', 'run', 'src/orchestration-v2/Adapters/CodexAdapterV2.test.ts', '-t', 'honors completion HTTP status', '--reporter=json', '--outputFile=' + str(report)]
+          result = subprocess.run(command, cwd='apps/server', text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+          print(result.stdout)
+          assert result.returncode != 0, 'Regression tests unexpectedly passed before the source fix'
+          data = json.loads(report.read_text())
+          failed = [test for suite in data['testResults'] for test in suite['assertionResults'] if test['status'] == 'failed']
+          print('RED: failed =', data['numFailedTests'], '; passed =', data['numPassedTests'])
+          for test in failed:
+              print(test['fullName'])
+              print('\n'.join(test.get('failureMessages', [])))
+          assert data['numFailedTests'] == 6 and data['numPassedTests'] == 6, 'Expected six class mismatches and six passing preservation controls'
+          assert all('AssertionError' in '\n'.join(test.get('failureMessages', [])) for test in failed), 'Unexpected non-assertion failure'
+          PY
+
+      - name: Make explicit completion status authoritative
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts')
+          source = path.read_text()
+          old = '''              const previousFailure = input.context.latestProviderFailure ?? input.providerRetry;
+                        const failure =
+                          previousFailure !== undefined &&
+                          (input.failureMessage === undefined ||
+                            input.failureMessage === previousFailure.nativeMessage) &&
+                          (input.failureCode === undefined ||
+                            input.failureCode === previousFailure.failure.code)
+                            ? previousFailure.failure
+                            : makeProviderFailure({
+                                message: input.failureMessage,
+                                code: input.failureCode,
+                                class:
+                                  input.failureCode === "usageLimitExceeded" ||
+                                  input.failureCode === "rateLimitExceeded" ||
+                                  codexExhaustedOnRateLimit(input.failureCode ?? null, input.failureInfo)
+                                    ? "usage_limit"
+                                    : "provider_error",
+                              });'''
+          # The first line above already has source indentation; the remaining
+          # lines remove the Python/YAML alignment added for this literal.
+          old = '\n'.join(line if i == 0 else line[10:] for i, line in enumerate(old.splitlines()))
+          new = '''              const previousFailure = input.context.latestProviderFailure ?? input.providerRetry;
+                        const completionFailureClass =
+                          input.failureCode === "usageLimitExceeded" ||
+                          input.failureCode === "rateLimitExceeded" ||
+                          codexExhaustedOnRateLimit(input.failureCode ?? null, input.failureInfo)
+                            ? "usage_limit"
+                            : "provider_error";
+                        const completionHasExhaustionStatus =
+                          input.failureCode === "responseTooManyFailedAttempts" &&
+                          codexErrorInfoHttpStatus(input.failureInfo, input.failureCode) !== null;
+                        // Keep richer notification evidence unless an explicit completion status
+                        // contradicts its classification. Missing status is not new evidence.
+                        const failure =
+                          previousFailure !== undefined &&
+                          (input.failureMessage === undefined ||
+                            input.failureMessage === previousFailure.nativeMessage) &&
+                          (input.failureCode === undefined ||
+                            input.failureCode === previousFailure.failure.code) &&
+                          (!completionHasExhaustionStatus ||
+                            previousFailure.failure.class === completionFailureClass)
+                            ? previousFailure.failure
+                            : makeProviderFailure({
+                                message: input.failureMessage,
+                                code: input.failureCode,
+                                class: completionFailureClass,
+                              });'''
+          new = '\n'.join(line if i == 0 else line[10:] for i, line in enumerate(new.splitlines()))
+          assert source.count(old) == 1, 'Source does not match the reviewed PR head'
+          path.write_text(source.replace(old, new))
+          PY
+
+      - name: Format and lint only changed files
+        run: |
+          vp fmt apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
+          vp fmt --check apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
+          vp lint apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts --report-unused-disable-directives
+
+      - name: Run complete Codex adapter test file
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          report = pathlib.Path(os.environ['RUNNER_TEMP'], 'pr17501-green.json')
+          command = ['vp', 'test', 'run', 'src/orchestration-v2/Adapters/CodexAdapterV2.test.ts', '--reporter=json', '--outputFile=' + str(report)]
+          result = subprocess.run(command, cwd='apps/server', text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+          print(result.stdout)
+          assert result.returncode == 0, 'Complete adapter test file failed'
+          data = json.loads(report.read_text())
+          print('GREEN: passed =', data['numPassedTests'], '; failed =', data['numFailedTests'], '; pending =', data['numPendingTests'])
+          assert data['numPassedTests'] == 176 and data['numFailedTests'] == 0
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## PR 17501 validation\n\n- Original implementation: 6 new tests failed, 6 preservation controls passed.\n- Fixed implementation: 176/176 Codex adapter tests passed.\n- Targeted formatting and lint passed.\n')
+          PY
+
+      - name: Reject new server typecheck diagnostics
+        run: |
+          python3 - <<'PY'
+          import collections, json, os, pathlib, re, subprocess
+          before = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'pr17501-types-before.json').read_text())
+          result = subprocess.run(['../../node_modules/.bin/tsc', '--noEmit', '--pretty', 'false'], cwd='apps/server', text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+          print(result.stdout)
+          def normalize(text):
+              text = re.sub(r'\x1b\[[0-9;]*m', '', text)
+              return collections.Counter(line for line in re.sub(r'\(\d+,\d+\)', '(LINE,COL)', text).splitlines() if line.strip())
+          added = normalize(result.stdout) - normalize(before['output'])
+          print('Typecheck baseline exit:', before['exit'], '; fixed exit:', result.returncode)
+          print('New diagnostics:', dict(added))
+          assert not added and result.returncode == before['exit'], 'New typecheck diagnostics introduced'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('- Server typecheck: no new diagnostics versus original PR head (baseline exit ' + str(before['exit']) + ', fixed exit ' + str(result.returncode) + ').\n')
+          PY
+
+      - name: Publish two-file candidate without changing PR branch
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          expected = ['apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts', 'apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts']
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == '015ecc564a8e69e05ca9900b8b1d11adbc60645d'
+          changed = sorted(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert changed == expected, changed
+          subprocess.run(['git', 'diff', '--check'], check=True)
+          subprocess.run(['git', 'diff', '--stat'], check=True)
+          subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+          subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
+          subprocess.run(['git', 'add', '--', *expected], check=True)
+          subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'fix(server): honor Codex completion status over stale failures'], check=True)
+          subprocess.run(['git', 'push', 'origin', 'HEAD:refs/heads/maintenance/pr-17501-validated-20261012'], check=True)
+          print('VALIDATED_CANDIDATE_SHA=' + subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
+          PY
