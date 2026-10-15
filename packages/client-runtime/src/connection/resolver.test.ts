@@ -81,6 +81,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
   readonly primaryBearerToken?: string;
   readonly prepareSsh?: ClientCapabilities.SshEnvironmentGateway["Service"]["prepare"];
   readonly descriptorProtocolVersion?: number | null | undefined;
+  readonly descriptorEnvironmentId?: EnvironmentId;
 }) => {
   const profiles = new Map(
     (options?.profiles ?? []).map((profile) => [profile.connectionId, profile]),
@@ -149,7 +150,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
     remoteHttpClientLayer((() =>
       Promise.resolve(
         Response.json({
-          environmentId: ENVIRONMENT_ID,
+          environmentId: options?.descriptorEnvironmentId ?? ENVIRONMENT_ID,
           label: "Compatible environment",
           platform: { os: "linux", arch: "x64" },
           serverVersion: "0.0.0-test",
@@ -187,6 +188,24 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
 });
 
 describe("ConnectionResolver", () => {
+  it.effect("blocks an old host during discovery before opening orchestration RPC", () =>
+    Effect.gen(function* () {
+      const brokerLayer = yield* makeDependencies({ descriptorProtocolVersion: null });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      const target = new PrimaryConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Primary",
+        httpBaseUrl: "http://127.0.0.1:3777",
+        wsBaseUrl: "ws://127.0.0.1:3777",
+      });
+
+      const error = yield* Effect.flip(broker.prepare(catalogEntry(target)));
+
+      expect(error).toMatchObject({ reason: "unsupported" });
+      expect(error.message).toContain("Update T3 Code on Compatible environment");
+    }),
+  );
+
   it.effect("blocks an incompatible host during discovery before opening orchestration RPC", () =>
     Effect.gen(function* () {
       const brokerLayer = yield* makeDependencies({
@@ -207,6 +226,44 @@ describe("ConnectionResolver", () => {
     }),
   );
 
+  it.effect("keeps identity checks when preparing an outdated host update", () =>
+    Effect.gen(function* () {
+      const brokerLayer = yield* makeDependencies({
+        descriptorProtocolVersion: null,
+        descriptorEnvironmentId: EnvironmentId.make("different-host"),
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      const target = new PrimaryConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Primary",
+        ...ENDPOINT,
+      });
+      const error = yield* Effect.flip(broker.prepareForUpdate(catalogEntry(target)));
+      expect(error).toMatchObject({ reason: "configuration" });
+      expect(error.message).toContain(
+        "Connected environment different-host does not match environment-1",
+      );
+    }),
+  );
+
+  it.effect("keeps authorization failures when preparing an outdated host update", () =>
+    Effect.gen(function* () {
+      const target = new RelayConnectionTarget({ environmentId: ENVIRONMENT_ID, label: "Cloud" });
+      const authorizationError = new ConnectionTransientError({
+        reason: "timeout",
+        detail: "Relay environment authorization timed out.",
+      });
+      const brokerLayer = yield* makeDependencies({
+        descriptorProtocolVersion: null,
+        authorizeDpop: () => Effect.fail(authorizationError),
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      expect(yield* Effect.flip(broker.prepareForUpdate(catalogEntry(target)))).toBe(
+        authorizationError,
+      );
+    }),
+  );
+
   it.effect("prepares a primary environment without remote capabilities", () =>
     Effect.gen(function* () {
       const brokerLayer = yield* makeDependencies();
@@ -223,7 +280,7 @@ describe("ConnectionResolver", () => {
         label: "Primary",
         httpBaseUrl: "http://127.0.0.1:3777",
         socketUrl:
-          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=1",
+          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=2",
         httpAuthorization: null,
         target,
       });
@@ -261,7 +318,7 @@ describe("ConnectionResolver", () => {
       });
 
       expect(yield* broker.prepare(catalogEntry(target))).toMatchObject({
-        socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=desktop&orchestrationProtocol=1",
+        socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=desktop&orchestrationProtocol=2",
         httpAuthorization: { _tag: "Bearer", token: "desktop-bearer" },
         target,
       });
@@ -426,8 +483,9 @@ describe("ConnectionResolver", () => {
     }),
   );
 
-  for (const scenario of ["unchanged", "changed", "revocation-failed"] as const) {
-    it.effect(`handles ${scenario} SSH routing consent before saving or authorizing`, () =>
+  it.effect.each(["unchanged", "changed", "revocation-failed"] as const)(
+    "handles %s SSH routing consent before saving or authorizing",
+    (scenario) =>
       Effect.gen(function* () {
         const calls: string[] = [];
         const target = new SshConnectionTarget({
@@ -519,8 +577,7 @@ describe("ConnectionResolver", () => {
         }
         expect(yield* permissions.get(entry)).toBe(scenario === "changed" ? "off" : "read-write");
       }),
-    );
-  }
+  );
 
   it.effect("preserves relay authorization failure classification and trace details", () =>
     Effect.gen(function* () {

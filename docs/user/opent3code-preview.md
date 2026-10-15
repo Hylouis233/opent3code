@@ -15,6 +15,14 @@ The launcher creates a dedicated `.opent3code-preview/userdata` directory and in
 
 Open the **complete pairing URL** printed by the dev runner. Its token grants access to your environment: do not paste it into a group, issue or screenshot. Start with a disposable project. Stop using Ctrl+C. Keep or back up preview data before removing it; no automatic migration or deletion of an existing tool profile is provided.
 
+## Upgrading an existing preview to V2
+
+Stop the old preview and back up its dedicated data directory before trying a V2 commit. On first startup, V2 snapshots that preview's `state.sqlite` into `statev2.sqlite`; it leaves the V1 database unchanged and never replaces an existing V2 database. Thread history is imported from the snapshot as needed. Later V2 activity stays in the V2 database, so reverting the executable does not copy newer conversations back into V1.
+
+Imported V1 threads start fresh native provider sessions when continued. Their conversation context can be handed over, but old MCode/DSH native resume cursors are not adopted. Native resume for sessions created in V2 remains tied to the same driver, provider instance, workspace and CLI home.
+
+Use clients from the same V2 generation. Older web, desktop or mobile clients cannot connect to the V2 protocol. This migration does not create an independently signed desktop installer or mobile store build.
+
 ## MiniMax Code
 
 Install and authenticate the official CLI yourself:

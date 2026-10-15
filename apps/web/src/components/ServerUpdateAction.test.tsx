@@ -23,6 +23,7 @@ vi.mock("~/hooks/useSettings", () => ({
 }));
 vi.mock("~/state/server", () => ({
   serverEnvironment: { updateServer: Symbol("updateServer") },
+  updateOutdatedServer: Symbol("updateOutdatedServer"),
 }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => testState.updateServer,
@@ -38,6 +39,7 @@ import {
   respondToConfirmDialog,
 } from "~/confirmDialog";
 import {
+  OutdatedServerUpdateAction,
   ServerUpdateAction,
   ServerUpdateProgress,
   ServerUpdatesAction,
@@ -346,6 +348,86 @@ describe("ServerUpdatesAction", () => {
     });
     expect(testState.updateServer).not.toHaveBeenCalled();
     expect(button.props.disabled).toBe(false);
+  });
+});
+
+describe("OutdatedServerUpdateAction", () => {
+  const success = AsyncResult.success({ targetVersion: "0.0.46", method: "desktop-app" as const });
+  const renderOutdatedAction = () =>
+    OutdatedServerUpdateAction({
+      environmentId: "env-outdated" as EnvironmentId,
+      serverLabel: "Build Mac server",
+      fromVersion: "0.0.45",
+      targetVersion: "0.0.46",
+    }) as ActionElement;
+
+  beforeEach(() => {
+    testState.updateServer.mockReset();
+    testState.toast.mockReset();
+    resetConfirmDialogForTests();
+  });
+  afterEach(() => {
+    resetConfirmDialogForTests();
+  });
+
+  it("warns about remote relaunch and starts no update when canceled", async () => {
+    registerConfirmDialogHost();
+    renderOutdatedAction().props.onClick?.();
+    expect(readConfirmDialogState()).toMatchObject({
+      status: "confirming",
+      message: expect.stringContaining("Build Mac server"),
+    });
+    expect(readConfirmDialogState()).toMatchObject({
+      message: expect.stringContaining("close and relaunch on that machine"),
+    });
+    expect(testState.updateServer).not.toHaveBeenCalled();
+    respondToConfirmDialog(false);
+    await flushPromises();
+    expect(testState.updateServer).not.toHaveBeenCalled();
+    expect(testState.toast).not.toHaveBeenCalled();
+
+    // Cancellation releases the machine so the user can try again.
+    resetConfirmDialogForTests();
+    registerConfirmDialogHost();
+    testState.updateServer.mockResolvedValue(success);
+    renderOutdatedAction().props.onClick?.();
+    respondToConfirmDialog(true);
+    await flushPromises();
+    expect(testState.updateServer).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds double clicks behind one confirmation and one update", async () => {
+    registerConfirmDialogHost();
+    testState.updateServer.mockResolvedValue(success);
+    const action = renderOutdatedAction();
+    action.props.onClick?.();
+    action.props.onClick?.();
+    expect(testState.updateServer).not.toHaveBeenCalled();
+    respondToConfirmDialog(true);
+    await flushPromises();
+    expect(testState.updateServer).toHaveBeenCalledTimes(1);
+    expect(testState.updateServer).toHaveBeenCalledWith({
+      environmentId: "env-outdated",
+      input: { targetVersion: "0.0.46" },
+      fromVersion: "0.0.45",
+    });
+    expect(testState.toast).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels if the confirmation host disappears before the answer", async () => {
+    const unregister = registerConfirmDialogHost();
+    renderOutdatedAction().props.onClick?.();
+    unregister();
+    await flushPromises();
+    expect(testState.updateServer).not.toHaveBeenCalled();
+    expect(testState.toast).not.toHaveBeenCalled();
+  });
+
+  it("retains the existing click-to-update fallback without a dialog host", async () => {
+    testState.updateServer.mockResolvedValue(success);
+    renderOutdatedAction().props.onClick?.();
+    await flushPromises();
+    expect(testState.updateServer).toHaveBeenCalledTimes(1);
   });
 });
 

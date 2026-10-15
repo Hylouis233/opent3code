@@ -197,6 +197,14 @@ jobs:
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
           git checkout --detach FETCH_HEAD
+      # ACP process-tree tests compile a pthread fixture and otherwise skip
+      # silently when cc is absent. These fixtures run in the server shards.
+      - uses: ./.github/actions/setup-apt-mirrors
+      - name: Install C toolchain for process-tree fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential
+          command -v cc
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -208,6 +216,8 @@ jobs:
           T3CODE_TRANSFER_BUDGET_REPORT_PATH: ${{ runner.temp }}/t3code-transfer-budget.md
           T3CODE_TRANSFER_BUDGET_RESULT_PATH: ${{ runner.temp }}/thread-transfer-result.json
         run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+      # The V2 transfer-budget integration test runs on exactly one shard.
+      # Only that shard uploads the artifact consumed by the reporting workflow.
       - name: Detect transfer budget report
         id: transfer_budget
         if: always()
@@ -233,6 +243,18 @@ jobs:
           path: ${{ runner.temp }}/thread-transfer-result.json
           if-no-files-found: ignore
           retention-days: 30
+
+  transfer-report:
+    name: Transfer report artifact
+    needs: test_server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require transfer measurements
+        uses: actions/download-artifact@v8
+        with:
+          name: thread-transfer-results
+          path: ${{ runner.temp }}/thread-transfer
 
   rust:
     name: Rust
@@ -389,6 +411,7 @@ jobs:
       - check
       - test
       - test_server
+      - transfer-report
       - rust
       - mobile_native_changes
       - mobile_native_static_analysis
@@ -403,7 +426,7 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const results = JSON.parse(process.env.RESULTS);
-          const required = ['maintenance', 'check', 'test', 'test_server', 'rust', 'mobile_native_changes', 'release_smoke'];
+          const required = ['maintenance', 'check', 'test', 'test_server', 'transfer-report', 'rust', 'mobile_native_changes', 'release_smoke'];
           const failed = required.filter(name => results[name]?.result !== 'success');
           const native = results.mobile_native_static_analysis?.result;
           const notNeeded = results.mobile_native_changes?.outputs.changed === 'false';

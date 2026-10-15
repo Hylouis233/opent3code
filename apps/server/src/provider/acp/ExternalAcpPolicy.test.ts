@@ -22,6 +22,8 @@ describe("external ACP security policy", () => {
     for (const options of [
       [],
       [allow, allow],
+      [allow, { ...allow, kind: "allow_always" }],
+      [allow, { ...deny, optionId: allow.optionId }],
       [{ ...allow, kind: "allow_always" }],
       [{ ...allow, optionId: "" }],
     ]) {

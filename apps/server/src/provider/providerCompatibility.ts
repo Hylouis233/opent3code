@@ -1,5 +1,6 @@
 import {
   TrimmedNonEmptyString,
+  ORCHESTRATION_PROTOCOL_VERSION,
   ServerProviderCompatibilityStatus,
   type ProviderDriverKind,
   type ServerProvider,
@@ -27,6 +28,7 @@ const VersionRange = TrimmedNonEmptyString.pipe(
 const Policy = Schema.Struct({
   driver: TrimmedNonEmptyString,
   t3CodeRange: VersionRange,
+  orchestrationProtocolVersion: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   recommendedRange: Schema.optionalKey(VersionRange),
   recommendedVersion: Schema.optionalKey(StableVersion),
   ranges: Schema.Array(
@@ -60,13 +62,23 @@ export function resolveProviderCompatibility(
   policies: ReadonlyArray<ProviderCompatibilityPolicy> | undefined,
   driver: ProviderDriverKind,
   version: string | null,
-  t3CodeVersion = packageJson.version,
+  t3CodeVersion?: string,
 ): ServerProviderCompatibilityAdvisory | undefined {
   // These fork-only previews are independently managed and have no reviewed compatibility range.
   // Upstream manifests must not classify them or recommend upstream-managed versions.
   if (driver === "mcode" || driver === "dsh") return undefined;
+  // The source package still says 0.0.45, but this fork runs protocol V2.
+  // OpenCode and Pi changed adapter generations at that boundary. Require an
+  // explicit matching protocol policy for the running code; an untagged remote
+  // policy falls back to the tagged bundle instead of selecting V1 by version.
+  // Explicit historical release lookups remain semver-only.
+  const protocolScoped = t3CodeVersion === undefined && (driver === "opencode" || driver === "pi");
   const policy = policies?.find(
-    (entry) => entry.driver === driver && satisfiesSemverRange(t3CodeVersion, entry.t3CodeRange),
+    (entry) =>
+      entry.driver === driver &&
+      (protocolScoped
+        ? entry.orchestrationProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION
+        : satisfiesSemverRange(t3CodeVersion ?? packageJson.version, entry.t3CodeRange)),
   );
   if (!policy) return undefined;
   const unprefixed = version?.replace(/^v/, "");
