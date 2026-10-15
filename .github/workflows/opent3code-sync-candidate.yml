@@ -5,25 +5,18 @@ on:
     types: [opened, synchronize, reopened]
     paths:
       - .github/workflows/opent3code-sync-candidate.yml
-  push:
-    branches: [chore/upstream-sync-20261015]
-    paths:
-      - .github/workflows/opent3code-sync-candidate.yml
-
 permissions:
   contents: read
-
 concurrency:
   group: opent3code-pinned-sync-preparation
   cancel-in-progress: false
-
 jobs:
   prepare:
-    if: github.repository_id == '1341460159' && (github.ref == 'refs/heads/chore/upstream-sync-20261015' || (github.head_ref == 'chore/upstream-sync-20261015' && github.event.pull_request.head.repo.id == github.event.repository.id))
+    if: github.repository_id == '1341460159' && github.head_ref == 'chore/upstream-sync-20261015' && github.event.pull_request.head.repo.id == github.event.repository.id
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - name: Capture public source snapshots without executing repository code
+      - name: Inspect an immutable bounded batch without running repository code
         env:
           GIT_TERMINAL_PROMPT: "0"
           GIT_CONFIG_NOSYSTEM: "1"
@@ -31,70 +24,54 @@ jobs:
           UPSTREAM_SHA: e6bbfdb9ffe8334bed1c9b992f828f04d30db7ea
         run: |
           python3 - <<'PY'
-          import gzip
-          import hashlib
-          import json
-          import os
-          import pathlib
-          import re
-          import shutil
-          import subprocess
-
-          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'opent3code-pinned-sync'
-          repo = root / 'source.git'
-          out = root / 'evidence'
-          out.mkdir(parents=True)
-          refs = {k: os.environ[v] for k, v in (
-              ('fork', 'FORK_SHA'), ('upstream', 'UPSTREAM_SHA'))}
-          if not all(re.fullmatch(r'[a-f0-9]{40}', v) for v in refs.values()):
-              raise SystemExit('Invalid immutable source identity')
-          subprocess.run(['git', 'init', '--bare', str(repo)], check=True)
-          def git(*args, check=True):
-              return subprocess.run(['git', '--git-dir=' + str(repo), *args],
-                                    check=check, stdout=subprocess.PIPE)
-          git('fetch', '--filter=blob:none', '--no-tags', '--no-recurse-submodules', '--depth=4096',
-              'https://github.com/Hylouis233/opent3code.git', refs['fork'])
-          git('fetch', '--filter=blob:none', '--no-tags', '--no-recurse-submodules', '--depth=4096',
-              'https://github.com/pingdotgg/t3code.git', refs['upstream'])
-          refs['base'] = git('merge-base', refs['fork'], refs['upstream']).stdout.decode().strip()
-          if not re.fullmatch(r'[a-f0-9]{40}', refs['base']):
-              raise SystemExit('No unambiguous common ancestor')
-          merge = git('-c', 'merge.renames=true', 'merge-tree', '--write-tree', '--messages',
-                      refs['fork'], refs['upstream'], check=False)
-          if merge.returncode not in (0, 1):
-              raise SystemExit('Three-way merge computation failed')
-          (out / 'merge-tree.txt').write_bytes(merge.stdout)
-          candidate = merge.stdout.splitlines()[0].decode()
-          if not re.fullmatch(r'[a-f0-9]{40}', candidate):
-              raise SystemExit('No valid candidate tree')
-          refs['candidate'] = candidate
-          metadata = {'refs': refs, 'merge_exit': merge.returncode,
-                      'notice': 'Preparation only. Conflict markers may remain. No tests, pushes, merges, release or deployment.'}
-          for name, ref in refs.items():
-              # Inventory includes vendored trees. Archives exclude .repos to keep
-              # the review copy bounded; their absence is not a proposed deletion.
-              inventory = git('ls-tree', '-rz', '--full-tree', ref).stdout
-              (out / (name + '-tree.bin')).write_bytes(inventory)
-              tops = [p.decode() for p in git('ls-tree', '-z', '--name-only', ref).stdout.split(b'\0')
-                      if p and p != b'.repos']
-              archive = out / (name + '-source.tar.gz')
-              with gzip.open(archive, 'wb', compresslevel=6) as sink:
-                  proc = subprocess.Popen(['git', '--git-dir=' + str(repo), 'archive', '--format=tar', ref, *tops],
-                                          stdout=subprocess.PIPE)
-                  try:
-                      shutil.copyfileobj(proc.stdout, sink)
-                  finally:
-                      proc.stdout.close()
-                  if proc.wait() != 0:
-                      raise SystemExit('Snapshot archive failed: ' + name)
-              metadata[name + '_archive_sha256'] = hashlib.sha256(archive.read_bytes()).hexdigest()
-          (out / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
-          print(json.dumps(metadata, indent=2))
+          import base64,hashlib,json,os,pathlib,re,subprocess
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'opent3code-batch'
+          repo=root/'source.git'; out=root/'evidence';out.mkdir(parents=True)
+          fork=os.environ['FORK_SHA']; upstream=os.environ['UPSTREAM_SHA']
+          subprocess.run(['git','init','--bare',str(repo)],check=True)
+          def git(*args,check=True):
+              return subprocess.run(['git','--git-dir='+str(repo),*args],check=check,stdout=subprocess.PIPE)
+          for url,sha in [('https://github.com/Hylouis233/opent3code.git',fork),('https://github.com/pingdotgg/t3code.git',upstream)]:
+              git('fetch','--filter=blob:none','--no-tags','--no-recurse-submodules','--depth=4096',url,sha)
+          base=git('merge-base',fork,upstream).stdout.decode().strip()
+          chain=git('rev-list','--first-parent','--reverse',base+'..'+upstream).stdout.decode().splitlines()
+          inspected=[];selected=base;tree=git('rev-parse',fork+'^{tree}').stdout.decode().strip()
+          for commit in chain[:30]:
+              result=git('merge-tree','--write-tree','--messages',fork,commit,check=False)
+              if result.returncode not in (0,1):raise SystemExit('Merge computation failed')
+              row={'commit':commit,'subject':git('show','-s','--format=%s',commit).stdout.decode().strip(),'merge_exit':result.returncode}
+              inspected.append(row)
+              if result.returncode:
+                  (out/'first-conflict.txt').write_bytes(result.stdout)
+                  break
+              selected=commit;tree=result.stdout.splitlines()[0].decode()
+          fork_tree=git('rev-parse',fork+'^{tree}').stdout.decode().strip()
+          def inventory(ref):
+              data=git('ls-tree','-rz','--full-tree',ref).stdout;result={}
+              for raw in data.split(b'\0'):
+                  if not raw:continue
+                  left,path=raw.split(b'\t',1);mode,kind,sha=left.decode().split()
+                  result[path.decode()]={'mode':mode,'type':kind,'sha':sha}
+              return result
+          before=inventory(fork);after=inventory(tree);changes=[]
+          for path in sorted(set(before)|set(after)):
+              if before.get(path)==after.get(path):continue
+              item={'path':path,'before':before.get(path),'after':after.get(path)}
+              if path in after and after[path]['type']=='blob':
+                  data=git('cat-file','blob',after[path]['sha']).stdout
+                  try:item['content']=data.decode('utf-8');item['encoding']='utf-8'
+                  except UnicodeDecodeError:item['content']=base64.b64encode(data).decode();item['encoding']='base64'
+                  item['sha256']=hashlib.sha256(data).hexdigest()
+              changes.append(item)
+          metadata={'fork':fork,'fork_tree':fork_tree,'full_upstream':upstream,'base':base,'selected_upstream':selected,'candidate_tree':tree,'first_parent_commits_remaining_from_base':len(chain),'inspected':inspected,'changed_files':len(changes),'notice':'Read-only preparation. No application tests, ref updates, merges or deployment. A conflict-free Git tree is not acceptance.'}
+          (out/'metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
+          (out/'changes.json').write_text(json.dumps(changes,indent=2)+'\n')
+          (out/'candidate.diff').write_bytes(git('diff',fork,tree,'--',':(exclude).repos').stdout)
+          print(json.dumps(metadata,indent=2))
           PY
-      - name: Upload bounded review inputs, not a release
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: opent3code-pinned-sync-${{ github.run_id }}
-          path: ${{ runner.temp }}/opent3code-pinned-sync/evidence/
+          name: opent3code-bounded-batch-${{ github.run_id }}
+          path: ${{ runner.temp }}/opent3code-batch/evidence/
           if-no-files-found: error
           retention-days: 7
