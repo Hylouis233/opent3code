@@ -25,7 +25,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
@@ -190,22 +190,37 @@ const makeTestRelay = Effect.fnUntraced(function* (
         catchUp.shellSnapshotReads += 1;
         return { schemaVersion: 2, snapshotSequence: 1, threads: [], archivedThreads: [] };
       }),
+    readShellSnapshot: unused,
     ensureLegacyTranscript: unused,
     dispatch: unused,
+    searchThread: () => Effect.die("unused"),
+    searchThreadStream: () => Stream.empty,
+    getThreadHistoryPage: () => Effect.die("unused"),
     getTimelinePage: () => Effect.die("Unused timeline read"),
     getMessageCount: () => Effect.die("unused message count"),
+    getTurnItem: () => Effect.die("unused turn item read"),
     getThreadRecords: () => Effect.die("unused record read"),
     getThreadProjection: unused,
     getCheckpointContext: unused,
     getThreadSnapshot: unused,
+    getThreadTranscript: unused,
     getThreadSnapshotWindow: unused,
     getProjectThreadRecords: () => Effect.die("unused project record read"),
     getProjectThread: unused,
     listProjectThreads: unused,
     sendToThread: unused,
+    assertProviderInstanceEnabled: unused,
+    isProviderInstanceEnabledForProject: unused,
+    hasReceipt: unused,
     waitForThread: unused,
+    settleAfterRun: unused,
+    settleThread: unused,
     interruptThread: unused,
+    stopWorkflow: () => Effect.die("unused stopWorkflow"),
+    stopDelegatedTasks: unused,
     getThreadEventSequence: unused,
+    recoverDelegatedTask: unused,
+    delegatedTaskResultPending: unused,
     streamStoredEvents: Stream.empty,
     streamStoredEventsFrom: () => Stream.empty,
     streamDomainEvents: options.domainEvents ?? Stream.empty,
@@ -414,6 +429,60 @@ describe("AgentAwarenessRelay", () => {
       yield* relay.publishThread(THREAD_ID);
       assert.equal(publications.length, 3);
       assert.isTrue(publications[2]?.url.startsWith("https://new-relay.example.test/") ?? false);
+    }),
+  );
+
+  it.effect("a stalled response body releases later threads and uses bounded retries", () =>
+    Effect.gen(function* () {
+      const bodyStarted = Promise.withResolvers<void>();
+      const secondRead = yield* Deferred.make<void>();
+      const currentShell = yield* Ref.make(shell());
+      const { relay, publications } = yield* makeTestRelay({
+        readShell: (threadId) =>
+          threadId === SECOND_THREAD_ID
+            ? Deferred.succeed(secondRead, undefined).pipe(
+                Effect.as(shell({ id: SECOND_THREAD_ID })),
+              )
+            : Ref.get(currentShell),
+        respond: (attempt) => {
+          if (attempt !== 1) return new Response("relay unavailable", { status: 503 });
+          const response = new Response(null, {
+            headers: { "content-type": "application/json" },
+          });
+          return Object.assign(response, {
+            arrayBuffer: () => {
+              bodyStarted.resolve();
+              return new Promise<ArrayBuffer>(() => {});
+            },
+          });
+        },
+      });
+      const first = yield* relay.publishThread(THREAD_ID).pipe(Effect.forkChild);
+      yield* Effect.promise(() => bodyStarted.promise);
+      const second = yield* relay.publishThread(SECOND_THREAD_ID).pipe(Effect.forkChild);
+      yield* TestClock.adjust("9999 millis");
+      assert.equal(publications.length, 1);
+      yield* Ref.set(currentShell, shell({ title: "Latest title" }));
+      yield* TestClock.adjust("1 millis");
+      // Assert progress before draining so the base fails instead of hanging.
+      assert.isTrue(yield* Deferred.isDone(secondRead));
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      assert.equal(publications.length, 2);
+      assert.isTrue(publications[1]?.url.includes(SECOND_THREAD_ID) ?? false);
+      for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000]) {
+        const attempts = publications.length;
+        yield* TestClock.adjust(delay - 1);
+        yield* relay.drain;
+        assert.equal(publications.length, attempts);
+        yield* TestClock.adjust(1);
+        yield* relay.drain;
+        assert.equal(publications.length, attempts + 2);
+        assert.equal(publications[attempts]?.state?.threadTitle, "Latest title");
+      }
+      yield* TestClock.adjust("1 minute");
+      yield* relay.drain;
+      assert.equal(publications.length, 12);
     }),
   );
 

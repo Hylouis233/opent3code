@@ -7,6 +7,7 @@ import {
   ThreadId,
   type DeviceServiceState,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Deferred from "effect/Deferred";
@@ -15,7 +16,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { NodeRuntimeUnavailableError } from "@t3tools/shared/nodeRuntime";
@@ -65,7 +66,10 @@ const fixture = Effect.fn("fixture")(function* (
   onBoot: Effect.Effect<void> = Effect.void,
   bootError?: string,
   failListAfterShutdown = false,
-  runtimeFailure?: NodeRuntimeUnavailableError | DeviceHost.DeviceHostError,
+  runtimeFailure?:
+    | NodeRuntimeUnavailableError
+    | DeviceHost.DeviceHostError
+    | DeviceHost.AgentDeviceStartError,
   inspectError = false,
   installTool?: Parameters<typeof DeviceService.makeWithHosts>[3],
 ) {
@@ -106,7 +110,8 @@ const fixture = Effect.fn("fixture")(function* (
     platformAvailability: (platform) => Effect.succeed({ platform, available: true }),
     ensureReady: (onPhase) =>
       Effect.gen(function* () {
-        if (runtimeFailure) return yield* runtimeFailure;
+        if (runtimeFailure && runtimeFailure._tag !== "AgentDeviceStartError")
+          return yield* runtimeFailure;
         starts.push("start");
         yield* onPhase("installing", "Updating device hub from 0.9.0 to 0.10.1…");
         return ready;
@@ -135,6 +140,7 @@ const fixture = Effect.fn("fixture")(function* (
     undefined,
     installTool,
   ).pipe(
+    Effect.provide(NodeCrypto.layer),
     Effect.provideService(DeviceHost.DeviceHost, host),
     Effect.provideService(
       ServerSettings.ServerSettingsService,
@@ -215,6 +221,36 @@ const fixture = Effect.fn("fixture")(function* (
 });
 
 describe("device setup consent", () => {
+  it.effect("exposes daemon startup diagnostics through agent readiness and host status", () =>
+    Effect.gen(function* () {
+      const startupError = new DeviceHost.AgentDeviceStartError({
+        hostId: LOCAL_DEVICE_HOST_ID,
+        stateDir: "/test/device/agent-device",
+        exitCode: 1,
+        reason: "daemon_lock_not_directory",
+        cause: { stdout: "private startup diagnostics", code: 1 },
+      });
+      const { service, settings } = yield* fixture(Effect.void, undefined, false, startupError);
+      yield* Ref.update(settings, (current) => ({
+        ...current,
+        enableDeviceSupport: true,
+        enableAgentDeviceAccess: true,
+      }));
+      const error = yield* service.agentReadinessIfSupported().pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "DeviceHostUnavailableError",
+        reason: startupError.message,
+        cause: startupError,
+      });
+      expect(error.message).toContain("daemon.lock is not a directory");
+      expect(error.message).not.toContain("private startup diagnostics");
+      expect((yield* service.state).hostStatuses[LOCAL_DEVICE_HOST_ID]).toEqual({
+        status: "failed",
+        detail: startupError.message,
+      });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "preserves missing-runtime guidance and causes through manual and agent readiness",
     () =>
@@ -482,6 +518,7 @@ it.effect.each(["shutdown", "close"] as const)(
         }),
       );
       const service = yield* DeviceService.makeWithHosts(new Map([[host.id, host]])).pipe(
+        Effect.provide(NodeCrypto.layer),
         Effect.provideService(HttpClient.HttpClient, http),
       );
       const input = { threadId, deviceId, platform: "ios" as const };
@@ -574,6 +611,7 @@ it.effect.each([
         }),
       );
       const service = yield* DeviceService.makeWithHosts(new Map([[host.id, host]])).pipe(
+        Effect.provide(NodeCrypto.layer),
         Effect.provideService(HttpClient.HttpClient, http),
       );
       yield* service.list;

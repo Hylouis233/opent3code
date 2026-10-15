@@ -27,16 +27,16 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as EffectAcpErrors from "effect-acp/errors";
-import { parsePermissionRequest } from "../../provider/acp/AcpRuntimeModel.ts";
-import type * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
+import { parsePermissionRequest } from "@t3tools/provider-acp/server/runtimeModel";
+import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
   ExternalAcpResume,
   externalApprovalOptions,
   externalPermissionOutcome,
   matchesExternalAcpResume,
 } from "../../provider/acp/ExternalAcpPolicy.ts";
-import type * as IdAllocator from "../IdAllocator.ts";
-import * as Adapter from "../ProviderAdapter.ts";
+import type * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as Adapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const decodeResume = Schema.decodeUnknownEffect(ExternalAcpResume);
 
@@ -170,7 +170,7 @@ export function makeExternalAcpAdapterV2(options: {
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly crypto: Crypto.Crypto;
-  readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly openRuntime: (
     cwd: string,
     scope: Scope.Closeable,
@@ -181,7 +181,7 @@ export function makeExternalAcpAdapterV2(options: {
       "onOutgoingResponse" | "onOutgoingResponseFailure" | "onTermination"
     >,
   ) => Effect.Effect<NativeRuntime, EffectAcpErrors.AcpError>;
-}): Adapter.ProviderAdapterV2Shape {
+}): Adapter.ProviderAdapterV2["Service"] {
   const { driver, instanceId, idAllocator } = options;
   const invalid = (detail: string) => new Adapter.ProviderAdapterProtocolError({ driver, detail });
   const checkPolicy = (selection: ModelSelection, policy: Adapter.ProviderAdapterV2RuntimePolicy) =>
@@ -929,7 +929,7 @@ export function makeExternalAcpAdapterV2(options: {
                 if (request.message.attachments.length)
                   return yield* invalid("Attachments are not supported by this preview adapter");
                 const runtime = native;
-                const nativeTurnId = `${instanceId}:${yield* options.crypto.randomUUIDv4.pipe(Effect.orDie)}`;
+                const nativeTurnId = `${instanceId}:${yield* options.crypto.randomUUIDv4().pipe(Effect.orDie)}`;
                 const done = yield* Deferred.make<void>();
                 const dispatched = yield* Deferred.make<void>();
                 const startedAt = yield* DateTime.now;

@@ -118,3 +118,22 @@ test("asset receipt, checksums, extra files and path traversal fail closed", () 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("upstream APK publication and Cursor forwarding cannot run in the fork", () => {
+  for (const [workflow, job] of [
+    ["mobile-android-apk.yml", "mirror"],
+    ["cursor-hygiene-webhook.yml", "forward"],
+  ]) {
+    const source = fs.readFileSync(path.join(__dirname, "../workflows", workflow), "utf8");
+    const jobs = source.split(/^jobs:\s*$/m)[1];
+    assert.ok(jobs, `${workflow} must declare jobs`);
+    const sections = jobs.split(/^  (?=[a-zA-Z0-9_-]+:\s*$)/m);
+    const section = sections.find((value) => value.startsWith(`${job}:`));
+    assert.ok(section, `${workflow} must retain its ${job} job`);
+    assert.match(
+      section,
+      /^    if: github\.repository == 'pingdotgg\/t3code'\s*$/m,
+      `${workflow} must keep a job-level upstream identity boundary`,
+    );
+  }
+});
