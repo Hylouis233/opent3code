@@ -1,6 +1,10 @@
 name: OpenT3Code pinned sync preparation
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/opent3code-sync-candidate.yml
   push:
     branches: [chore/upstream-sync-20261015]
     paths:
@@ -15,7 +19,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.repository_id == '1341460159' && github.ref == 'refs/heads/chore/upstream-sync-20261015'
+    if: github.repository_id == '1341460159' && (github.ref == 'refs/heads/chore/upstream-sync-20261015' || (github.head_ref == 'chore/upstream-sync-20261015' && github.event.pull_request.head.repo.id == github.event.repository.id))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
