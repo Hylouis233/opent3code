@@ -18,6 +18,14 @@ Document what works and what does not: discovery, authentication, session lifecy
 
 Preserve each provider's authentication and permission controls. Do not log tokens or silently grant permissions. Check the implications for web, desktop, mobile, local, and remote clients; explicitly identify any unsupported surface.
 
+<a id="one-problem"></a>
+
+## Solve one underlying problem per PR
+
+Include the contract, server, client, test, and documentation changes needed for one underlying problem. Several issue reports may describe the same defect. Keep unrelated cleanup or a second independent fix in a separate PR; explain why related changes belong together. A large diff alone does not establish that the work contains unrelated problems.
+
+<a id="verification"></a>
+
 ## Evidence and review
 
 Use a conventional commit title and explain the problem and result in plain English. Add focused behavior tests for changed logic. Include the exact commands run, their results, and anything not tested. Visible changes need screenshots; interaction changes may need a short recording. Upload PR-only evidence rather than committing it; maintained documentation assets belong under `docs/assets`.

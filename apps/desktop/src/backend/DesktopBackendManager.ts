@@ -38,10 +38,11 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import {
+  SERVER_EXIT_CODE_STATE_DIR_OWNED,
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
@@ -52,6 +53,7 @@ import { waitForHttpReady as waitForHttpReadyShared } from "@t3tools/shared/http
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
+import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
 const INITIAL_RESTART_DELAY = Duration.millis(500);
@@ -64,7 +66,9 @@ const MAX_PREFLIGHT_FAILURE_ATTEMPTS = 5;
 const DEFAULT_BACKEND_READINESS_TIMEOUT = Duration.minutes(1);
 const DEFAULT_BACKEND_READINESS_INTERVAL = Duration.millis(100);
 const DEFAULT_BACKEND_READINESS_REQUEST_TIMEOUT = Duration.seconds(1);
-const DEFAULT_BACKEND_TERMINATE_GRACE = Duration.seconds(2);
+// Same as the service launcher. A killed backend leaves its agents running,
+// and a busy one needs a few seconds to stop every provider session.
+const DEFAULT_BACKEND_TERMINATE_GRACE = Duration.seconds(5);
 const DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT = Duration.seconds(5);
 const BACKEND_READINESS_PATH = "/.well-known/t3/environment";
 const { logWarning: logBackendProcessWarning } =
@@ -222,6 +226,10 @@ export type BackendProcessError = typeof BackendProcessError.Type;
 
 interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly desktopTelemetryStream: Stream.Stream<Uint8Array>;
+  /** Events for the desktop's browser tabs, written to `desktopBrowserFd`. */
+  readonly desktopBrowserStream?: Stream.Stream<Uint8Array>;
+  /** Each line the backend writes to `desktopBrowserControlFd`. */
+  readonly onDesktopBrowserCommand?: (line: string) => Effect.Effect<void>;
   readonly onDesktopTelemetryControl?: (
     message: DesktopTelemetryControlMessageValue,
   ) => Effect.Effect<void>;
@@ -299,6 +307,7 @@ export interface BackendInstanceSpec {
   // retries. Returns true when the callback changed configuration and the
   // manager should resolve once more; false stops the failed instance.
   readonly onPreflightFailed?: (failure: PreflightFailure) => Effect.Effect<boolean>;
+  readonly onStateDirOwned?: () => Effect.Effect<void>;
 }
 
 interface ActiveBackendRun {
@@ -423,7 +432,7 @@ function drainBackendOutput(
               cause,
             }),
         ),
-        Effect.catchTag("BackendProcessOutputHandlingError", onOutputFailure),
+        Effect.catchTags({ BackendProcessOutputHandlingError: onOutputFailure }),
       ),
     ),
     Effect.catchTags({
@@ -471,6 +480,18 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       additionalFds[`fd${options.bootstrap.desktopTelemetryControlFd}`] = {
         type: "output",
       };
+    }
+    if (
+      options.bootstrap.desktopBrowserFd !== undefined &&
+      options.desktopBrowserStream !== undefined
+    ) {
+      additionalFds[`fd${options.bootstrap.desktopBrowserFd}`] = {
+        type: "input",
+        stream: options.desktopBrowserStream,
+      };
+    }
+    if (options.bootstrap.desktopBrowserControlFd !== undefined) {
+      additionalFds[`fd${options.bootstrap.desktopBrowserControlFd}`] = { type: "output" };
     }
   }
   const command = ChildProcess.make(options.executablePath, options.args, {
@@ -537,6 +558,26 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
           version: 1,
           type: "setDiagnosticsDemand",
           enabled: false,
+        }),
+      ),
+      Effect.forkScoped,
+    );
+  }
+  if (
+    options.bootstrap.desktopBrowserControlFd !== undefined &&
+    options.onDesktopBrowserCommand !== undefined
+  ) {
+    const browserFd = options.bootstrap.desktopBrowserControlFd;
+    const handleCommand = options.onDesktopBrowserCommand;
+    yield* handle.getOutputFd(browserFd).pipe(
+      Stream.decodeText(),
+      Stream.splitLines,
+      Stream.filter((line) => line.length > 0),
+      Stream.runForEach(handleCommand),
+      Effect.catchCause((cause) =>
+        logBackendProcessWarning("desktop browser command stream stopped", {
+          fd: browserFd,
+          cause: Cause.pretty(cause),
         }),
       ),
       Effect.forkScoped,
@@ -642,6 +683,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   | HttpClient.HttpClient
   | DesktopObservability.DesktopBackendOutputLogFactory
   | DesktopTelemetryPublisher.DesktopTelemetryPublisher
+  | DesktopBrowserHost.DesktopBrowserHost
   | DesktopWslEnvironment.DesktopWslEnvironment
   | Scope.Scope
 > {
@@ -650,6 +692,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const backendOutputLogFactory = yield* DesktopObservability.DesktopBackendOutputLogFactory;
   const backendOutputLog = yield* backendOutputLogFactory.forInstance(spec.id);
   const desktopTelemetryPublisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+  const desktopBrowserHost = yield* DesktopBrowserHost.DesktopBrowserHost;
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
@@ -828,7 +871,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
         const finalizeRun = Effect.fn("desktop.backendInstance.finalizeRun")(function* (
           reason: string,
+          exitCode?: number,
         ) {
+          const stateDirOwned = exitCode === SERVER_EXIT_CODE_STATE_DIR_OWNED;
           yield* mutex.withPermits(1)(
             Effect.gen(function* () {
               const { isCurrentRun, nextState, pid, exitObserved, stopRequested, wasReady } =
@@ -898,6 +943,11 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               }
 
               if (isCurrentRun && nextState.desiredRunning) {
+                if (stateDirOwned && !stopRequested) {
+                  yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false }));
+                  yield* (spec.onStateDirOwned?.() ?? Effect.void).pipe(Effect.ignore);
+                  return;
+                }
                 yield* scheduleRestart(reason);
               }
             }),
@@ -907,6 +957,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         const program = runBackendProcess({
           ...config.value,
           desktopTelemetryStream: desktopTelemetryPublisher.encoded,
+          // Only a bootstrap that names the browser fds (the local primary) gets them.
+          desktopBrowserStream: desktopBrowserHost.events,
+          onDesktopBrowserCommand: desktopBrowserHost.handleCommandLine,
           onDesktopTelemetryControl: (message) =>
             desktopTelemetryPublisher.handleControlForSource(spec.id, message),
           onStarted: Effect.fn("desktop.backendInstance.onStarted")(function* (pid) {
@@ -971,7 +1024,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           Scope.provide(runScope),
           Effect.matchEffect({
             onFailure: (error) => finalizeRun(error.message),
-            onSuccess: (exit) => finalizeRun(exit.reason),
+            onSuccess: (exit) => finalizeRun(exit.reason, Option.getOrUndefined(exit.code)),
           }),
           Effect.ensuring(Scope.close(runScope, Exit.void).pipe(Effect.ignore)),
         );

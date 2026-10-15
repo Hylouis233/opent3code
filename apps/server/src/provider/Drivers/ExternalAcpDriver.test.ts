@@ -22,9 +22,9 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
-import * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { makeExternalAcpAdapterV2 } from "../../orchestration-v2/Adapters/ExternalAcpAdapterV2.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -34,12 +34,12 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { writeFakeCli } from "../../testUtils/fakeCli.ts";
-import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import {
   ProviderAdapterV2Event,
   type ProviderAdapterV2TurnInput,
-} from "../../orchestration-v2/ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/ProviderAdapter";
 import { MCodeDriver, DshDriver } from "./ExternalAcpDriver.ts";
 
 const decodeEvent = Schema.decodeUnknownEffect(ProviderAdapterV2Event);
@@ -106,7 +106,7 @@ interface NativeControls {
   }) => Effect.Effect<void>;
   readonly beforeCancel?: Effect.Effect<void>;
   readonly onClosed?: Effect.Effect<void>;
-  readonly idAllocator?: IdAllocator.IdAllocatorV2Shape;
+  readonly idAllocator?: IdAllocator.IdAllocatorV2["Service"];
 }
 const harness = (
   kind: "mcode" | "dsh",
@@ -992,11 +992,17 @@ it.layer(Layer.merge(NodeServices.layer, IdAllocator.layer))(
         const h = yield* harness(kind, fixture, true, link);
         const first = yield* h.open;
         const original = yield* first.ensure;
-        assert.equal(original.nativeMetadata?.externalAcpResume?.home, one);
+        assert.equal(
+          original.nativeMetadata?.externalAcpResume?.home,
+          yield* Effect.promise(() => NodeFSP.realpath(one)),
+        );
         yield* first.close;
         const same = yield* h.open;
         const resumed = yield* same.runtime.resumeThread({ providerThread: original });
-        assert.equal(resumed.nativeMetadata?.externalAcpResume?.home, one);
+        assert.equal(
+          resumed.nativeMetadata?.externalAcpResume?.home,
+          yield* Effect.promise(() => NodeFSP.realpath(one)),
+        );
         yield* same.close;
         yield* Effect.promise(async () => {
           await NodeFSP.unlink(link);
@@ -1033,7 +1039,7 @@ it.layer(Layer.merge(NodeServices.layer, IdAllocator.layer))(
           args: ["--profile", "opent3code"],
           permission: "workspace-write",
           telemetry: "1",
-          home: h.dir,
+          home: yield* Effect.promise(() => NodeFSP.realpath(h.dir)),
         });
         yield* s.next(terminal);
       }),
@@ -1060,6 +1066,26 @@ it.layer(Layer.merge(NodeServices.layer, IdAllocator.layer))(
         assert.equal(result._tag, "Failure");
         const files = yield* Effect.promise(() => NodeFSP.readdir(h.dir));
         assert.isFalse(files.includes("unexpected-auth"));
+      }),
+    );
+
+    it.effect.each(kinds)("%s explicitly refuses background review-guide generation", (kind) =>
+      Effect.gen(function* () {
+        const h = yield* harness(kind);
+        const error = yield* h.instance.textGeneration
+          .generateReviewGuide({
+            cwd: h.dir,
+            number: 1,
+            title: "Synthetic review",
+            description: "No model request should run for this unsupported operation.",
+            baseBranch: "main",
+            baseCommit: "a".repeat(40),
+            settledReview: "",
+            modelSelection: { instanceId: h.instance.instanceId, model: "cli-default" },
+          })
+          .pipe(Effect.flip);
+        assert.equal(error._tag, "TextGenerationError");
+        assert.equal(error.operation, "generateReviewGuide");
       }),
     );
 

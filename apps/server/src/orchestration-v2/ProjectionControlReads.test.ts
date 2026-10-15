@@ -20,12 +20,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -197,7 +197,7 @@ const storageCases = (["sqlite", "memory"] as const).map((storage) => ({
   storage,
   storeLayer:
     storage === "sqlite"
-      ? ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory))
+      ? ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))
       : ProjectionStore.layerMemory,
 }));
 
@@ -337,7 +337,7 @@ it.effect.each(storageCases)(
         rollbackThread: () => Effect.die("unused rollbackThread"),
         forkThread: () => Effect.die("unused forkThread"),
       };
-      const sessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+      const layerSessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
         get: () => Effect.succeed(Option.some(runtime)),
       });
       yield* Effect.gen(function* () {
@@ -392,7 +392,7 @@ it.effect.each(storageCases)(
       }).pipe(
         Effect.provide(
           Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
-            Layer.provide(sessions),
+            Layer.provide(layerSessions),
           ),
         ),
       );
@@ -406,7 +406,7 @@ it.effect.each(storageCases)(
               EventSink.layer.pipe(Layer.provide(EventStore.layer)),
             ),
           ),
-          Layer.provideMerge(Layer.merge(storeLayer, SqlitePersistenceMemory)),
+          Layer.provideMerge(Layer.merge(storeLayer, SqlitePersistence.layerMemory)),
         ),
       ),
     ),

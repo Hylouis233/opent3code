@@ -94,8 +94,10 @@ const emitOverlappingXAiPromptCompleteOutOfOrder =
   process.env.T3_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
+const failSetModeConfigOption = process.env.T3_ACP_FAIL_SET_MODE_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const omitModelConfigOption = process.env.T3_ACP_OMIT_MODEL_CONFIG_OPTION === "1";
+const emitEmptyDefaultAgentOption = process.env.T3_ACP_EMIT_EMPTY_DEFAULT_AGENT_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const initialGrokReasoningEffort =
   process.env.T3_ACP_INITIAL_GROK_REASONING_EFFORT?.trim() || undefined;
@@ -129,6 +131,7 @@ let parameterizedModelPicker = false;
 let currentReasoning = "medium";
 let currentContext = "272k";
 let currentFast = false;
+let currentAgent = "";
 let authenticated = !requiresAuthentication;
 let promptCount = 0;
 let overlappingFirstPromptId: string | undefined;
@@ -314,6 +317,22 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   }
 
   return [
+    // Mirrors GitHub Copilot, whose default agent is the empty-valued choice.
+    ...(emitEmptyDefaultAgentOption
+      ? [
+          {
+            configId: "agent",
+            name: "Agent",
+            category: "_agent",
+            type: "select" as const,
+            currentValue: currentAgent,
+            options: [
+              { value: "", name: "Copilot" },
+              { value: "example", name: "example" },
+            ],
+          },
+        ]
+      : []),
     {
       configId: "mode",
       name: "Mode",
@@ -775,7 +794,7 @@ const program = Effect.gen(function* () {
           process.exit(7);
         });
       }
-      if (failSetConfigOption) {
+      if (failSetConfigOption || (failSetModeConfigOption && request.configId === "mode")) {
         return yield* AcpError.AcpRequestError.invalidParams(
           "Mock invalid params for session/set_config_option",
           {
@@ -789,6 +808,9 @@ const program = Effect.gen(function* () {
       }
       if (request.configId === "model" && typeof request.value === "string") {
         currentModelId = request.value;
+      }
+      if (request.configId === "agent" && typeof request.value === "string") {
+        currentAgent = request.value;
       }
       if (request.configId === "reasoning" && typeof request.value === "string") {
         currentReasoning = request.value;
@@ -1076,6 +1098,70 @@ const program = Effect.gen(function* () {
             kind: "search",
             status: "completed",
             rawInput: { query: "TODO", path: "apps/web" },
+          },
+          // Grok backend searches: the query only arrives in the completed rawOutput.
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "grok-x-search",
+            title: "X search:",
+            kind: "search",
+            status: "in_progress",
+            rawInput: { variant: "XSearch", backend: true },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "grok-x-search",
+            title: "X search:",
+            status: "completed",
+            rawOutput: {
+              call_id: "xs_call-1",
+              input: '{"query":"conversation_id:42","limit":"10","mode":"Latest"}',
+              name: "x_keyword_search",
+              id: "grok-x-search",
+            },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "grok-web-search",
+            title: "Web search:",
+            kind: "search",
+            status: "completed",
+            rawInput: { variant: "WebSearch", backend: true },
+            rawOutput: {
+              action: {
+                type: "search",
+                query: "t3 code",
+                sources: [
+                  { type: "url", url: "https://t3.codes" },
+                  { type: "url", url: "https://t3.codes" },
+                  { type: "url", url: "https://github.com/pingdotgg/t3code" },
+                ],
+              },
+              id: "grok-web-search",
+              status: "completed",
+            },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "grok-web-fetch",
+            title: "Fetch: https://t3.codes",
+            kind: "fetch",
+            status: "completed",
+            rawInput: { variant: "WebFetch", url: "https://t3.codes" },
+            rawOutput: {
+              type: "WebFetch",
+              Content: { url: "https://t3.codes", content: "T3 Code page" },
+            },
+            content: [{ type: "content", content: { type: "text", text: "T3 Code page" } }],
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "antigravity-shell",
+            title: "run_command",
+            kind: "execute",
+            status: "completed",
+            rawInput: { command: "cat probe.txt" },
+            rawOutput: { commandLine: "cat probe.txt", exitCode: 0, combinedOutput: "after\n" },
           },
           {
             sessionUpdate: "compaction_update",

@@ -66,15 +66,7 @@ function readInstanceCustomModels(
       return readCustomModelEntries(value);
     }
   }
-  const defaultInstanceId = defaultInstanceIdForDriver(driverKind);
-  if (instanceId !== defaultInstanceId) {
-    return [];
-  }
-  const legacyProviders = settings.providers as Record<
-    string,
-    { readonly customModels: ReadonlyArray<unknown> } | undefined
-  >;
-  return readCustomModelEntries(legacyProviders[driverKind]?.customModels ?? []);
+  return [];
 }
 
 export interface AppModelOption {
@@ -228,11 +220,8 @@ function getAppModelOptions(
  * come from the instance's own `entry.models` snapshot (rather than the
  * first-matching-kind fallback in `getProviderModels`), so each custom
  * instance gets the precise model list its driver reported. Custom model
- * slugs come from the instance's own `providerInstances[id].config.customModels`
- * when present, falling back to the legacy per-kind
- * `settings.providers[driverKind].customModels` bucket for default
- * instances only. This keeps two instances of the same kind from leaking
- * custom slugs into each other. Custom rows reported by the server are
+ * slugs come from the instance's own `providerInstances[id].config.customModels`,
+ * so two instances of the same kind never leak custom slugs into each other. Custom rows reported by the server are
  * ignored so a slug removed in Settings disappears without waiting for the
  * next provider probe.
  */
@@ -377,9 +366,19 @@ export function resolveAppModelSelectionState(
     selectedEntry ?? entries.find((candidate) => candidate.enabled && candidate.isAvailable);
   if (entry) {
     // When the instance changed due to fallback (e.g. selected instance was disabled),
-    // don't carry over the old instance's model — use the fallback instance's default.
+    // don't carry over the old instance's model.
     const selectedModel = selectedEntry ? selection.model : null;
+    // A saved model the catalog no longer lists, or a new fallback instance,
+    // gets the driver's cheap text generation default. The catalog's own
+    // default is the flagship chat model, which is too expensive here.
+    const options = getAppModelOptionsForInstance(settings, entry);
     const model =
+      resolveSelectableModel(entry.driverKind, selectedModel, options) ??
+      resolveSelectableModel(
+        entry.driverKind,
+        DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind],
+        options,
+      ) ??
       resolveAppModelSelectionForInstance(
         entry.instanceId,
         settings,

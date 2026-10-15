@@ -32,10 +32,10 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpApiClient from "effect/http-api/HttpApiClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
@@ -97,6 +97,7 @@ export function shouldPublishAgentAwarenessEvent(
     case "thread.unarchived":
     case "thread.deleted":
     case "thread.metadata-updated":
+    case "thread.pull-request-link-updated":
     case "thread.pull-request-synced":
     case "thread.model-selection-updated":
     case "thread.provider-switched":
@@ -471,6 +472,8 @@ export const make = Effect.gen(function* () {
     }
     const environmentId = yield* serverEnvironment.getEnvironmentId;
 
+    // Only the relay interaction (signing the proof and the call) is exported;
+    // the reads that decide what to publish are the user's local work.
     const publishState = (input: {
       readonly projectId: string | null;
       readonly state: RelayAgentActivityState | null;
@@ -487,7 +490,7 @@ export const make = Effect.gen(function* () {
           environmentId,
           threadId,
           state: input.state,
-          jti: yield* crypto.randomUUIDv4,
+          jti: yield* crypto.randomUUIDv4(),
         });
 
         yield* Effect.logInfo("publishing agent activity for thread", {
@@ -499,16 +502,18 @@ export const make = Effect.gen(function* () {
           reason: input.reason,
         });
 
-        const response = yield* relayClient.server.publishAgentActivity({
-          params: {
-            environmentId,
-            threadId,
-          },
-          payload: {
-            state: input.state,
-            proof,
-          },
-        });
+        const response = yield* relayClient.server
+          .publishAgentActivity({
+            params: {
+              environmentId,
+              threadId,
+            },
+            payload: {
+              state: input.state,
+              proof,
+            },
+          })
+          .pipe(Effect.timeout("10 seconds"));
 
         yield* Effect.logInfo("agent activity publish completed", {
           environmentId,
@@ -516,7 +521,7 @@ export const make = Effect.gen(function* () {
           ok: response.ok,
           deliveries: deliveryStats(response.deliveries),
         });
-      });
+      }).pipe(Effect.withSpan("relay.agent_activity.publish"), withRelayClientTracing);
 
     // Per-thread shell read: this publish runs for every activity-relevant
     // domain event, so materializing the full shell here would make the cost
@@ -659,7 +664,6 @@ export const make = Effect.gen(function* () {
         }).pipe(Effect.andThen(schedulePublishRetry(threadId)));
       }),
       Effect.withSpan("AgentAwarenessRelay.publishThread"),
-      withRelayClientTracing,
     );
   });
 

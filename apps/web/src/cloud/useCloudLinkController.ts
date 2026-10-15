@@ -1,5 +1,13 @@
+import { useAtomValue } from "@effect/atom-react";
 import { useAuth } from "@clerk/react";
 import { findErrorTraceId } from "@t3tools/client-runtime/errors";
+import {
+  EnvironmentId,
+  AuthRelayReadScope,
+  AuthRelayWriteScope,
+  type EnvironmentCloudLinkStateResult,
+} from "@t3tools/contracts";
+import type { RelayManagedEndpointProviderKind } from "@t3tools/contracts/relay";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -9,18 +17,41 @@ import { useState } from "react";
 
 import { toastManager } from "../components/ui/toast";
 import { relayEnvironmentDiscovery } from "../state/relay";
+import { readEnvironmentScope } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
   linkPrimaryEnvironment as linkPrimaryEnvironmentAtom,
   unlinkPrimaryEnvironment as unlinkPrimaryEnvironmentAtom,
   updatePrimaryEnvironmentPreferences as updatePrimaryEnvironmentPreferencesAtom,
 } from "./linkEnvironmentAtoms";
-import { usePrimaryCloudLinkState } from "./primaryCloudLinkState";
+import { readCachedPrimaryCloudLinkState, usePrimaryCloudLinkState } from "./primaryCloudLinkState";
 import { resolveRelayClerkTokenOptions } from "./publicConfig";
 
 export interface CloudLinkDesiredState {
   readonly managedTunnel: boolean;
   readonly publish: boolean;
+  /** Omit to leave the webhook-hold setting as it is. */
+  readonly holdWebhooksWhileOffline?: boolean;
+}
+
+/**
+ * Whether the link has a working managed tunnel. The local tunnel config can
+ * outlive a relay link that drifted to publish-only, and clients then get
+ * `endpoint_provider_not_managed`. So when relay discovery has this
+ * environment's record, it must also say managed. Older environment servers
+ * predate managedTunnelActive; for them a link always implies a tunnel. A link
+ * the relay rejected (usually after a Deregister) gives no access at all.
+ */
+function isManagedTunnelActive(
+  linkState: EnvironmentCloudLinkStateResult,
+  relayProviderKind: RelayManagedEndpointProviderKind | undefined,
+) {
+  const localManagedTunnel = linkState.managedTunnelActive ?? linkState.linked;
+  return (
+    linkState.linkRevoked !== true &&
+    localManagedTunnel &&
+    (relayProviderKind === undefined || relayProviderKind === "cloudflare_tunnel")
+  );
 }
 
 /**
@@ -48,6 +79,11 @@ export function useCloudLinkController() {
     { reportFailure: false },
   );
   const primaryCloudLinkState = usePrimaryCloudLinkState();
+  const relayEnvironments = useAtomValue(relayEnvironmentDiscovery.stateValueAtom).environments;
+  const primaryEnvironmentId = primaryCloudLinkState.target?.environmentId;
+  const relayProviderKind = primaryEnvironmentId
+    ? relayEnvironments.get(primaryEnvironmentId)?.environment.endpoint.providerKind
+    : undefined;
   const [operationError, setOperationError] = useState<string | null>(null);
 
   const reportUpdateFailure = (cause: unknown) => {
@@ -70,12 +106,17 @@ export function useCloudLinkController() {
     });
   };
 
-  // Older environment servers predate the managedTunnelActive field; for them a
-  // link always implies a managed tunnel, so fall back to `linked`.
-  const managedTunnelActive =
-    primaryCloudLinkState.data?.managedTunnelActive ?? primaryCloudLinkState.data?.linked ?? false;
+  const linkData = primaryCloudLinkState.data;
+  // A revoked link reads as off; turning it on links again.
+  const linkRevoked = linkData?.linkRevoked ?? false;
+  const managedTunnelActive = linkData ? isManagedTunnelActive(linkData, relayProviderKind) : false;
+  // Local state says managed but the relay holds a publish-only link. Turning
+  // T3 Connect on relinks as managed, which repairs it.
+  const managedTunnelOutOfSync =
+    linkData !== null && !managedTunnelActive && isManagedTunnelActive(linkData, undefined);
   const publishAgentActivity = primaryCloudLinkState.data?.publishAgentActivity ?? false;
-  const linked = primaryCloudLinkState.data?.linked ?? false;
+  const holdWebhooksWhileOffline = primaryCloudLinkState.data?.holdWebhooksWhileOffline ?? false;
+  const linked = !linkRevoked && (primaryCloudLinkState.data?.linked ?? false);
 
   const reconcileCloudState = async (desired: CloudLinkDesiredState): Promise<boolean> => {
     setOperationError(null);
@@ -84,8 +125,31 @@ export function useCloudLinkController() {
       reportUpdateFailure(new Error("Local environment is not ready yet."));
       return false;
     }
-    const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
+    const environmentId = EnvironmentId.make(target.environmentId);
+    const canManageLink = () => {
+      if (
+        !readEnvironmentScope(environmentId, AuthRelayReadScope) ||
+        !readEnvironmentScope(environmentId, AuthRelayWriteScope)
+      ) {
+        reportUpdateFailure(
+          new Error("This connection needs permission to view and manage T3 Connect settings."),
+        );
+        return false;
+      }
+      return true;
+    };
+    const readLinkState = () => {
+      const state = readCachedPrimaryCloudLinkState(target);
+      if (state === null) {
+        reportUpdateFailure(new Error("Wait until the current T3 Connect settings can be read."));
+      }
+      return state;
+    };
+    if (!canManageLink()) return false;
     const wantsLink = desired.managedTunnel || desired.publish;
+    if (wantsLink && readLinkState() === null) return false;
+    const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
+    if (!canManageLink()) return false;
 
     // A failure after this point may follow a partially applied mutation (e.g.
     // the link succeeded but the preference update did not), so every exit —
@@ -106,6 +170,8 @@ export function useCloudLinkController() {
         return false;
       }
     } else {
+      const currentLinkState = readLinkState();
+      if (currentLinkState === null) return false;
       if (tokenResult._tag === "Failure") {
         reportUpdateFailure(squashAtomCommandFailure(tokenResult));
         return false;
@@ -115,7 +181,12 @@ export function useCloudLinkController() {
         reportUpdateFailure(new Error("Sign in to T3 Connect before enabling this."));
         return false;
       }
-      if (!linked || managedTunnelActive !== desired.managedTunnel) {
+      const currentManagedTunnel = isManagedTunnelActive(currentLinkState, relayProviderKind);
+      if (
+        !currentLinkState.linked ||
+        currentLinkState.linkRevoked === true ||
+        currentManagedTunnel !== desired.managedTunnel
+      ) {
         const linkResult = await linkPrimaryEnvironment({
           target,
           clerkToken,
@@ -129,9 +200,16 @@ export function useCloudLinkController() {
           return false;
         }
       }
+      if (!canManageLink() || readLinkState() === null) {
+        primaryCloudLinkState.refresh();
+        return false;
+      }
       const prefResult = await updatePrimaryEnvironmentPreferences({
         target,
         publishAgentActivity: desired.publish,
+        ...(desired.holdWebhooksWhileOffline === undefined
+          ? {}
+          : { holdWebhooksWhileOffline: desired.holdWebhooksWhileOffline }),
       });
       if (prefResult._tag === "Failure") {
         if (!isAtomCommandInterrupted(prefResult)) {
@@ -155,8 +233,11 @@ export function useCloudLinkController() {
     isSignedIn,
     linkState: primaryCloudLinkState,
     linked,
+    linkRevoked,
     managedTunnelActive,
+    managedTunnelOutOfSync,
     publishAgentActivity,
+    holdWebhooksWhileOffline,
     operationError,
     reconcileCloudState,
   };

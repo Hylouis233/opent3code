@@ -109,6 +109,8 @@ Conflicts, changed fork-maintenance files, failed validation, or repository prot
 
 [Installation](./docs/user/install.md) · [Permissions](./docs/user/permission-modes.md) · [Keyboard shortcuts](./docs/user/keybindings.md) · [Project settings](./docs/user/project-settings.md) · [Remote access](./docs/user/remote-access.md) · [Source control](./docs/user/source-control.md) · [Architecture](./docs/internals/overview.md)
 
+[Appearance](./docs/user/appearance.md) · [External agents over MCP](./docs/user/outside-agents.md) · [App and server updates](./docs/user/updating.md) · [Background service](./docs/user/background-service.md) · Multiple accounts: [Codex](./docs/user/providers-codex.md) / [Claude](./docs/user/providers-claude.md)
+
 Some inherited guides still describe upstream names, distribution channels, and hosted services. The fork-specific installation and compatibility notes on this page take precedence for OpenT3Code.
 
 ## Contributing

@@ -18,14 +18,14 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 
@@ -33,7 +33,7 @@ const StoresLayer = Layer.mergeAll(
   ProjectionStore.layer,
   EventStore.layer,
   EffectOutbox.layer,
-).pipe(Layer.provideMerge(SqlitePersistenceMemory));
+).pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
 const SinkLayer = EventSink.layer.pipe(Layer.provideMerge(StoresLayer));
 
 // Deliberately provide no provider manager, adapters, or worker: recovery must

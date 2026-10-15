@@ -10,7 +10,7 @@ import type {
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
 
-import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 
 declare const lifetimeBrand: unique symbol;
 /** Process-local identity captured by the runtime and each of its consumers. */
@@ -85,7 +85,7 @@ export const make = Effect.gen(function* () {
   const collectedOwners = new FinalizationRegistry<ProviderSessionId>((sessionId) => {
     if (owners.get(sessionId)?.deref() === undefined) owners.delete(sessionId);
   });
-  const lanes = yield* makeKeyedSerialExecutor<ProviderSessionId>();
+  const lanes = yield* KeyedLock.make<ProviderSessionId>();
   // SQL identities are global, so admissions on different session lanes must
   // also serialize their collision checks through the corresponding commit.
   const admissions = yield* Semaphore.make(1);

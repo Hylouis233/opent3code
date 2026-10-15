@@ -15,13 +15,16 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { ChildProcessSpawner } from "effect/unstable/process";
-import { HostProcessWorkingDirectory } from "@t3tools/shared/hostProcess";
-import { defaultProviderContinuationIdentity, type ProviderDriver } from "../ProviderDriver.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
-import * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
-import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import {
+  defaultProviderContinuationIdentity,
+  type ProviderDriver,
+} from "@t3tools/provider-core/server/driver";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { makeExternalAcpAdapterV2 } from "../../orchestration-v2/Adapters/ExternalAcpAdapterV2.ts";
 
 export type ExternalAcpDriverEnv =
@@ -39,7 +42,7 @@ function makeExternalDriver(
   const name = kind === "mcode" ? "MiniMax Code" : "DeepSeek Harness";
   return {
     driverKind: provider,
-    metadata: { displayName: name, supportsMultipleInstances: true },
+    metadata: { displayName: name, supportsMultipleInstances: true, hasDefaultInstance: false },
     configSchema,
     defaultConfig: () => Schema.decodeSync(configSchema)({}),
     create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
@@ -48,8 +51,8 @@ function makeExternalDriver(
         const crypto = yield* Crypto.Crypto;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const hostCwd = yield* HostProcessWorkingDirectory;
-        const env = mergeProviderInstanceEnvironment(environment);
+        const hostCwd = yield* HostProcess.WorkingDirectory;
+        const env = yield* mergeProviderInstanceEnvironment(environment);
         // Explicit values override dangerous ambient DSH policy. The installed profile must also be trusted.
         const processEnv: NodeJS.ProcessEnv =
           kind === "dsh"
@@ -214,6 +217,7 @@ function makeExternalDriver(
             generatePrContent: () => unsupportedText("generatePrContent"),
             generateBranchName: () => unsupportedText("generateBranchName"),
             generateThreadTitle: () => unsupportedText("generateThreadTitle"),
+            generateReviewGuide: () => unsupportedText("generateReviewGuide"),
           },
         };
       }),

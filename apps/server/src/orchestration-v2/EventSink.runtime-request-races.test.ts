@@ -25,7 +25,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as CommandPolicy from "./CommandPolicy.ts";
@@ -34,7 +35,7 @@ import * as ContextHandoffService from "./ContextHandoffService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
@@ -45,7 +46,7 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
-const database = SqlitePersistenceMemory;
+const database = SqlitePersistence.layerMemory;
 const stores = Layer.mergeAll(
   EventStore.layer,
   ProjectionStore.layer,
@@ -59,6 +60,7 @@ const testLayer = Layer.mergeAll(
   stores,
   sinkLayer,
   IdAllocator.layer,
+  ServerSettings.layerTest(),
   NodeServices.layer,
   Layer.mock(CheckpointService.CheckpointServiceV2)({}),
   Layer.mock(CommandPolicy.CommandPolicyV2)({}),
