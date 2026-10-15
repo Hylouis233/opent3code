@@ -25,8 +25,8 @@ jobs:
     steps:
       - name: Capture public source snapshots without executing repository code
         env:
-          GIT_TERMINAL_PROMPT: '0'
-          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_TERMINAL_PROMPT: "0"
+          GIT_CONFIG_NOSYSTEM: "1"
           FORK_SHA: a02ffa38e8401275da3acf76436d8dc99367fceb
           UPSTREAM_SHA: e6bbfdb9ffe8334bed1c9b992f828f04d30db7ea
         run: |
