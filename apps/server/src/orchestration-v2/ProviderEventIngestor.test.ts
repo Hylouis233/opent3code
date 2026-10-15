@@ -2144,7 +2144,23 @@ layer("Provider runtime lifetime admission", (it) => {
         const f = yield* requestFixture;
         assert.isEmpty(yield* f.ingest(f.events.node));
         assert.isEmpty(yield* f.ingest(f.events.item));
-        assert.equal((yield* f.ingest(f.events.request)).length, 3);
+        const committed = yield* f.ingest(f.events.request);
+        assert.equal(committed.length, 3);
+        const waitingItemIndex = committed.findIndex(
+          (entry) =>
+            entry.event.type === "turn-item.updated" && entry.event.payload.status === "waiting",
+        );
+        const pendingRequestIndex = committed.findIndex(
+          (entry) =>
+            entry.event.type === "runtime-request.updated" &&
+            entry.event.payload.status === "pending",
+        );
+        assert.isAtLeast(waitingItemIndex, 0);
+        assert.isAbove(
+          pendingRequestIndex,
+          waitingItemIndex,
+          "waiting turn item must precede pending runtime request",
+        );
         const answers = { workspace: "Existing workspace" };
         const resolved = yield* f.ingestor.normalize({
           ...f.input,
