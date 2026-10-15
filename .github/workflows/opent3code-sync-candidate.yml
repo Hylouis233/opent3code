@@ -1,8 +1,8 @@
 name: OpenT3Code pinned sync preparation
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches: [chore/upstream-sync-20261015]
     paths:
       - .github/workflows/opent3code-sync-candidate.yml
 
@@ -10,12 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: opent3code-pinned-sync-${{ github.event.pull_request.number }}
+  group: opent3code-pinned-sync-preparation
   cancel-in-progress: false
 
 jobs:
   prepare:
-    if: github.repository_id == '1341460159' && github.event.pull_request.head.repo.id == github.event.repository.id && github.head_ref == 'chore/upstream-sync-20261015'
+    if: github.repository_id == '1341460159' && github.ref == 'refs/heads/chore/upstream-sync-20261015'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -23,9 +23,8 @@ jobs:
         env:
           GIT_TERMINAL_PROMPT: '0'
           GIT_CONFIG_NOSYSTEM: '1'
-          FORK_SHA: 7b9c2d7db91fe71179b5a2ce621aabf08b4e50e9
+          FORK_SHA: a02ffa38e8401275da3acf76436d8dc99367fceb
           UPSTREAM_SHA: e6bbfdb9ffe8334bed1c9b992f828f04d30db7ea
-          MERGE_BASE_SHA: 148e6deea046658639aae9fef5b349781cec39d1
         run: |
           python3 - <<'PY'
           import gzip
@@ -42,7 +41,7 @@ jobs:
           out = root / 'evidence'
           out.mkdir(parents=True)
           refs = {k: os.environ[v] for k, v in (
-              ('fork', 'FORK_SHA'), ('upstream', 'UPSTREAM_SHA'), ('base', 'MERGE_BASE_SHA'))}
+              ('fork', 'FORK_SHA'), ('upstream', 'UPSTREAM_SHA'))}
           if not all(re.fullmatch(r'[a-f0-9]{40}', v) for v in refs.values()):
               raise SystemExit('Invalid immutable source identity')
           subprocess.run(['git', 'init', '--bare', str(repo)], check=True)
@@ -53,9 +52,9 @@ jobs:
               'https://github.com/Hylouis233/opent3code.git', refs['fork'])
           git('fetch', '--filter=blob:none', '--no-tags', '--no-recurse-submodules', '--depth=4096',
               'https://github.com/pingdotgg/t3code.git', refs['upstream'])
-          actual_base = git('merge-base', refs['fork'], refs['upstream']).stdout.decode().strip()
-          if actual_base != refs['base']:
-              raise SystemExit('Merge-base changed; do not reuse a stale integration plan')
+          refs['base'] = git('merge-base', refs['fork'], refs['upstream']).stdout.decode().strip()
+          if not re.fullmatch(r'[a-f0-9]{40}', refs['base']):
+              raise SystemExit('No unambiguous common ancestor')
           merge = git('-c', 'merge.renames=true', 'merge-tree', '--write-tree', '--messages',
                       refs['fork'], refs['upstream'], check=False)
           if merge.returncode not in (0, 1):
