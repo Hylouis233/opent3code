@@ -36,6 +36,27 @@ jobs:
           git checkout --detach FETCH_HEAD
       - name: Test fork maintenance and PR automation
         run: node --test .github/scripts/opent3code-*.test.cjs
+      # Upstream sync and integration PRs carry upstream refactors, so only the placeholder rule applies there.
+      - name: Check source file integrity
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          COMMITS: ${{ github.event.pull_request.commits }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 --filter=blob:none origin "$BASE_SHA"
+          mode=()
+          if [[ "$HEAD_REPO" != "$GITHUB_REPOSITORY" || "$HEAD_REF" =~ ^(sync|integration)/ || "$HEAD_REF" == *upstream* ]]; then
+            mode=(--placeholder-only)
+          else
+            # Deepen the merge checkout so PR commits and their Source-Integrity-Allow trailers are visible.
+            git fetch --no-tags --depth="$((COMMITS + 2))" --filter=blob:none origin "$GITHUB_SHA"
+          fi
+          node .github/scripts/opent3code-source-integrity.cjs "${mode[@]}" "$BASE_SHA" HEAD
 
   check:
     name: Check
