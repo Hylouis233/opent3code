@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
           git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
           git checkout --detach FETCH_HEAD
       - name: Test fork maintenance and PR automation
@@ -72,7 +72,7 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
           git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
           git checkout --detach FETCH_HEAD
       - name: Reject repository-owned PR assets
@@ -97,6 +97,8 @@ jobs:
           git diff --exit-code
       - name: Check unused code
         run: vp run knip:check
+      - name: Check generated GitHub GraphQL operations
+        run: vp run --filter @t3tools/source-control-github generate --check
       - name: Verify lint input provenance
         shell: bash
         run: |
@@ -174,7 +176,7 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
           git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
           git checkout --detach FETCH_HEAD
       - name: Setup Vite+
@@ -190,12 +192,42 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
       - name: Test preview artifact validation
         run: python3 -B .github/scripts/stage-preview-bundle.test.py
-      - name: Test nightly release checks
+      - name: Test release checks
         run: node --test .github/scripts/check-nightly-release.test.cjs
       - name: Test
         # Each workspace already runs a Vitest worker pool. Avoid overlapping
         # four pools on the fork runner and starving generated-schema tests.
-        run: vp run --parallel --concurrency-limit 1 --filter '!t3' --filter '!@t3tools/monorepo' test
+        run: vp run --parallel --concurrency-limit 1 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test
+
+  # The web suite now includes a headless Chromium browser project, so it gets
+  # its own runner with the pinned browser installed.
+  test_web:
+    name: Test Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
+          git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
+          git checkout --detach FETCH_HEAD
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Install Chromium for web browser tests
+        run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
+      - name: Test
+        run: vp run --filter @t3tools/web test
 
   test_server:
     name: Test Server ${{ matrix.shard }}
@@ -215,7 +247,7 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
           git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
           git checkout --detach FETCH_HEAD
       # ACP process-tree tests compile a pthread fixture and otherwise skip
@@ -293,7 +325,7 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
           git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
           git checkout --detach FETCH_HEAD
       - name: Setup Rust
@@ -412,7 +444,7 @@ jobs:
           set -euo pipefail
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git sparse-checkout set --no-cone '/*' '!/.repos/' '!/apps/mobile/modules/t3-terminal/Vendor/**/*.a'
           git fetch --no-tags --depth=1 --filter=blob:none origin "$CHECKOUT_REF"
           git checkout --detach FETCH_HEAD
       - name: Setup Vite+
@@ -433,6 +465,7 @@ jobs:
       - maintenance
       - check
       - test
+      - test_web
       - test_server
       - transfer-report
       - rust
@@ -449,7 +482,7 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const results = JSON.parse(process.env.RESULTS);
-          const required = ['maintenance', 'check', 'test', 'test_server', 'transfer-report', 'rust', 'mobile_native_changes', 'release_smoke'];
+          const required = ['maintenance', 'check', 'test', 'test_web', 'test_server', 'transfer-report', 'rust', 'mobile_native_changes', 'release_smoke'];
           const failed = required.filter(name => results[name]?.result !== 'success');
           const native = results.mobile_native_static_analysis?.result;
           const notNeeded = results.mobile_native_changes?.outputs.changed === 'false';
