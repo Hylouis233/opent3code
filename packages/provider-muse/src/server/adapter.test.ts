@@ -880,6 +880,40 @@ describe("MuseAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect(
+    "emits the approval artifact before the runtime request so both commit atomically",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakeMuse();
+        const harness = yield* makeHarness(fake);
+        const { nativeId } = yield* startConversation(harness, fake);
+        yield* fake.emit("approval/requested", approval(nativeId));
+        yield* harness.takeEvent(
+          "runtime_request.updated",
+          (event) => event.runtimeRequest.status === "pending",
+        );
+        const pendingRequestIndex = harness.allEvents.findIndex(
+          (event) =>
+            event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+        );
+        const artifactIndex = harness.allEvents.findIndex(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+        );
+        assert.isAtLeast(pendingRequestIndex, 0);
+        assert.isAtLeast(
+          artifactIndex,
+          0,
+          "the approval artifact must be emitted before the pending runtime request",
+        );
+        assert.isBelow(
+          artifactIndex,
+          pendingRequestIndex,
+          "the approval artifact must be emitted before the pending runtime request",
+        );
+      }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("uses the latest native approval requirement and waits for its resolution event", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();
