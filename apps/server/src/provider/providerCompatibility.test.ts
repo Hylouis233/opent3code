@@ -16,6 +16,7 @@ import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import * as Schema from "effect/Schema";
+import serverPackage from "../../package.json" with { type: "json" };
 import {
   applyProviderCompatibility,
   ProviderCompatibilityPolicy,
@@ -124,8 +125,13 @@ describe("provider compatibility", () => {
         expected,
       );
     }
+    // Other drivers stay semver-scoped to the running source package version.
     assert.isUndefined(
-      resolveProviderCompatibility([{ ...policy, t3CodeRange: ">=0.0.46" }], driver, "2.0.0"),
+      resolveProviderCompatibility(
+        [{ ...policy, t3CodeRange: `>${serverPackage.version}` }],
+        driver,
+        "2.0.0",
+      ),
     );
     assert.strictEqual(
       resolveProviderCompatibility(policies, opencode, "2.0.18", "0.0.45")?.status,

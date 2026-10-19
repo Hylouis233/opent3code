@@ -65,7 +65,7 @@ export function resolveProviderCompatibility(
   // These fork-only previews are independently managed and have no reviewed compatibility range.
   // Upstream manifests must not classify them or recommend upstream-managed versions.
   if (driver === "mcode" || driver === "dsh") return undefined;
-  // The source package still says 0.0.45, but this fork runs protocol V2.
+  // The source package version does not identify the protocol this fork runs.
   // OpenCode and Pi changed adapter generations at that boundary. Require an
   // explicit matching protocol policy for the running code; an untagged remote
   // policy falls back to the tagged bundle instead of selecting V1 by version.
