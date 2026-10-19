@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
 
+import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
 import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { MarkdownFindContext } from "./markdownFindContext";
 import { useThreadFindHighlights } from "./threadFindHighlights";
@@ -98,6 +99,9 @@ const foldToggle = () =>
   );
 
 it("shows a short script as highlighted code with nothing to open", async () => {
+  // Load the shared Shiki highlighter before rendering: its first load is far slower than
+  // waitFor's 1s budget on a busy runner, and that load is not what this test checks.
+  await getSyntaxHighlighterPromise("javascript");
   await render(SHORT_SCRIPT);
   expect(host.querySelector('[data-language="javascript"]')?.textContent).toContain("SCRIPTONLY");
   await vi.waitFor(() => expect(host.querySelector(".chat-markdown-shiki")).not.toBeNull());
