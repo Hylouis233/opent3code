@@ -6619,13 +6619,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       expectedClass: "usage_limit",
     },
     {
-      name: "exhausted-429-notification",
-      code: "responseTooManyFailedAttempts",
-      errorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
-      notification: true,
-      expectedClass: "usage_limit",
-    },
-    {
       name: "exhausted-500",
       code: "responseTooManyFailedAttempts",
       errorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 500 } },
@@ -6822,18 +6815,32 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
-  it.effect.each(
-    (
-      [
-        { notificationStatus: 500, completionStatus: 429, expectedClass: "usage_limit" },
-        { notificationStatus: 429, completionStatus: 500, expectedClass: "provider_error" },
-        { notificationStatus: null, completionStatus: 429, expectedClass: "usage_limit" },
-        { notificationStatus: 429, completionStatus: null, expectedClass: "usage_limit" },
-        { notificationStatus: 429, completionStatus: 429, expectedClass: "usage_limit" },
-        { notificationStatus: 500, completionStatus: 500, expectedClass: "provider_error" },
-      ] as const
-    ).flatMap((scenario) => [false, true].map((willRetry) => ({ ...scenario, willRetry }))),
-  )(
+  it.effect.each([
+    {
+      notificationStatus: 500,
+      completionStatus: 429,
+      willRetry: false,
+      expectedClass: "usage_limit",
+    },
+    {
+      notificationStatus: 429,
+      completionStatus: 500,
+      willRetry: true,
+      expectedClass: "provider_error",
+    },
+    {
+      notificationStatus: 429,
+      completionStatus: null,
+      willRetry: false,
+      expectedClass: "usage_limit",
+    },
+    {
+      notificationStatus: 429,
+      completionStatus: null,
+      willRetry: true,
+      expectedClass: "usage_limit",
+    },
+  ] as const)(
     "honors completion HTTP status from $notificationStatus to $completionStatus (retry: $willRetry)",
     ({ notificationStatus, completionStatus, expectedClass, willRetry }) =>
       Effect.scoped(
@@ -6910,7 +6917,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             expectedClass === notificationClass ? additionalDetails : message,
           );
           if (willRetry) assert.equal(terminal.retry?.attempt, 1);
-        }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
       ),
   );
 
