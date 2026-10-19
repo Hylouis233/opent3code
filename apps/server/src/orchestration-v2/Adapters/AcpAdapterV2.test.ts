@@ -3982,6 +3982,84 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.effect(
+    "emits the approval artifact before the runtime request so both commit atomically",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const path = yield* Path.Path;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const instanceId = ProviderInstanceId.make("acp-test-approval-artifact-order");
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              environment: { T3_ACP_EMIT_TOOL_CALLS: "1" },
+            }),
+          },
+          selfInvocation,
+        });
+        const threadId = ThreadId.make("thread-acp-approval-artifact-order");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-approval-artifact-order"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        // The approval card and its runtime request have to reach the ingestor
+        // together. An artifact that arrives before its request is buffered and
+        // committed in the same write, so answering the request can never race
+        // the card away. An artifact that arrives after its request is a second
+        // write, and the ingestor drops it once the request has been answered.
+        const beforeRequest = yield* runtime.events.pipe(
+          Stream.takeWhile(
+            (event) =>
+              !(
+                event.type === "runtime_request.updated" &&
+                event.runtimeRequest.status === "pending"
+              ),
+          ),
+          Stream.runCollect,
+        );
+        const artifactIndex = beforeRequest.findIndex(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+        );
+        assert.isAtLeast(
+          artifactIndex,
+          0,
+          "the approval artifact must be emitted before the pending runtime request",
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.effect("cancels pending permission requests while interrupting an ACP turn", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
