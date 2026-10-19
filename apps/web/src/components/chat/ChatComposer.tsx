@@ -1103,6 +1103,7 @@ import {
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useDelayedStatus } from "../../hooks/useDelayedStatus";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { useSoftwareKeyboardOpen } from "../../hooks/useSoftwareKeyboardOpen";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -2415,6 +2416,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const isMobileViewport = useMediaQuery("max-sm");
+  const isSoftwareKeyboardOpen = useSoftwareKeyboardOpen();
   const {
     isComposerFocused,
     setIsComposerFocused,
@@ -3917,7 +3919,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   const blurMobileComposerAfterSend = () => {
-    if (!isMobileViewport) return;
+    if (!isSoftwareKeyboardOpen) return;
     if (composerBlurFrameRef.current !== null) {
       window.cancelAnimationFrame(composerBlurFrameRef.current);
       composerBlurFrameRef.current = null;
@@ -3930,7 +3932,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   const shouldBlurMobileComposerOnSubmit = () => {
-    if (!isMobileViewport) return false;
+    if (!isSoftwareKeyboardOpen) return false;
     if (
       isSendBusy ||
       isSendDisabled ||
@@ -4147,7 +4149,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const submissionIntent = composerSubmissionIntentForKey({
       event,
       keybindings,
-      isMobileViewport,
+      isSoftwareKeyboardOpen,
       isDraftThread: routeKind === "draft",
       isRunning: phase === "running",
       sendShortcut: settings.sendShortcut,
@@ -4214,14 +4216,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             : listIndentForTab(snapshot.value, selection.start, selection.end);
         if (
           edit &&
-          applyPromptReplacement(
-            edit.start,
-            edit.end,
-            edit.replacement,
-            key === "Tab"
-              ? { expandedCursorAfterReplace: selection.start + edit.replacement.length }
-              : undefined,
-          )
+          applyPromptReplacement(edit.start, edit.end, edit.replacement, {
+            expandedCursorAfterReplace: edit.cursorAfter,
+          })
         ) {
           return true;
         }
@@ -4862,8 +4859,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             {image.previewUrl ? (
               <ComposerImageThumbnail
                 file={image.file}
+                mode={image.source?.kind === "snap-shot" ? "snapshot" : "square"}
                 alt=""
-                className="size-full object-cover"
+                className="size-full"
                 fallback={
                   isHeicImageFile({ name: image.name, type: image.mimeType }) ? (
                     <AttachmentImage
@@ -6738,8 +6736,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               >
                                 <ComposerImageThumbnail
                                   file={image.file}
+                                  mode={image.source?.kind === "snap-shot" ? "snapshot" : "square"}
                                   alt={image.name}
-                                  className="h-full w-full object-cover"
+                                  className="h-full w-full"
                                   fallback={
                                     isHeicImageFile({ name: image.name, type: image.mimeType }) ? (
                                       <AttachmentImage
