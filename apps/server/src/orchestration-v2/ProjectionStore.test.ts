@@ -512,7 +512,7 @@ const restartCancelledWorkSurvivesStaleRunUpdate = Effect.gen(function* () {
   assert.deepEqual(updated?.restartCancelledBackgroundWork, work);
 });
 
-const threadWorktreePathsReadActiveThreads = Effect.gen(function* () {
+const threadWorktreePathsIncludeArchivedOnRequest = Effect.gen(function* () {
   const store = yield* ProjectionStore.ProjectionStoreV2;
   const now = yield* DateTime.now;
   const create = (id: string, input: { worktreePath: string | null; archived?: boolean }) => {
@@ -564,6 +564,10 @@ const threadWorktreePathsReadActiveThreads = Effect.gen(function* () {
 
   assert.deepEqual(yield* store.getThreadWorktreePaths(), [
     { threadId: ThreadId.make("thread:active"), worktreePath: "/worktrees/active" },
+  ]);
+  assert.deepEqual(yield* store.getThreadWorktreePaths({ includeArchived: true }), [
+    { threadId: ThreadId.make("thread:active"), worktreePath: "/worktrees/active" },
+    { threadId: ThreadId.make("thread:archived"), worktreePath: "/worktrees/archived" },
   ]);
 });
 
@@ -650,12 +654,132 @@ it.effect("memory command reads skip finished leaf nodes of finished runs", () =
   commandReadsSkipSettledLeafNodes.pipe(Effect.provide(ProjectionStore.layerMemory)),
 );
 
-it.effect("memory worktree path lookup reads only active threads", () =>
-  threadWorktreePathsReadActiveThreads.pipe(Effect.provide(ProjectionStore.layerMemory)),
+it.effect(
+  "memory worktree path lookup defaults to active threads and can include archived threads",
+  () =>
+    threadWorktreePathsIncludeArchivedOnRequest.pipe(Effect.provide(ProjectionStore.layerMemory)),
 );
 
 it.effect("memory projection keeps restart-cancelled work through a stale run.updated", () =>
   restartCancelledWorkSurvivesStaleRunUpdate.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
+
+const backgroundThreadUpdatesKeepTimestamp = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const createdAt = DateTime.makeUnsafe("2026-10-06T14:00:00.000Z");
+  const threadId = ThreadId.make("thread:background-updates");
+  const thread = {
+    createdBy: "user" as const,
+    creationSource: "web" as const,
+    id: threadId,
+    projectId: ProjectId.make("project:background-updates"),
+    title: "Background updates",
+    providerInstanceId,
+    modelSelection,
+    runtimeMode: "full-access" as const,
+    interactionMode: "default" as const,
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: null,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+    forkedFrom: null,
+    createdAt,
+    updatedAt: createdAt,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
+  };
+  yield* store.apply({
+    id: EventId.make("event:background-updates:created"),
+    type: "thread.created",
+    threadId,
+    occurredAt: createdAt,
+    payload: thread,
+  });
+  const readActivity = Effect.gen(function* () {
+    const projection = yield* store.getThreadProjection(threadId);
+    const thread = yield* store.getThread(threadId);
+    const shell = yield* store.getThreadShell(threadId);
+    const listed = (yield* store.getShellSnapshot()).threads.find((entry) => entry.id === threadId);
+    assert.deepEqual(projection.thread.updatedAt, createdAt);
+    assert.deepEqual(thread.updatedAt, createdAt);
+    assert.deepEqual(shell?.updatedAt, createdAt);
+    assert.deepEqual(listed?.updatedAt, createdAt);
+    return projection;
+  });
+  const link = {
+    host: "github.com",
+    repository: "owner/repository",
+    number: 42,
+    url: "https://github.com/owner/repository/pull/42",
+    source: "manual" as const,
+    linkedAt: DateTime.formatIso(createdAt),
+    snapshot: null,
+    stack: null,
+  };
+  yield* store.apply({
+    id: EventId.make("event:background-updates:pull-request-synced"),
+    type: "thread.pull-request-synced",
+    threadId,
+    occurredAt: DateTime.add(createdAt, { minutes: 45 }),
+    payload: { ...thread, pullRequests: [link] },
+  });
+  const synced = yield* readActivity;
+  assert.deepEqual(synced.updatedAt, createdAt);
+  assert.equal(synced.thread.pullRequests?.[0]?.number, 42);
+
+  const snapshot = {
+    state: "open" as const,
+    title: "Ship it",
+    headBranch: "feature",
+    baseBranch: "main",
+    isDraft: false,
+    updatedAt: DateTime.formatIso(DateTime.add(createdAt, { minutes: 46 })),
+    syncedAt: DateTime.formatIso(DateTime.add(createdAt, { minutes: 47 })),
+    closedAt: null,
+    mergedAt: null,
+  };
+  yield* store.apply({
+    id: EventId.make("event:background-updates:pull-request-link-updated"),
+    type: "thread.pull-request-link-updated",
+    threadId,
+    occurredAt: DateTime.add(createdAt, { minutes: 48 }),
+    payload: { ...link, snapshot },
+  });
+  const refreshed = yield* readActivity;
+  assert.deepEqual(refreshed.updatedAt, createdAt);
+  assert.deepEqual(refreshed.thread.pullRequests?.[0]?.snapshot, snapshot);
+
+  yield* store.apply({
+    id: EventId.make("event:background-updates:active-reordered"),
+    type: "thread.active-reordered",
+    threadId,
+    occurredAt: DateTime.add(createdAt, { minutes: 50 }),
+    payload: { ...refreshed.thread, activeOrderKey: "a" },
+  });
+  const reordered = yield* readActivity;
+  assert.deepEqual(reordered.updatedAt, createdAt);
+  assert.equal(reordered.thread.activeOrderKey, "a");
+
+  // An already-unpinned thread keeps its activity time even when replay's envelope advances.
+  yield* store.apply({
+    id: EventId.make("event:background-updates:already-unpinned"),
+    type: "thread.unpinned",
+    threadId,
+    occurredAt: DateTime.add(createdAt, { minutes: 55 }),
+    payload: { ...reordered.thread, pinnedAt: null, pinOrderKey: null },
+  });
+  yield* readActivity;
+});
+
+it.effect("memory projection keeps background thread updates out of updatedAt", () =>
+  backgroundThreadUpdatesKeepTimestamp.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
+
+it.effect("SQL projection keeps background thread updates out of updatedAt", () =>
+  backgroundThreadUpdatesKeepTimestamp.pipe(Effect.provide(layerTest)),
 );
 
 it.effect("memory recovery selection ignores unfinished items from rolled-back runs", () =>
@@ -878,8 +1002,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     () => runlessNativeSubagentNeedsRecovery,
   );
   it.effect(
-    "worktree path lookup reads only active threads",
-    () => threadWorktreePathsReadActiveThreads,
+    "worktree path lookup defaults to active threads and can include archived threads",
+    () => threadWorktreePathsIncludeArchivedOnRequest,
   );
 
   it.effect(
@@ -3055,6 +3179,48 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       );
       assert.isNull(shell?.latestRunCompletedAt);
 
+      const requestId = RuntimeRequestId.make("request:projection-shell-question");
+      for (const [responseCapability, blocking] of [
+        [{ type: "message" }, false],
+        [{ type: "live", providerSessionId: ProviderSessionId.make("session:question") }, true],
+      ] as const) {
+        yield* projectionStore.apply({
+          id: EventId.make(`event:projection-shell-question:${responseCapability.type}`),
+          type: "runtime-request.updated",
+          threadId,
+          nodeId: rootNodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            id: requestId,
+            nodeId: rootNodeId,
+            providerTurnId: null,
+            nativeRequestRef: null,
+            kind: "user_input",
+            status: "pending",
+            responseCapability,
+            createdAt: now,
+            resolvedAt: null,
+          },
+        });
+        const projection = yield* projectionStore.getThreadProjection(threadId);
+        const sqlShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+          (row) => row.id === threadId,
+        )!;
+        for (const questionShell of [
+          sqlShell,
+          ProjectionStore.threadShellFromProjection(projection),
+        ]) {
+          assert.equal(questionShell.activeRunId, runId);
+          assert.deepEqual(questionShell.pendingRuntimeRequest, {
+            id: requestId,
+            kind: "user_input",
+            createdAt: now,
+            blocking,
+          });
+        }
+      }
+
       yield* projectionStore.apply({
         id: EventId.make("event:projection-shell-interruptible:waiting"),
         type: "run.updated",
@@ -4060,6 +4226,11 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     () =>
       Effect.gen(function* () {
         const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const memoryStore = yield* ProjectionStore.ProjectionStoreV2.pipe(
+          Effect.provide(ProjectionStore.layerMemory),
+        );
+        const apply = (event: Parameters<typeof projectionStore.apply>[0]) =>
+          Effect.all([projectionStore.apply(event), memoryStore.apply(event)]);
         const sql = yield* SqlClient.SqlClient;
         const now = yield* DateTime.now;
         const threadId = ThreadId.make("thread:checkpoint-context");
@@ -4068,7 +4239,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         const scopeId = CheckpointScopeId.make("scope:checkpoint-context");
         const checkpointId = CheckpointId.make("checkpoint:checkpoint-context");
         const ref = CheckpointRef.make("refs/t3/checkpoint-context/1");
-        yield* projectionStore.apply({
+        yield* apply({
           id: EventId.make("event:checkpoint-context:thread"),
           type: "thread.created",
           threadId,
@@ -4097,7 +4268,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             deletedAt: null,
           },
         });
-        yield* projectionStore.apply({
+        yield* apply({
           id: EventId.make("event:checkpoint-context:run"),
           type: "run.created",
           threadId,
@@ -4120,7 +4291,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             contextHandoffId: null,
           },
         });
-        yield* projectionStore.apply({
+        yield* apply({
           id: EventId.make("event:checkpoint-context:scope"),
           type: "checkpoint-scope.created",
           threadId,
@@ -4139,7 +4310,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             createdAt: now,
           },
         });
-        yield* projectionStore.apply({
+        yield* apply({
           id: EventId.make("event:checkpoint-context:checkpoint"),
           type: "checkpoint.captured",
           threadId,
@@ -4178,15 +4349,19 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         SET payload_json = json_set(payload_json, '$.files', 'obsolete file summary')
         WHERE checkpoint_id = ${checkpointId}
       `;
-        assert.deepEqual(yield* projectionStore.getCheckpointContext(threadId), {
-          runs: [{ id: runId, ordinal: 1, status: "completed" }],
-          checkpointScopes: [{ id: scopeId, runId, kind: "root_run", cwd: "/repo/worktree" }],
-          checkpoints: [{ scopeId, runId, appRunOrdinal: 1, status: "ready", ref }],
-        });
-        const missing = yield* projectionStore
-          .getCheckpointContext(ThreadId.make("thread:checkpoint-context:missing"))
-          .pipe(Effect.flip);
-        assert.instanceOf(missing, ProjectionStore.ProjectionStoreThreadNotFoundError);
+        for (const store of [projectionStore, memoryStore]) {
+          assert.deepEqual(yield* store.getCheckpointContext(threadId), {
+            runs: [{ id: runId, ordinal: 1, status: "completed" }],
+            checkpointScopes: [{ id: scopeId, runId, kind: "root_run", cwd: "/repo/worktree" }],
+            checkpoints: [
+              { scopeId, runId, ordinalWithinScope: 1, appRunOrdinal: 1, status: "ready", ref },
+            ],
+          });
+          const missing = yield* store
+            .getCheckpointContext(ThreadId.make("thread:checkpoint-context:missing"))
+            .pipe(Effect.flip);
+          assert.instanceOf(missing, ProjectionStore.ProjectionStoreThreadNotFoundError);
+        }
       }),
   );
 
@@ -4222,7 +4397,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             title: null,
             startedAt: now,
             completedAt: null,
-            updatedAt: now,
+            updatedAt: DateTime.add(now, { seconds: ordinal }),
             type: "secret_request",
             label: "Test credential",
             reason: "Test pending input",
@@ -4232,6 +4407,45 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       yield* addSecret("secret:a", 2, "waiting");
       yield* addSecret("secret:b", 3, "waiting");
       yield* addSecret("secret:c", 4, "completed");
+
+      yield* sql`
+        UPDATE orchestration_v2_projection_runs
+        SET status = 'running', payload_json = json_set(payload_json, '$.status', 'running')
+        WHERE run_id = ${runId}
+      `;
+      const secretOnlyShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      const secretOnlyProjection = yield* projectionStore.getThreadProjection(threadId);
+      for (const shell of [
+        secretOnlyShell,
+        ProjectionStore.threadShellFromProjection(secretOnlyProjection),
+      ]) {
+        assert.equal(shell?.pendingRuntimeRequest?.id, "secret:b");
+        assert.isTrue(shell?.pendingRuntimeRequest?.blocking);
+      }
+
+      const requestId = RuntimeRequestId.make(`request:${suffix}:async`);
+      yield* projectionStore.apply({
+        id: EventId.make(`event:${suffix}:async`),
+        type: "runtime-request.updated",
+        threadId,
+        runId,
+        nodeId,
+        driver,
+        occurredAt: now,
+        payload: {
+          id: requestId,
+          nodeId,
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "message" },
+          createdAt: DateTime.subtract(now, { seconds: 1 }),
+          resolvedAt: null,
+        },
+      });
 
       for (const status of [
         "preparing",
@@ -4249,9 +4463,16 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         const shell = yield* projectionStore.getShellSnapshot();
         const thread = shell.threads.find((candidate) => candidate.id === threadId);
         assert.isDefined(thread);
-        assert.equal(
-          thread?.pendingRuntimeRequest?.id ?? null,
-          status === "completed" || status === "rolled_back" ? null : "secret:b",
+        const projection = yield* projectionStore.getThreadProjection(threadId);
+        const memoryShell = ProjectionStore.threadShellFromProjection(projection);
+        const terminal = status === "completed" || status === "rolled_back";
+        assert.deepEqual(
+          [thread?.pendingRuntimeRequest?.id, memoryShell.pendingRuntimeRequest?.id],
+          terminal ? [requestId, requestId] : ["secret:b", "secret:b"],
+        );
+        assert.deepEqual(
+          [thread?.pendingRuntimeRequest?.blocking, memoryShell.pendingRuntimeRequest?.blocking],
+          terminal ? [false, false] : [true, true],
         );
       }
     }),

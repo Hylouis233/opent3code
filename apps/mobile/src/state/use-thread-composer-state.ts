@@ -334,6 +334,14 @@ export function useThreadComposerState() {
     if (queuedCompact) return true;
     const activeRunId = selectedThreadRuntime?.activeRunId;
     if (!activeRunId || !threadRuntimeIsActive(selectedThreadRuntime)) return false;
+    if (
+      selectedThreadVisibleTurnItems.some(
+        ({ item }) =>
+          item.runId === activeRunId && item.type === "compaction" && item.status === "running",
+      )
+    ) {
+      return true;
+    }
     const compactMessage = selectedThreadVisibleTurnItems.findLast(
       ({ item }) =>
         item.runId === activeRunId &&
@@ -346,11 +354,17 @@ export function useThreadComposerState() {
       ({ item }) =>
         item.runId === activeRunId &&
         item.type === "compaction" &&
-        (item.status === "completed" || item.status === "failed"),
+        (item.status === "completed" ||
+          item.status === "failed" ||
+          item.status === "interrupted" ||
+          item.status === "cancelled"),
     );
   })();
   // A compacting turn cannot take steering input, so follow-ups queue meanwhile.
   const canSteerActiveTurn = queueWorkflow?.canPromoteToSteer === true && !isCompacting;
+  // A stop or a restart holds the queue, completion wakes included, until it
+  // is resumed; the queue sheet lists only the user's own messages.
+  const queueHeld = queueWorkflow?.isHeld === true;
 
   const runlessWorkStartedAt = selectedThreadProjection
     ? deriveRunlessWorkStartedAt(selectedThreadProjection.projection)
@@ -966,6 +980,7 @@ export function useThreadComposerState() {
     composerDraftKey,
     followUpBehavior,
     canSteerActiveTurn,
+    queueHeld,
     queuedRunEdit,
     isSavingQueuedEdit,
     cancelQueuedRunEdit,

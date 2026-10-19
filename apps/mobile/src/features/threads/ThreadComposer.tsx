@@ -1,3 +1,4 @@
+import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -27,7 +28,7 @@ import {
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { Keyboard, Platform, Pressable, View, type ViewStyle } from "react-native";
+import { Keyboard, Platform, View, type ViewStyle } from "react-native";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
@@ -162,6 +163,8 @@ export interface ThreadComposerProps {
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
+  /** Present while the thread's queue is held. */
+  readonly onResumeQueue: (() => Promise<void>) | null;
   readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
   readonly canSwitchProvider: boolean;
@@ -357,6 +360,16 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     (queuedEdit?.existingAttachments.length ?? 0) > 0;
   const stripAttachments = composerStripAttachments(draftAttachments);
   const showStopAction = !hasContent && props.canStopThread && queuedEdit === null;
+  const onResumeQueue = props.onResumeQueue;
+  const [resumingQueue, setResumingQueue] = useState(false);
+  const showResumeAction =
+    !hasContent && !showStopAction && queuedEdit === null && onResumeQueue !== null;
+  const handleResumeQueue = async () => {
+    if (resumingQueue || onResumeQueue === null) return;
+    setResumingQueue(true);
+    await onResumeQueue();
+    setResumingQueue(false);
+  };
 
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
   const attachmentsUploading =
@@ -593,6 +606,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     reportedModelSelection: props.reportedModelSelection,
     onSelectModel: (option) =>
       props.onUpdateModelSelection(withRememberedModelOptions(option.selection)),
+    restoreSelection: withRememberedModelOptions,
     optionDescriptors: providerOptionDescriptors,
     onUpdateOptionSelections: (options) => {
       rememberModelOptions(
@@ -707,9 +721,11 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
           </Text>
         ) : null}
         {modelUnavailable ? (
-          <Pressable accessibilityRole="button" className="px-3 py-2" onPress={openSettings}>
-            <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
-          </Pressable>
+          <Button
+            label="Model unavailable. Open model settings."
+            tone="text"
+            onPress={openSettings}
+          />
         ) : null}
 
         <ComposerSurface
@@ -955,6 +971,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                     disabled={!props.canOperateThread}
                     onPress={props.onStopThread}
                   />
+                ) : showResumeAction ? (
+                  <ComposerActionButton
+                    accessibilityLabel="Resume queue"
+                    icon="play"
+                    disabled={!props.canOperateThread || resumingQueue}
+                    onPress={() => void handleResumeQueue()}
+                  />
                 ) : (
                   <SendActionButton
                     accessibilityLabel={sendBlockedReason ?? sendLabel}
@@ -1049,6 +1072,13 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                       variant="danger"
                       disabled={!props.canOperateThread}
                       onPress={props.onStopThread}
+                    />
+                  ) : showResumeAction && voicePresentation.showsSend ? (
+                    <ComposerActionButton
+                      accessibilityLabel="Resume queue"
+                      icon="play"
+                      disabled={!props.canOperateThread || resumingQueue}
+                      onPress={() => void handleResumeQueue()}
                     />
                   ) : voicePresentation.showsSend ? (
                     <SendActionButton

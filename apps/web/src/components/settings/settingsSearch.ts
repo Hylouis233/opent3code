@@ -467,10 +467,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "start-from-origin",
-    title: "Start from origin",
+    title: "Start from remote",
     to: "/settings/general",
     scope: "project-defaults",
-    searchTerms: ["new worktrees latest matching remote branch local"],
+    searchTerms: ["new worktrees start remote origin latest fetched branch local"],
   },
   {
     id: "add-project-starts-in",
@@ -744,6 +744,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Open links in",
     to: "/settings/integrations",
     searchTerms: ["links default browser in-app browser external open"],
+  },
+  {
+    id: "browser-search-engine",
+    title: "Search engine",
+    to: "/settings/integrations",
+    searchTerms: ["address bar duckduckgo google bing brave kagi ecosia custom"],
   },
   {
     id: "pull-request-links-open-in-app",

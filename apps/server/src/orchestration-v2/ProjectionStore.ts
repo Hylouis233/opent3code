@@ -16,9 +16,11 @@ import {
 import { threadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
 import type {
   OrchestrationV2AppThread,
+  OrchestrationV2Checkpoint,
   OrchestrationV2CheckpointScope,
   OrchestrationV2ExecutionNode,
   OrchestrationV2PlanArtifact,
+  OrchestrationV2PendingRuntimeRequestSummary,
   PlanId,
   OrchestrationV2ConversationMessage,
   OrchestrationV2DomainEvent,
@@ -60,6 +62,7 @@ import {
   MessageId,
   RuntimeRequestId,
   CheckpointScopeId,
+  CheckpointId,
   ThreadId,
   TurnItemId,
   NodeId,
@@ -220,9 +223,10 @@ const ProjectionCheckpointContext = Schema.Struct({
   ),
   checkpoints: Schema.Array(
     OrchestrationV2CheckpointJsonSchema.mapFields(
-      ({ scopeId, runId, appRunOrdinal, status, ref }) => ({
+      ({ scopeId, runId, ordinalWithinScope, appRunOrdinal, status, ref }) => ({
         scopeId,
         runId,
+        ordinalWithinScope,
         appRunOrdinal,
         status,
         ref,
@@ -239,6 +243,28 @@ export interface ProjectionCheckpointCaptureContext {
   readonly scope: OrchestrationV2CheckpointScope | undefined;
   readonly providerThread: OrchestrationV2ProviderThread | undefined;
   readonly readyCheckpointOrdinals: ReadonlyArray<number>;
+}
+
+const RollbackTargetAttempts = Schema.Array(
+  OrchestrationV2RunAttemptJsonSchema.mapFields(({ id, providerTurnId }) => ({
+    id,
+    providerTurnId,
+  })),
+);
+const decodeRollbackTargetAttempts = Schema.decodeUnknownEffect(RollbackTargetAttempts);
+
+export interface ProjectionCheckpointRollbackContext {
+  readonly thread: OrchestrationV2AppThread;
+  readonly providerThread: OrchestrationV2ProviderThread | undefined;
+  readonly providerSession: OrchestrationV2ThreadProjection["providerSessions"][number] | undefined;
+  readonly checkpoint: OrchestrationV2Checkpoint | undefined;
+  readonly scope: OrchestrationV2CheckpointScope | undefined;
+  readonly targetAttempt: (typeof RollbackTargetAttempts.Type)[number] | undefined;
+  readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
+  readonly rolledBackAttemptIds: ReadonlyArray<RunAttemptId>;
+  readonly runsToRollback: ReadonlyArray<OrchestrationV2Run>;
+  readonly rootNodes: ReadonlyArray<OrchestrationV2ExecutionNode>;
+  readonly staleCheckpoints: ReadonlyArray<OrchestrationV2Checkpoint>;
 }
 
 export interface ProjectionProviderControlContext {
@@ -422,7 +448,9 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadPullRequests>, ProjectionStoreV2Error>;
-  readonly getThreadWorktreePaths: () => Effect.Effect<
+  readonly getThreadWorktreePaths: (options?: {
+    readonly includeArchived?: boolean;
+  }) => Effect.Effect<
     ReadonlyArray<{ readonly threadId: ThreadId; readonly worktreePath: string }>,
     ProjectionStoreV2Error
   >;
@@ -506,6 +534,14 @@ export interface ProjectionStoreV2Shape {
     threadId: ThreadId,
     target: { readonly runId: RunId; readonly scopeId: CheckpointScopeId },
   ) => Effect.Effect<ProjectionCheckpointCaptureContext, ProjectionStoreV2Error>;
+  readonly getCheckpointRollbackContext: (
+    threadId: ThreadId,
+    target: {
+      readonly providerThreadId: ProviderThreadId;
+      readonly checkpointId: CheckpointId;
+      readonly scopeId: CheckpointScopeId;
+    },
+  ) => Effect.Effect<ProjectionCheckpointRollbackContext, ProjectionStoreV2Error>;
   readonly getRunMessage: (
     threadId: ThreadId,
     runId: RunId,
@@ -732,7 +768,7 @@ export function applyToProjection(
   switch (event.type) {
     case "thread.pull-request-link-updated":
       return {
-        ...base,
+        ...projection,
         thread: applyThreadPullRequestLinkUpdate(projection.thread, event.payload),
       };
     case "thread.created":
@@ -747,9 +783,7 @@ export function applyToProjection(
     case "thread.pinned":
     case "thread.unpinned":
     case "thread.pin-reordered":
-    case "thread.active-reordered":
     case "thread.metadata-updated":
-    case "thread.pull-request-synced":
     case "thread.runtime-mode-updated":
     case "thread.interaction-mode-updated":
     case "thread.model-selection-updated":
@@ -757,6 +791,14 @@ export function applyToProjection(
       return {
         ...base,
         thread: event.payload,
+      };
+    // Reordering and PR refreshes preserve the orchestrator's activity timestamp.
+    case "thread.active-reordered":
+    case "thread.pull-request-synced":
+      return {
+        ...base,
+        thread: event.payload,
+        updatedAt: event.payload.updatedAt,
       };
     case "thread.visited":
     case "thread.marked-unread":
@@ -1418,20 +1460,27 @@ function buildVisibleTurnItems(input: {
   ]);
 }
 
+function pendingRuntimeRequestSummary(
+  request: OrchestrationV2ThreadProjection["runtimeRequests"][number] | null,
+): OrchestrationV2PendingRuntimeRequestSummary | null {
+  if (request === null) return null;
+  return {
+    id: request.id,
+    kind: request.kind,
+    createdAt: request.createdAt,
+    blocking: request.responseCapability.type !== "message",
+  };
+}
+
 function secretRequestAsPendingInput(
   item: OrchestrationV2TurnItem | null,
-): OrchestrationV2ThreadProjection["runtimeRequests"][number] | null {
+): OrchestrationV2PendingRuntimeRequestSummary | null {
   if (item?.type !== "secret_request" || item.nodeId === null) return null;
   return {
     id: RuntimeRequestId.make(item.id),
-    nodeId: item.nodeId,
-    providerTurnId: item.providerTurnId,
-    nativeRequestRef: null,
     kind: "user_input",
-    status: "pending",
-    responseCapability: { type: "message" },
     createdAt: item.startedAt ?? item.updatedAt,
-    resolvedAt: null,
+    blocking: true,
   };
 }
 
@@ -1460,27 +1509,31 @@ export function threadShellFromProjection(
       .filter(isActivityRunForShell)
       .toSorted((left, right) => right.ordinal - left.ordinal)[0] ?? null;
   const liveRunIds = new Set(projection.runs.filter(isActivityRunForShell).map((run) => run.id));
-  const pendingRuntimeRequest =
+  let pendingRuntimeRequest = pendingRuntimeRequestSummary(
     projection.runtimeRequests
       .filter((request) => request.status === "pending")
       .toSorted(
         (left, right) =>
           DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
-      )[0] ??
-    secretRequestAsPendingInput(
-      projection.turnItems
-        .filter(
-          (item) =>
-            item.type === "secret_request" &&
-            item.status === "waiting" &&
-            item.runId !== null &&
-            liveRunIds.has(item.runId),
-        )
-        .toSorted(
-          (left, right) =>
-            DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
-        )[0] ?? null,
-    );
+      )[0] ?? null,
+  );
+  if (pendingRuntimeRequest === null || pendingRuntimeRequest.blocking === false) {
+    pendingRuntimeRequest =
+      secretRequestAsPendingInput(
+        projection.turnItems
+          .filter(
+            (item) =>
+              item.type === "secret_request" &&
+              item.status === "waiting" &&
+              item.runId !== null &&
+              liveRunIds.has(item.runId),
+          )
+          .toSorted(
+            (left, right) =>
+              DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+          )[0] ?? null,
+      ) ?? pendingRuntimeRequest;
+  }
   const userMessages = projection.messages
     .filter((message) => message.role === "user")
     .toSorted(
@@ -1537,14 +1590,7 @@ export function threadShellFromProjection(
       latestRootProviderFailure(latestRun, projection.turnItems),
       providerSession?.lastError ?? null,
     ),
-    pendingRuntimeRequest:
-      pendingRuntimeRequest === null
-        ? null
-        : {
-            id: pendingRuntimeRequest.id,
-            kind: pendingRuntimeRequest.kind,
-            createdAt: pendingRuntimeRequest.createdAt,
-          },
+    pendingRuntimeRequest,
     // Thread detail owns message bodies. Keeping them out of shell rows makes
     // initial hydration and streaming updates independent of transcript size.
     latestVisibleMessage: null,
@@ -1566,7 +1612,7 @@ export function threadShellFromProjection(
     itemCount: activeLocalTurnItems(projection).length,
     visibleItemCount: projection.visibleTurnItems.length,
     createdAt: projection.thread.createdAt,
-    updatedAt: projection.updatedAt,
+    updatedAt: projection.thread.updatedAt,
     archivedAt: projection.thread.archivedAt,
     settledOverride: projection.thread.settledOverride,
     settledAt: projection.thread.settledAt,
@@ -1639,7 +1685,7 @@ type ShellThreadState = {
   readonly lastError: string | null;
   readonly lastErrorClass: OrchestrationV2ThreadShell["lastErrorClass"];
   readonly usageLimitResetAt: OrchestrationV2ThreadShell["usageLimitResetAt"];
-  readonly pendingRuntimeRequest: OrchestrationV2ThreadProjection["runtimeRequests"][number] | null;
+  readonly pendingRuntimeRequest: OrchestrationV2PendingRuntimeRequestSummary | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   readonly hasActionableProposedPlan: boolean;
@@ -1792,14 +1838,7 @@ function shellFromState(input: {
     lastError: input.state.lastError,
     lastErrorClass: input.state.lastErrorClass,
     usageLimitResetAt: input.state.usageLimitResetAt,
-    pendingRuntimeRequest:
-      input.state.pendingRuntimeRequest === null
-        ? null
-        : {
-            id: input.state.pendingRuntimeRequest.id,
-            kind: input.state.pendingRuntimeRequest.kind,
-            createdAt: input.state.pendingRuntimeRequest.createdAt,
-          },
+    pendingRuntimeRequest: input.state.pendingRuntimeRequest,
     latestVisibleMessage: null,
     latestUserMessageAt: input.state.latestUserMessageAt,
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
@@ -2703,9 +2742,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.pinned" &&
           event.type !== "thread.unpinned" &&
           event.type !== "thread.pin-reordered" &&
+          event.type !== "thread.active-reordered" &&
           event.type !== "thread.visited" &&
           event.type !== "thread.marked-unread" &&
           event.type !== "thread.metadata-updated" &&
+          event.type !== "thread.pull-request-synced" &&
+          event.type !== "thread.pull-request-link-updated" &&
           event.type !== "thread.runtime-mode-updated" &&
           event.type !== "thread.interaction-mode-updated" &&
           event.type !== "thread.model-selection-updated" &&
@@ -4721,6 +4763,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             `,
               sql`
               SELECT scope_id AS "scopeId", run_id AS "runId",
+                ordinal_within_scope AS "ordinalWithinScope",
                 app_run_ordinal AS "appRunOrdinal", status,
                 json_extract(payload_json, '$.ref') AS ref
               FROM orchestration_v2_projection_checkpoints
@@ -4783,6 +4826,124 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   ? undefined
                   : yield* decodeProviderThreadPayload(providerRows[0].payload_json),
               readyCheckpointOrdinals: readyRows.map(({ ordinal }) => ordinal),
+            };
+          }),
+        )
+        .pipe(Effect.mapError(controlReadError(threadId)));
+
+    const getCheckpointRollbackContext: ProjectionStoreV2Shape["getCheckpointRollbackContext"] = (
+      threadId,
+      target,
+    ) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const thread = yield* getThread(threadId);
+            const [providerRows, checkpointRows, scopeRows] = yield* Effect.all([
+              sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_provider_threads
+            WHERE provider_thread_id = ${target.providerThreadId}
+              AND (thread_id = ${threadId}
+                OR owner_node_id IN (SELECT node_id FROM orchestration_v2_projection_nodes WHERE thread_id = ${threadId})
+                OR provider_thread_id IN (SELECT provider_thread_id FROM orchestration_v2_projection_subagents WHERE thread_id = ${threadId}))`,
+              sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_checkpoints
+            WHERE thread_id = ${threadId} AND checkpoint_id = ${target.checkpointId}`,
+              sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_checkpoint_scopes
+            WHERE thread_id = ${threadId} AND scope_id = ${target.scopeId}`,
+            ]);
+            const providerThread =
+              providerRows[0] === undefined
+                ? undefined
+                : yield* decodeProviderThreadPayload(providerRows[0].payload_json);
+            const checkpoint =
+              checkpointRows[0] === undefined
+                ? undefined
+                : yield* decodeCheckpointPayload(checkpointRows[0].payload_json);
+            const scope =
+              scopeRows[0] === undefined
+                ? undefined
+                : yield* decodeCheckpointScopePayload(scopeRows[0].payload_json);
+            const context: ProjectionCheckpointRollbackContext = {
+              thread,
+              providerThread,
+              checkpoint,
+              scope,
+              providerSession: undefined,
+              targetAttempt: undefined,
+              providerTurns: [],
+              rolledBackAttemptIds: [],
+              runsToRollback: [],
+              rootNodes: [],
+              staleCheckpoints: [],
+            };
+            if (
+              providerThread === undefined ||
+              providerThread.providerSessionId === null ||
+              checkpoint === undefined ||
+              scope === undefined ||
+              checkpoint.scopeId !== scope.id ||
+              checkpoint.status !== "ready" ||
+              providerThread.id !== thread.activeProviderThreadId ||
+              providerThread.providerInstanceId !== thread.modelSelection.instanceId
+            )
+              return context;
+
+            const targetOrdinal = checkpoint.appRunOrdinal ?? 0;
+            const [attemptRows, runRows, sessionRows, rolledBackAttempts, staleRows] =
+              yield* Effect.all([
+                sql`SELECT attempt.attempt_id AS id, attempt.provider_turn_id AS "providerTurnId"
+            FROM orchestration_v2_projection_run_attempts AS attempt
+            JOIN orchestration_v2_projection_runs AS run
+              ON attempt.attempt_id = json_extract(run.payload_json, '$.activeAttemptId')
+            WHERE run.thread_id = ${threadId} AND run.ordinal = ${targetOrdinal}
+              AND attempt.thread_id = ${threadId}`,
+                sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_runs
+            WHERE thread_id = ${threadId} AND ordinal > ${targetOrdinal}
+              AND status IN ('completed', 'interrupted', 'failed', 'cancelled')
+            ORDER BY ordinal ASC`,
+                sql<PayloadRow>`SELECT session.payload_json
+            FROM orchestration_v2_projection_provider_sessions AS session
+            JOIN orchestration_v2_projection_provider_session_bindings AS binding
+              ON binding.provider_session_id = session.provider_session_id
+            WHERE binding.thread_id = ${threadId}
+              AND session.provider_session_id = ${providerThread.providerSessionId}`,
+                sql<{ readonly id: RunAttemptId }>`SELECT attempt.attempt_id AS id
+            FROM orchestration_v2_projection_run_attempts AS attempt
+            JOIN orchestration_v2_projection_runs AS run ON run.run_id = attempt.run_id
+            WHERE run.thread_id = ${threadId} AND run.status = 'rolled_back'
+              AND attempt.thread_id = ${threadId}`,
+                sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_checkpoints
+            WHERE thread_id = ${threadId} AND scope_id = ${scope.id} AND status = 'ready'
+              AND app_run_ordinal > ${targetOrdinal}
+            ORDER BY ordinal_within_scope ASC`,
+              ]);
+            const targetAttempt = (yield* decodeRollbackTargetAttempts(attemptRows))[0];
+            const runsToRollback = yield* decodeRows(decodeRunPayload, threadId)(runRows);
+            const [nodeRows, turnRows] = yield* Effect.all([
+              sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_nodes
+            WHERE thread_id = ${threadId} AND ${sql.in(
+              "node_id",
+              runsToRollback.map((run) => run.rootNodeId),
+            )}
+            ORDER BY node_id ASC`,
+              sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_provider_turns
+            WHERE thread_id = ${threadId} AND (
+              provider_thread_id = ${providerThread.id}
+              OR provider_turn_id = ${targetAttempt?.providerTurnId ?? null}
+              OR run_attempt_id = ${targetAttempt?.id ?? null})
+            ORDER BY provider_thread_id ASC, ordinal ASC`,
+            ]);
+            return {
+              ...context,
+              targetAttempt,
+              runsToRollback,
+              providerSession:
+                sessionRows[0] === undefined
+                  ? undefined
+                  : yield* decodeProviderSessionPayload(sessionRows[0].payload_json),
+              rolledBackAttemptIds: rolledBackAttempts.map(({ id }) => id),
+              rootNodes: yield* decodeRows(decodeNodePayload, threadId)(nodeRows),
+              providerTurns: yield* decodeRows(decodeProviderTurnPayload, threadId)(turnRows),
+              staleCheckpoints: yield* decodeRows(decodeCheckpointPayload, threadId)(staleRows),
             };
           }),
         )
@@ -5739,12 +5900,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         );
       }).pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
-    const getThreadWorktreePaths: ProjectionStoreV2Shape["getThreadWorktreePaths"] = () =>
+    const getThreadWorktreePaths: ProjectionStoreV2Shape["getThreadWorktreePaths"] = (options) =>
       sql<{ readonly thread_id: string; readonly worktree_path: string }>`
         SELECT thread_id, json_extract(payload_json, '$.worktreePath') AS worktree_path
         FROM orchestration_v2_projection_threads
         WHERE deleted_at IS NULL
-          AND json_extract(payload_json, '$.archivedAt') IS NULL
+          ${options?.includeArchived === true ? sql`` : sql`AND json_extract(payload_json, '$.archivedAt') IS NULL`}
           AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
       `.pipe(
         Effect.map((rows) =>
@@ -5778,14 +5939,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           pendingTurnItemsByThreadId,
         } = input;
         const thread = yield* decodeThreadPayload(row.payload_json);
-        const pendingRuntimeRequest =
+        let pendingRuntimeRequest =
           row.pending_request_payload_json !== null
-            ? yield* decodeRuntimeRequestPayload(row.pending_request_payload_json)
-            : row.pending_secret_request_payload_json !== null
-              ? secretRequestAsPendingInput(
-                  yield* decodeTurnItemPayload(row.pending_secret_request_payload_json),
-                )
-              : null;
+            ? pendingRuntimeRequestSummary(
+                yield* decodeRuntimeRequestPayload(row.pending_request_payload_json),
+              )
+            : null;
+        if (
+          (pendingRuntimeRequest === null || pendingRuntimeRequest.blocking === false) &&
+          row.pending_secret_request_payload_json !== null
+        ) {
+          pendingRuntimeRequest =
+            secretRequestAsPendingInput(
+              yield* decodeTurnItemPayload(row.pending_secret_request_payload_json),
+            ) ?? pendingRuntimeRequest;
+        }
         let terminalFailureItem =
           row.terminal_failure_payload_json === null
             ? null
@@ -6099,6 +6267,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getRuntimeResponseContext,
       getCheckpointContext,
       getCheckpointCaptureContext,
+      getCheckpointRollbackContext,
       getRunMessage,
       canStartQueuedRun,
       getPendingNativeUserInputs,
@@ -6240,12 +6409,12 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 left.id.localeCompare(right.id),
             );
         }),
-      getThreadWorktreePaths: () =>
+      getThreadWorktreePaths: (options) =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>
             [...state.projections.values()].flatMap(({ thread }) =>
               thread.deletedAt === null &&
-              thread.archivedAt === null &&
+              (options?.includeArchived === true || thread.archivedAt === null) &&
               thread.worktreePath !== null
                 ? [{ threadId: thread.id, worktreePath: thread.worktreePath }]
                 : [],
@@ -6583,9 +6752,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               cwd,
             })),
             checkpoints: projection.checkpoints.map(
-              ({ scopeId, runId, appRunOrdinal, status, ref }) => ({
+              ({ scopeId, runId, ordinalWithinScope, appRunOrdinal, status, ref }) => ({
                 scopeId,
                 runId,
+                ordinalWithinScope,
                 appRunOrdinal,
                 status,
                 ref,
@@ -6611,6 +6781,92 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 (candidate) => candidate.scopeId === target.scopeId && candidate.status === "ready",
               )
               .map((candidate) => candidate.ordinalWithinScope),
+          };
+        }),
+      getCheckpointRollbackContext: (threadId, target) =>
+        Effect.gen(function* () {
+          const projection = (yield* Ref.get(replayState)).projections.get(threadId);
+          if (projection === undefined)
+            return yield* new ProjectionStoreThreadNotFoundError({ threadId });
+          const { thread } = projection;
+          const providerThread = projection.providerThreads.find(
+            (candidate) => candidate.id === target.providerThreadId,
+          );
+          const checkpoint = projection.checkpoints.find(
+            (candidate) => candidate.id === target.checkpointId,
+          );
+          const scope = projection.checkpointScopes.find(
+            (candidate) => candidate.id === target.scopeId,
+          );
+          const context: ProjectionCheckpointRollbackContext = {
+            thread,
+            providerThread,
+            checkpoint,
+            scope,
+            providerSession: undefined,
+            targetAttempt: undefined,
+            providerTurns: [],
+            rolledBackAttemptIds: [],
+            runsToRollback: [],
+            rootNodes: [],
+            staleCheckpoints: [],
+          };
+          if (
+            providerThread === undefined ||
+            providerThread.providerSessionId === null ||
+            checkpoint === undefined ||
+            scope === undefined ||
+            checkpoint.scopeId !== scope.id ||
+            checkpoint.status !== "ready" ||
+            providerThread.id !== thread.activeProviderThreadId ||
+            providerThread.providerInstanceId !== thread.modelSelection.instanceId
+          )
+            return context;
+
+          const targetOrdinal = checkpoint.appRunOrdinal ?? 0;
+          const targetRun = projection.runs.find((run) => run.ordinal === targetOrdinal);
+          const attempt = projection.attempts.find(
+            (attempt) => attempt.id === targetRun?.activeAttemptId,
+          );
+          const runsToRollback = projection.runs.filter(
+            (run) =>
+              run.ordinal > targetOrdinal &&
+              (run.status === "completed" ||
+                run.status === "interrupted" ||
+                run.status === "failed" ||
+                run.status === "cancelled"),
+          );
+          const rootNodeIds = new Set(runsToRollback.map((run) => run.rootNodeId));
+          const rolledBackRunIds = new Set(
+            projection.runs.filter((run) => run.status === "rolled_back").map((run) => run.id),
+          );
+          return {
+            ...context,
+            targetAttempt:
+              attempt === undefined
+                ? undefined
+                : { id: attempt.id, providerTurnId: attempt.providerTurnId },
+            runsToRollback,
+            rootNodes: projection.nodes.filter((node) => rootNodeIds.has(node.id)),
+            rolledBackAttemptIds: projection.attempts
+              .filter((attempt) => rolledBackRunIds.has(attempt.runId))
+              .map((attempt) => attempt.id),
+            providerSession: projection.providerSessions.find(
+              (session) => session.id === providerThread.providerSessionId,
+            ),
+            providerTurns: projection.providerTurns.filter(
+              (turn) =>
+                turn.providerThreadId === providerThread.id ||
+                turn.id === attempt?.providerTurnId ||
+                (attempt !== undefined && turn.runAttemptId === attempt.id),
+            ),
+            staleCheckpoints: projection.checkpoints.filter(
+              (candidate) =>
+                candidate.scopeId === scope.id &&
+                candidate.appRunOrdinal !== null &&
+                candidate.appRunOrdinal > targetOrdinal &&
+                candidate.status === "ready",
+            ),
           };
         }),
       getRunMessage: (threadId, runId) =>

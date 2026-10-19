@@ -84,6 +84,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type CSSProperties,
 } from "react";
 import {
   LegendList,
@@ -506,6 +507,7 @@ interface MessagesTimelineProps {
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
   contentInsetEndAdjustment: number;
+  composerOverlayHeight?: number;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   /**
    * Off while the user is reading history; LegendList's own maintainScrollAtEnd
@@ -602,6 +604,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onAnchorReady,
   onAnchorSizeChanged,
   contentInsetEndAdjustment,
+  composerOverlayHeight = 0,
   onIsAtEndChange,
   onContentOverflowChange,
   liveFollowEnabled,
@@ -800,8 +803,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     });
   }, [latestRun, listIdentityKey]);
 
-  // Find the fold that hides the match: imported turns have no run id but still
-  // fold under a synthetic key, so the match's own run id cannot open them.
+  // Imported turns fold under synthetic keys rather than the entries' own run ids.
   const findFoldRunIds = findActive
     ? timelineTurnFoldRunIdsByEntryId({
         timelineEntries,
@@ -811,9 +813,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
         runlessWorkActive,
       })
     : null;
-  const activeFindRunId = activeFindMatch
-    ? findFoldRunIds?.get(activeFindMatch.entryId)
-    : undefined;
+  const activeFindRunId =
+    findActive && activeFindMatch ? findFoldRunIds?.get(activeFindMatch.entryId) : undefined;
   const [expandedFindRunId, setExpandedFindRunId] = useState<RunId | undefined>();
   if (expandedFindRunId !== activeFindRunId) {
     setExpandedFindRunId(activeFindRunId);
@@ -864,6 +865,22 @@ const ConversationTimeline = memo(function ConversationTimeline({
   // must not change with them or every timeline row re-renders per event.
   const runs = useStableHandoffRuns(runsProp);
   const minimapItems = deriveTimelineMinimapItems(rows);
+  // Preserve initialScrollAtEnd's measured target until the list is reused
+  // for another thread; scrollToEnd would replace it with an estimated offset.
+  const listOpenedOnRef = useRef<{
+    readonly list: LegendListRef;
+    identity: string | null;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const opened = listOpenedOnRef.current;
+    if (!list) return;
+    if (opened?.list !== list) {
+      listOpenedOnRef.current = { list, identity: listIdentityKey };
+    } else if (opened.identity !== listIdentityKey) {
+      opened.identity = null;
+    }
+  });
   const restoreRowIndex =
     restoringThreadPosition && rememberedPosition?.atEnd === false
       ? rows.findIndex((row) => row.id === rememberedPosition.rowId)
@@ -921,7 +938,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
               viewOffset: -position.offsetWithinRow,
             })
           : list.scrollToOffset({ offset: position.scrollOffset, animated: false })
-        : list.scrollToEnd({ animated: false });
+        : listOpenedOnRef.current?.identity === listIdentityKey
+          ? undefined
+          : list.scrollToEnd({ animated: false });
     void Promise.resolve(scrolling).then(() => {
       if (cancelled) return;
       if (position?.atEnd !== false || index < 0) {
@@ -1003,6 +1022,17 @@ const ConversationTimeline = memo(function ConversationTimeline({
     viewport: timelineViewportElement,
     historyLoading: citationHistoryLoading,
     loadEarlier,
+    getTurnFoldRunId: (entryId) =>
+      (
+        findFoldRunIds ??
+        timelineTurnFoldRunIdsByEntryId({
+          timelineEntries,
+          latestRun,
+          runningRunId,
+          isWorking,
+          runlessWorkActive,
+        })
+      ).get(entryId),
     onExpandTurn: expandCitedRun,
     onManualNavigation,
   });
@@ -1063,6 +1093,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
       {footer}
     </TimelineListFooter>
   );
+  const timelineMaskStyle =
+    composerOverlayHeight === 0
+      ? undefined
+      : ({
+          "--timeline-composer-overlay-height": `${composerOverlayHeight}px`,
+        } as CSSProperties);
 
   const measureContentOverflow = () =>
     timelineContentOverflowsViewport(listRef.current?.getState?.(), {
@@ -1444,52 +1480,60 @@ const ConversationTimeline = memo(function ConversationTimeline({
               onCite={onCiteAssistantText}
             />
           ) : null}
-          <LegendList<MessagesTimelineRow>
-            ref={setTimelineList}
-            data={rows}
-            extraData={listExtraData}
-            keyExtractor={keyExtractor}
-            getItemType={getItemType}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd={
-              !findActive && citationRequest === null && rememberedPosition?.atEnd !== false
-            }
-            // Legend needs a data refresh to mount new pins without a scroll event.
-            dataVersion={readyCitationRequest?.key ?? listIdentityKey}
-            {...(alwaysRender ? { alwaysRender } : {})}
-            onLoad={handleListLoad}
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
-            maintainScrollAtEnd={
-              citationPositioning ||
-              (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
-              anchoredEndSpace ||
-              !liveFollowEnabled ||
-              fullscreenAppRowId !== null ||
-              disclosureToggleSettling
-                ? false
-                : isWorking && !prefersReducedMotion && settlingListIdentity === null
-                  ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
-                  : TIMELINE_MAINTAIN_SCROLL_AT_END
-            }
-            maintainVisibleContentPosition={
-              findActive ||
-              citationPositioning ||
-              (restoringThreadPosition && rememberedPosition?.atEnd === false)
-                ? false
-                : maintainVisibleContentPosition
-            }
-            maintainScrollAtEndThreshold={1}
-            onScroll={handleScroll}
-            onItemSizeChanged={handleItemSizeChanged}
+          <div
             className={cn(
-              "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
-              topFadeEnabled && "topbar-scroll-fade",
+              "h-full min-h-0",
+              composerOverlayHeight > 0 && "virtualized-scroll-fade timeline-scroll-bottom-fade",
             )}
-            ListHeaderComponent={listHeader}
-            ListFooterComponent={timelineListFooter}
-          />
+            style={timelineMaskStyle}
+          >
+            <LegendList<MessagesTimelineRow>
+              ref={setTimelineList}
+              data={rows}
+              extraData={listExtraData}
+              keyExtractor={keyExtractor}
+              getItemType={getItemType}
+              renderItem={renderItem}
+              estimatedItemSize={90}
+              initialScrollAtEnd={
+                !findActive && citationRequest === null && rememberedPosition?.atEnd !== false
+              }
+              // Legend needs a data refresh to mount new pins without a scroll event.
+              dataVersion={readyCitationRequest?.key ?? listIdentityKey}
+              {...(alwaysRender ? { alwaysRender } : {})}
+              onLoad={handleListLoad}
+              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+              contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
+              maintainScrollAtEnd={
+                citationPositioning ||
+                (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
+                anchoredEndSpace ||
+                !liveFollowEnabled ||
+                fullscreenAppRowId !== null ||
+                disclosureToggleSettling
+                  ? false
+                  : isWorking && !prefersReducedMotion && settlingListIdentity === null
+                    ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
+                    : TIMELINE_MAINTAIN_SCROLL_AT_END
+              }
+              maintainVisibleContentPosition={
+                findActive ||
+                citationPositioning ||
+                (restoringThreadPosition && rememberedPosition?.atEnd === false)
+                  ? false
+                  : maintainVisibleContentPosition
+              }
+              maintainScrollAtEndThreshold={1}
+              onScroll={handleScroll}
+              onItemSizeChanged={handleItemSizeChanged}
+              className={cn(
+                "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
+                topFadeEnabled && "topbar-scroll-fade",
+              )}
+              ListHeaderComponent={listHeader}
+              ListFooterComponent={timelineListFooter}
+            />
+          </div>
           <TimelineMinimap
             items={minimapItems}
             hasPersistentGutter={minimapHasPersistentGutter}
@@ -1501,7 +1545,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
               onManualNavigation();
               void listRef.current?.scrollToIndex({
                 index: item.rowIndex,
-                animated: true,
+                animated: !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
                 viewOffset: 24,
               });
             }}
@@ -2276,7 +2320,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           )}
         </p>
       ) : null}
-      {row.message.inputIntent && row.message.inputIntent !== "turn_start" ? (
+      {row.message.inputIntent === "steer" ||
+      row.message.inputIntent === "promoted_queued_to_steer" ? (
         <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
       <div className="relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground">
@@ -2447,24 +2492,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 function UserMessageIntentMarker({
   intent,
 }: {
-  readonly intent: NonNullable<ChatMessage["inputIntent"]>;
+  readonly intent: "steer" | "promoted_queued_to_steer";
 }) {
-  const presentation =
-    intent === "queued_turn"
-      ? {
-          label: "From queue",
-          icon: null,
-        }
-      : intent === "promoted_queued_to_steer"
-        ? {
-            label: "Steer",
-            icon: Redo2Icon,
-          }
-        : {
-            label: "Steer",
-            icon: Redo2Icon,
-          };
-  const IntentIcon = presentation.icon;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -2475,15 +2504,13 @@ function UserMessageIntentMarker({
           />
         }
       >
-        {IntentIcon ? <IntentIcon aria-hidden="true" className="size-3" /> : null}
-        {presentation.label}
+        <Redo2Icon aria-hidden="true" className="size-3" />
+        Steer
       </TooltipTrigger>
       <TooltipPopup side="top">
-        {intent === "queued_turn"
-          ? "Queued while the agent was busy"
-          : intent === "promoted_queued_to_steer"
-            ? "Originally queued, then promoted to steer the active turn"
-            : "Steered the active turn"}
+        {intent === "promoted_queued_to_steer"
+          ? "Originally queued, then promoted to steer the active turn"
+          : "Steered the active turn"}
       </TooltipPopup>
     </Tooltip>
   );
@@ -5447,7 +5474,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         "aria-expanded": expanded,
         onClick: toggleExpanded,
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
-          if (e.key === "Enter" || e.key === " ") {
+          if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
             toggleExpanded();
           }
