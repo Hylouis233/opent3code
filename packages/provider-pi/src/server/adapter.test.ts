@@ -2880,6 +2880,52 @@ describe("PiAdapterV2", () => {
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect(
+    "emits the approval artifact before the runtime request so both commit atomically",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const adapter = yield* makeAdapter(fake, "");
+        const runtime = yield* adapter.openSession({
+          threadId: THREAD_ID,
+          providerSessionId: SESSION_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* fake.emit({
+          type: "extension_ui_request",
+          id: "ui-artifact-order",
+          method: "confirm",
+          title: "Run project extensions?",
+          message: "This project has .pi/extensions.",
+        });
+        const beforeRequest = yield* runtime.events.pipe(
+          Stream.takeWhile(
+            (event) =>
+              !(
+                event.type === "runtime_request.updated" &&
+                event.runtimeRequest.status === "pending"
+              ),
+          ),
+          Stream.runCollect,
+        );
+        const artifactIndex = beforeRequest.findIndex(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+        );
+        assert.isAtLeast(
+          artifactIndex,
+          0,
+          "the approval artifact must be emitted before the pending runtime request",
+        );
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("emits session-start dialogs before a turn exists", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

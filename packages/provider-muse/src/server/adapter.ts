@@ -1203,14 +1203,15 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
               };
         const entry: PendingRequest = { native, request: runtimeRequest, node, item };
         pending.set(requestId, entry);
+        // Artifact before request so the ingestor commits both atomically.
+        yield* emit({ type: "node.updated", driver: MUSE_PROVIDER, node });
+        yield* emit({ type: "turn_item.updated", driver: MUSE_PROVIDER, turnItem: item });
         yield* emit({
           type: "runtime_request.updated",
           driver: MUSE_PROVIDER,
           threadId,
           runtimeRequest,
         });
-        yield* emit({ type: "node.updated", driver: MUSE_PROVIDER, node });
-        yield* emit({ type: "turn_item.updated", driver: MUSE_PROVIDER, turnItem: item });
         yield* updateSession("waiting");
         // Muse does not give workflow children the session's allowAll mode, so in full
         // access T3 approves for them. If Muse rejects that, the request waits for the user.
