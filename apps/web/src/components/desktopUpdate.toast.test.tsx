@@ -1,5 +1,5 @@
 import { isValidElement, type ReactElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { DesktopUpdateState } from "@t3tools/contracts";
 
 const testState = vi.hoisted(() => ({
@@ -12,9 +12,12 @@ vi.mock("./ui/toast", () => ({
 
 import { showDesktopUpdateDownloadedToast } from "./desktopUpdate.toast";
 
+// The build falls back to the CI repository, so a fork's default links point at the fork.
+const defaultReleasesUrl = () =>
+  `https://github.com/${import.meta.env.T3CODE_DESKTOP_UPDATE_REPOSITORY || "pingdotgg/t3code"}/releases`;
+
 type ClickableElement = ReactElement<{ readonly onClick?: () => void }>;
 
-/** Walks the rendered description, invoking function components, to find the link button. */
 function findReleaseNotesLink(node: ReactNode): ClickableElement | null {
   if (Array.isArray(node)) {
     for (const child of node) {
@@ -65,6 +68,24 @@ describe("showDesktopUpdateDownloadedToast", () => {
     testState.addToast.mockReset();
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("opens release notes from the configured repository", async () => {
+    vi.stubEnv("T3CODE_DESKTOP_UPDATE_REPOSITORY", "JustYannicc/t3code");
+    const openExternal = vi.fn().mockResolvedValue(true);
+
+    showDesktopUpdateDownloadedToast({ openExternal }, downloadedState());
+    findReleaseNotesLink(getDescription())?.props.onClick?.();
+
+    await vi.waitFor(() => {
+      expect(openExternal).toHaveBeenCalledWith(
+        "https://github.com/JustYannicc/t3code/releases/tag/v0.0.30",
+      );
+    });
+  });
+
   it("opens the downloaded version's release notes", async () => {
     const openExternal = vi.fn().mockResolvedValue(true);
 
@@ -72,9 +93,7 @@ describe("showDesktopUpdateDownloadedToast", () => {
     const link = findReleaseNotesLink(getDescription());
     link?.props.onClick?.();
     await vi.waitFor(() => {
-      expect(openExternal).toHaveBeenCalledWith(
-        "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
-      );
+      expect(openExternal).toHaveBeenCalledWith(`${defaultReleasesUrl()}/tag/v0.0.30`);
     });
     expect(testState.addToast).toHaveBeenCalledTimes(1);
   });
@@ -90,9 +109,7 @@ describe("showDesktopUpdateDownloadedToast", () => {
     findReleaseNotesLink(getDescription())?.props.onClick?.();
 
     await vi.waitFor(() => {
-      expect(openExternal).toHaveBeenCalledWith(
-        "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
-      );
+      expect(openExternal).toHaveBeenCalledWith(`${defaultReleasesUrl()}/tag/v0.0.30`);
     });
   });
 

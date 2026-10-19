@@ -54,6 +54,8 @@ jobs:
       - name: Install browser secret helper build libraries
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
       - name: Build JS bundle
+        env:
+          T3CODE_TELEMETRY_CHANNEL: ${{ github.repository == 'pingdotgg/t3code' && 'preview' || 'dev' }}
         run: vp run build:desktop
       - name: Verify preload bundle
         run: node apps/desktop/scripts/verify-preload-bundle.mjs

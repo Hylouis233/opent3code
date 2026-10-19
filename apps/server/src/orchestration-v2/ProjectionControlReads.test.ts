@@ -32,6 +32,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 
 const threadId = ThreadId.make("thread:control-reads");
 const providerThreadId = ProviderThreadId.make("provider-thread:control-reads");
@@ -385,8 +386,6 @@ it.effect.each(storageCases)(
           occurredAt: now,
           payload: { ...turn, status: "completed", completedAt: now },
         });
-        // A settled turn's Stop still reaches the adapter, which alone knows
-        // whether it runs background work for the thread.
         yield* control.interrupt({ threadId, providerThreadId, providerTurnId, providerSessionId });
         assert.deepEqual(calls, ["interrupt", "Use the smaller fix.", "reply", "interrupt"]);
       }).pipe(
@@ -404,6 +403,9 @@ it.effect.each(storageCases)(
               IdAllocator.layer,
               ThreadCommandExecutor.layer,
               EventSink.layer.pipe(Layer.provide(EventStore.layer)),
+              Layer.mock(GitVcsDriver.GitVcsDriver)({
+                resolveBranchName: () => Effect.succeed(null),
+              }),
             ),
           ),
           Layer.provideMerge(Layer.merge(storeLayer, SqlitePersistence.layerMemory)),
