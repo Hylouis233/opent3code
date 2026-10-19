@@ -56,6 +56,7 @@ vi.mock(import("./ui/toast"), async (original) => {
 });
 
 import {
+  completeConfirmDialogClose,
   readConfirmDialogState,
   registerConfirmDialogHost,
   resetConfirmDialogForTests,
@@ -495,7 +496,8 @@ describe("OutdatedServerUpdateAction", () => {
     expect(testState.updateServer).not.toHaveBeenCalled();
     expect(testState.toast).not.toHaveBeenCalled();
 
-    // Cancellation releases the machine so the user can try again.
+    // Cancellation releases the machine so the user can try again once the dialog has closed.
+    await act(async () => completeConfirmDialogClose());
     testState.updateServer.mockResolvedValue(outdatedSuccess);
     await click("Update");
     await act(async () => respondToConfirmDialog(true));

@@ -12,6 +12,10 @@ vi.mock("./ui/toast", () => ({
 
 import { showDesktopUpdateDownloadedToast } from "./desktopUpdate.toast";
 
+// The build falls back to the CI repository, so a fork's default links point at the fork.
+const defaultReleasesUrl = () =>
+  `https://github.com/${import.meta.env.T3CODE_DESKTOP_UPDATE_REPOSITORY || "pingdotgg/t3code"}/releases`;
+
 type ClickableElement = ReactElement<{ readonly onClick?: () => void }>;
 
 function findReleaseNotesLink(node: ReactNode): ClickableElement | null {
@@ -89,9 +93,7 @@ describe("showDesktopUpdateDownloadedToast", () => {
     const link = findReleaseNotesLink(getDescription());
     link?.props.onClick?.();
     await vi.waitFor(() => {
-      expect(openExternal).toHaveBeenCalledWith(
-        "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
-      );
+      expect(openExternal).toHaveBeenCalledWith(`${defaultReleasesUrl()}/tag/v0.0.30`);
     });
     expect(testState.addToast).toHaveBeenCalledTimes(1);
   });
@@ -107,9 +109,7 @@ describe("showDesktopUpdateDownloadedToast", () => {
     findReleaseNotesLink(getDescription())?.props.onClick?.();
 
     await vi.waitFor(() => {
-      expect(openExternal).toHaveBeenCalledWith(
-        "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
-      );
+      expect(openExternal).toHaveBeenCalledWith(`${defaultReleasesUrl()}/tag/v0.0.30`);
     });
   });
 
