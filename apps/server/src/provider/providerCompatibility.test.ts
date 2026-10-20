@@ -201,20 +201,36 @@ describe("provider compatibility", () => {
   });
 
   it("keeps fork-only protocol tags on bundled OpenCode and Pi policies", () => {
-    const bundled = ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility ?? [];
-    for (const kind of ["opencode", "pi"]) {
-      assert.isTrue(
-        bundled.some(
-          (entry) =>
-            entry.driver === kind &&
-            entry.orchestrationProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION,
-        ),
-        `apps/server/src/provider/model-manifest.json has no ${kind} compatibility entry tagged ` +
-          `orchestrationProtocolVersion ${ORCHESTRATION_PROTOCOL_VERSION}. The tag is fork-only and ` +
-          "upstream's manifest lacks it, so taking upstream's file during a sync silently drops it " +
-          `and leaves ${kind} without any compatibility policy. Restore the fork's tags.`,
-      );
-    }
+    // Adapter generations are split by T3 Code range in the manifest: OpenCode V1
+    // (< 0.0.46) runs protocol 1, while OpenCode V2 and Pi run the current protocol.
+    const tagged = (ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility ?? [])
+      .filter((entry) => entry.driver === "opencode" || entry.driver === "pi")
+      .map((entry) => ({
+        driver: entry.driver,
+        t3CodeRange: entry.t3CodeRange,
+        orchestrationProtocolVersion: entry.orchestrationProtocolVersion,
+      }));
+    assert.deepStrictEqual(
+      tagged,
+      [
+        { driver: "opencode", t3CodeRange: ">=0.0.42 <0.0.46", orchestrationProtocolVersion: 1 },
+        {
+          driver: "opencode",
+          t3CodeRange: ">=0.0.46",
+          orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+        },
+        {
+          driver: "pi",
+          t3CodeRange: ">=0.0.46",
+          orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+        },
+      ],
+      "apps/server/src/provider/model-manifest.json must tag OpenCode V1 with " +
+        `orchestrationProtocolVersion 1, and OpenCode V2 and Pi with ${ORCHESTRATION_PROTOCOL_VERSION}. ` +
+        "The tag is fork-only and upstream's manifest lacks it, so taking upstream's file during a " +
+        "sync silently drops it and leaves that generation without any compatibility policy. " +
+        "Restore the fork's tags.",
+    );
   });
 
   it("falls back from untagged remote generation policies without discarding tagged warnings", () => {
