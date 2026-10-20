@@ -1,5 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  ORCHESTRATION_PROTOCOL_VERSION,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -193,6 +198,23 @@ describe("provider compatibility", () => {
       resolveProviderCompatibility(policies, opencode, "2.0.18", "0.0.45")?.status,
       "broken",
     );
+  });
+
+  it("keeps fork-only protocol tags on bundled OpenCode and Pi policies", () => {
+    const bundled = ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility ?? [];
+    for (const kind of ["opencode", "pi"]) {
+      assert.isTrue(
+        bundled.some(
+          (entry) =>
+            entry.driver === kind &&
+            entry.orchestrationProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION,
+        ),
+        `apps/server/src/provider/model-manifest.json has no ${kind} compatibility entry tagged ` +
+          `orchestrationProtocolVersion ${ORCHESTRATION_PROTOCOL_VERSION}. The tag is fork-only and ` +
+          "upstream's manifest lacks it, so taking upstream's file during a sync silently drops it " +
+          `and leaves ${kind} without any compatibility policy. Restore the fork's tags.`,
+      );
+    }
   });
 
   it("falls back from untagged remote generation policies without discarding tagged warnings", () => {

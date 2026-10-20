@@ -39,6 +39,8 @@ The path guard runs in trusted, API-only jobs before and after candidate validat
 
 Inspect the workflow summary and PR when a gate stops the run. Resolve actual conflicts on a working branch, review the complete diff, and revalidate the resulting candidate. Never use `reset --hard upstream/main` or a forced update of `main` to remove fork changes. Do not label missing, pending, approval-required, or cancelled tests as successful.
 
+When resolving conflicts in `apps/server/src/provider/model-manifest.json`, do not take upstream's version wholesale: keep the fork-only `orchestrationProtocolVersion` tags on compatibility entries (OpenCode V1 = 1, OpenCode V2 = 2, Pi = 2), or OpenCode and Pi silently lose their compatibility policies.
+
 ## GitHub setup and operational limits
 
 Actions must be enabled for this fork. Its policy must allow the workflow's declared `contents: write` and `pull-requests: write` permissions and allow GitHub Actions to create pull requests. These are repository/organization settings, not permissions that a workflow can grant itself. No personal access token is required by the checked-in implementation.
