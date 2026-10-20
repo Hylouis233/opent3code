@@ -651,31 +651,30 @@ export const layerWithOptions = (
           )
           .pipe(Effect.asVoid);
 
-      const writeReleasedSessionEvents = (input: {
+      const writeReleasedSessionEvents = Effect.fn(
+        "ProviderSessionManager.writeReleasedSessionEvents",
+      )(function* (input: {
         readonly entry: LiveSessionEntry;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
-      }) =>
-        Effect.gen(function* () {
-          const now = yield* DateTime.now;
-          const payload: OrchestrationV2ProviderSession = {
-            ...input.entry.runtime.providerSession,
-            status: releaseStatusFor(input.reason),
-            updatedAt: now,
-            lastError:
-              input.reason === "runtime_error"
-                ? (input.detail ?? "Provider runtime failed.")
-                : null,
-          };
-          yield* writeProviderSessionEvents({
-            runtime: input.entry.runtime,
-            runtimeLifetime: input.entry.runtimeLifetime,
-            released: true,
-            threadIds: input.entry.ownedThreadIds,
-            type: "provider-session.updated",
-            payload,
-          });
+      }) {
+        const now = yield* DateTime.now;
+        const payload: OrchestrationV2ProviderSession = {
+          ...input.entry.runtime.providerSession,
+          status: releaseStatusFor(input.reason),
+          updatedAt: now,
+          lastError:
+            input.reason === "runtime_error" ? (input.detail ?? "Provider runtime failed.") : null,
+        };
+        yield* writeProviderSessionEvents({
+          runtime: input.entry.runtime,
+          runtimeLifetime: input.entry.runtimeLifetime,
+          released: true,
+          threadIds: input.entry.ownedThreadIds,
+          type: "provider-session.updated",
+          payload,
         });
+      });
 
       const writeReleasedRuntimeRequestEvents = (input: {
         readonly entry: LiveSessionEntry;
@@ -953,58 +952,60 @@ export const layerWithOptions = (
           { discard: true },
         );
 
-      const persistRelease = (job: ReleaseJob) =>
-        Effect.gen(function* () {
-          // Both paths are attempted: a failed session record must not keep an
-          // independently writable request actionable. Successful groups are
-          // removed from the obligation by the ingestor, not a frozen read set.
-          const sessionExit = yield* Effect.exit(
-            job.sessionPending
-              ? writeReleasedSessionEvents(job).pipe(Effect.timeout(RELEASE_PERSIST_TIMEOUT_MS))
-              : Effect.void,
-          );
-          if (Exit.isSuccess(sessionExit)) job.sessionPending = false;
-          const requestExit = yield* Effect.exit(
-            job.requestsPending
-              ? writeReleasedRuntimeRequestEvents(job).pipe(
-                  Effect.timeout(RELEASE_PERSIST_TIMEOUT_MS),
-                )
-              : Effect.void,
-          );
-          if (Exit.isSuccess(requestExit)) job.requestsPending = false;
-          const backgroundExit = yield* Effect.exit(
-            job.backgroundPending
-              ? writeReleasedBackgroundWorkEvents(job.releasedBackgroundTasks).pipe(
-                  Effect.timeout(RELEASE_PERSIST_TIMEOUT_MS),
-                )
-              : Effect.void,
-          );
-          if (Exit.isSuccess(backgroundExit)) job.backgroundPending = false;
-          if (!job.sessionPending && !job.requestsPending && !job.backgroundPending)
-            pendingReleases.delete(job.entry.runtimeLifetime);
-          if (Exit.isFailure(sessionExit)) return yield* Effect.failCause(sessionExit.cause);
-          if (Exit.isFailure(requestExit)) return yield* Effect.failCause(requestExit.cause);
-          if (Exit.isFailure(backgroundExit)) return yield* Effect.failCause(backgroundExit.cause);
-        });
+      const persistRelease = Effect.fn("ProviderSessionManager.persistRelease")(function* (
+        job: ReleaseJob,
+      ) {
+        // Both paths are attempted: a failed session record must not keep an
+        // independently writable request actionable. Successful groups are
+        // removed from the obligation by the ingestor, not a frozen read set.
+        const sessionExit = yield* Effect.exit(
+          job.sessionPending
+            ? writeReleasedSessionEvents(job).pipe(Effect.timeout(RELEASE_PERSIST_TIMEOUT_MS))
+            : Effect.void,
+        );
+        if (Exit.isSuccess(sessionExit)) job.sessionPending = false;
+        const requestExit = yield* Effect.exit(
+          job.requestsPending
+            ? writeReleasedRuntimeRequestEvents(job).pipe(
+                Effect.timeout(RELEASE_PERSIST_TIMEOUT_MS),
+              )
+            : Effect.void,
+        );
+        if (Exit.isSuccess(requestExit)) job.requestsPending = false;
+        const backgroundExit = yield* Effect.exit(
+          job.backgroundPending
+            ? writeReleasedBackgroundWorkEvents(job.releasedBackgroundTasks).pipe(
+                Effect.timeout(RELEASE_PERSIST_TIMEOUT_MS),
+              )
+            : Effect.void,
+        );
+        if (Exit.isSuccess(backgroundExit)) job.backgroundPending = false;
+        if (!job.sessionPending && !job.requestsPending && !job.backgroundPending)
+          pendingReleases.delete(job.entry.runtimeLifetime);
+        if (Exit.isFailure(sessionExit)) return yield* Effect.failCause(sessionExit.cause);
+        if (Exit.isFailure(requestExit)) return yield* Effect.failCause(requestExit.cause);
+        if (Exit.isFailure(backgroundExit)) return yield* Effect.failCause(backgroundExit.cause);
+      });
 
-      const retryRelease = (job: ReleaseJob) =>
-        Effect.gen(function* () {
-          let delay = 1_000;
-          while (job.sessionPending || job.requestsPending || job.backgroundPending) {
-            if (shuttingDown) return;
-            yield* Effect.sleep(Duration.millis(delay));
-            if (shuttingDown) return;
-            const result = yield* Effect.exit(persistRelease(job));
-            if (Exit.isFailure(result)) {
-              yield* Effect.logWarning("orchestration-v2.driver-session.release-retry-failed", {
-                providerSessionId: job.entry.runtime.providerSessionId,
-                reason: job.reason,
-                cause: result.cause,
-              });
-            }
-            delay = Math.min(delay * 2, 30_000);
+      const retryRelease = Effect.fn("ProviderSessionManager.retryRelease")(function* (
+        job: ReleaseJob,
+      ) {
+        let delay = 1_000;
+        while (job.sessionPending || job.requestsPending || job.backgroundPending) {
+          if (shuttingDown) return;
+          yield* Effect.sleep(Duration.millis(delay));
+          if (shuttingDown) return;
+          const result = yield* Effect.exit(persistRelease(job));
+          if (Exit.isFailure(result)) {
+            yield* Effect.logWarning("orchestration-v2.driver-session.release-retry-failed", {
+              providerSessionId: job.entry.runtime.providerSessionId,
+              reason: job.reason,
+              cause: result.cause,
+            });
           }
-        });
+          delay = Math.min(delay * 2, 30_000);
+        }
+      });
 
       // Scope close can wedge on a misbehaving adapter finalizer (e.g. a
       // provider process that never yields its message stream).
@@ -1190,12 +1191,12 @@ export const layerWithOptions = (
           ),
         );
 
-      const releaseIfStillIdle = (input: {
-        readonly providerSessionId: ProviderSessionId;
-        readonly generation: number;
-        readonly expectedRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
-      }): Effect.Effect<void> =>
-        Effect.gen(function* () {
+      const releaseIfStillIdle = Effect.fn("ProviderSessionManager.releaseIfStillIdle")(
+        function* (input: {
+          readonly providerSessionId: ProviderSessionId;
+          readonly generation: number;
+          readonly expectedRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
+        }): Effect.fn.Return<void> {
           const current = yield* Ref.get(sessions);
           const key = sessionKey(input.providerSessionId);
           const entry = current.get(key);
@@ -1270,7 +1271,8 @@ export const layerWithOptions = (
               }),
             ),
           );
-        });
+        },
+      );
 
       const withActivityError = <A, E, R>(
         providerSessionId: ProviderSessionId,
@@ -1643,13 +1645,13 @@ export const layerWithOptions = (
        * cannot land between a resume that found the thread loaded and the turn
        * that relies on it.
        */
-      const holdThreadLoaded = (input: {
-        readonly providerSessionId: ProviderSessionId;
-        readonly expectedRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
-        readonly threadId: ThreadId;
-        readonly providerThread: OrchestrationV2ProviderThread;
-      }) =>
-        Effect.gen(function* () {
+      const holdThreadLoaded = Effect.fn("ProviderSessionManager.holdThreadLoaded")(
+        function* (input: {
+          readonly providerSessionId: ProviderSessionId;
+          readonly expectedRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
+          readonly threadId: ThreadId;
+          readonly providerThread: OrchestrationV2ProviderThread;
+        }) {
           const entry = (yield* Ref.get(sessions)).get(sessionKey(input.providerSessionId));
           if (
             entry === undefined ||
@@ -1671,14 +1673,15 @@ export const layerWithOptions = (
             }),
           );
           yield* cancelIdleFiber(previous?.fiber ?? null);
-        });
+        },
+      );
 
-      const scheduleThreadUnload = (
-        providerSessionId: ProviderSessionId,
-        expectedRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
-        providerThreadId: ProviderThreadId,
-      ) =>
-        Effect.gen(function* () {
+      const scheduleThreadUnload = Effect.fn("ProviderSessionManager.scheduleThreadUnload")(
+        function* (
+          providerSessionId: ProviderSessionId,
+          expectedRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
+          providerThreadId: ProviderThreadId,
+        ) {
           const entry = (yield* Ref.get(sessions)).get(sessionKey(providerSessionId));
           if (
             entry === undefined ||
@@ -1711,15 +1714,16 @@ export const layerWithOptions = (
           yield* cancelIdleFiber(
             previous?.generation === pending.generation ? previous.fiber : fiber,
           );
-        });
+        },
+      );
 
-      const unloadIdleThread = (input: {
-        readonly providerSessionId: ProviderSessionId;
-        readonly expectedRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
-        readonly threadId: ThreadId;
-        readonly generation: number;
-      }): Effect.Effect<void> =>
-        Effect.gen(function* () {
+      const unloadIdleThread = Effect.fn("ProviderSessionManager.unloadIdleThread")(
+        function* (input: {
+          readonly providerSessionId: ProviderSessionId;
+          readonly expectedRuntime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
+          readonly threadId: ThreadId;
+          readonly generation: number;
+        }): Effect.fn.Return<void> {
           const outcome = yield* threadAttachment.withLock(
             threadAttachmentKey(input),
             Effect.gen(function* () {
@@ -1790,7 +1794,8 @@ export const layerWithOptions = (
             yield* Effect.sleep(Duration.millis(idleTimeoutMs));
             return yield* unloadIdleThread(input);
           }
-        });
+        },
+      );
 
       const observeActivity = (
         providerSessionId: ProviderSessionId,
@@ -1844,11 +1849,11 @@ export const layerWithOptions = (
         },
       );
 
-      const requireCurrentRuntime = <A, E, R>(
-        runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
-        effect: Effect.Effect<A, E, R>,
-      ): Effect.Effect<A, E | ProviderAdapter.ProviderAdapterProtocolError, R> =>
-        Effect.gen(function* () {
+      const requireCurrentRuntime = Effect.fn("ProviderSessionManager.requireCurrentRuntime")(
+        function* <A, E, R>(
+          runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
+          effect: Effect.Effect<A, E, R>,
+        ): Effect.fn.Return<A, E | ProviderAdapter.ProviderAdapterProtocolError, R> {
           const current = yield* Ref.get(sessions);
           if (current.get(sessionKey(runtime.providerSessionId))?.runtime !== runtime) {
             return yield* new ProviderAdapter.ProviderAdapterProtocolError({
@@ -1857,7 +1862,8 @@ export const layerWithOptions = (
             });
           }
           return yield* effect;
-        });
+        },
+      );
 
       const decorateRuntime = (
         runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,

@@ -4812,11 +4812,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError(controlReadError(threadId)));
 
-    const getRuntimeRequestById: ProjectionStoreV2Shape["getRuntimeRequestById"] = (
-      threadId,
-      requestId,
-    ) =>
-      Effect.gen(function* () {
+    const getRuntimeRequestById: ProjectionStoreV2Shape["getRuntimeRequestById"] = Effect.fn(
+      "ProjectionStore.getRuntimeRequestById",
+    )(
+      function* (threadId, requestId) {
         const rows = yield* sql<PayloadRow & { readonly thread_id: string }>`
           SELECT thread_id, payload_json FROM orchestration_v2_projection_runtime_requests
           WHERE runtime_request_id = ${requestId}
@@ -4828,38 +4827,48 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               threadId: ThreadId.make(row.thread_id),
               request: yield* decodeRuntimeRequestPayload(row.payload_json),
             };
-      }).pipe(Effect.mapError(controlReadError(threadId)));
+      },
+      (effect, threadId) => effect.pipe(Effect.mapError(controlReadError(threadId))),
+    );
 
-    const getRuntimeRequestByNodeId: ProjectionStoreV2Shape["getRuntimeRequestByNodeId"] = (
-      threadId,
-      nodeId,
-    ) =>
-      Effect.gen(function* () {
-        const rows = yield* sql<PayloadRow>`
+    const getRuntimeRequestByNodeId: ProjectionStoreV2Shape["getRuntimeRequestByNodeId"] =
+      Effect.fn("ProjectionStore.getRuntimeRequestByNodeId")(
+        function* (threadId, nodeId) {
+          const rows = yield* sql<PayloadRow>`
           SELECT payload_json FROM orchestration_v2_projection_runtime_requests WHERE node_id = ${nodeId} LIMIT 1
         `;
-        return rows[0] === undefined
-          ? undefined
-          : yield* decodeRuntimeRequestPayload(rows[0].payload_json);
-      }).pipe(Effect.mapError(controlReadError(threadId)));
+          return rows[0] === undefined
+            ? undefined
+            : yield* decodeRuntimeRequestPayload(rows[0].payload_json);
+        },
+        (effect, threadId) => effect.pipe(Effect.mapError(controlReadError(threadId))),
+      );
 
-    const getNodeById: ProjectionStoreV2Shape["getNodeById"] = (threadId, nodeId) =>
-      Effect.gen(function* () {
+    const getNodeById: ProjectionStoreV2Shape["getNodeById"] = Effect.fn(
+      "ProjectionStore.getNodeById",
+    )(
+      function* (threadId, nodeId) {
         const rows = yield* sql<PayloadRow>`
           SELECT payload_json FROM orchestration_v2_projection_nodes WHERE node_id = ${nodeId}
         `;
         return rows[0] === undefined ? undefined : yield* decodeNodePayload(rows[0].payload_json);
-      }).pipe(Effect.mapError(controlReadError(threadId)));
+      },
+      (effect, threadId) => effect.pipe(Effect.mapError(controlReadError(threadId))),
+    );
 
-    const getTurnItemById: ProjectionStoreV2Shape["getTurnItemById"] = (threadId, itemId) =>
-      Effect.gen(function* () {
+    const getTurnItemById: ProjectionStoreV2Shape["getTurnItemById"] = Effect.fn(
+      "ProjectionStore.getTurnItemById",
+    )(
+      function* (threadId, itemId) {
         const rows = yield* sql<PayloadRow>`
           SELECT payload_json FROM orchestration_v2_projection_turn_items WHERE turn_item_id = ${itemId}
         `;
         return rows[0] === undefined
           ? undefined
           : yield* decodeTurnItemPayload(rows[0].payload_json);
-      }).pipe(Effect.mapError(controlReadError(threadId)));
+      },
+      (effect, threadId) => effect.pipe(Effect.mapError(controlReadError(threadId))),
+    );
 
     const getProviderControlContext: ProjectionStoreV2Shape["getProviderControlContext"] = (
       threadId,

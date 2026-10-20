@@ -45,182 +45,188 @@ function makeExternalDriver(
     metadata: { displayName: name, supportsMultipleInstances: true, hasDefaultInstance: false },
     configSchema,
     defaultConfig: () => Schema.decodeSync(configSchema)({}),
-    create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
-      Effect.gen(function* () {
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const crypto = yield* Crypto.Crypto;
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const hostCwd = yield* HostProcess.WorkingDirectory;
-        const env = yield* mergeProviderInstanceEnvironment(environment);
-        // Explicit values override dangerous ambient DSH policy. The installed profile must also be trusted.
-        const processEnv: NodeJS.ProcessEnv =
-          kind === "dsh"
-            ? {
-                ...env,
-                DSH_PERMISSION_MODE: "workspace-write",
-                DSH_TELEMETRY_DISABLED: "1",
-                ...(config.homePath ? { DSH_HOME: config.homePath } : {}),
-              }
-            : { ...env, ...(config.homePath ? { MINIMAX_DATA_DIR: config.homePath } : {}) };
-        const homeKey = (
-          kind === "dsh"
-            ? ["DSH_HOME", "HOME", "USERPROFILE"]
-            : ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "HOME", "USERPROFILE"]
-        ).find((key) => processEnv[key] !== undefined);
-        const home = homeKey === undefined ? "" : processEnv[homeKey]!;
-        const continuationIdentity = defaultProviderContinuationIdentity({
-          driverKind: provider,
-          instanceId,
-        });
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
-        const openRuntime = (
-          cwd: string,
-          scope: Scope.Closeable,
-          resume?: string,
-          canonicalHome?: string,
-          transport?: Pick<
-            AcpSessionRuntime.AcpSessionRuntimeOptions,
-            "onOutgoingResponse" | "onOutgoingResponseFailure" | "onTermination"
-          >,
-        ) =>
-          AcpSessionRuntime.make({
-            ...transport,
-            spawn: {
-              command: config.binaryPath,
-              args: kind === "mcode" ? ["acp"] : ["--profile", "opent3code"],
-              cwd,
-              env:
-                canonicalHome === undefined || homeKey === undefined
-                  ? processEnv
-                  : { ...processEnv, [homeKey]: canonicalHome },
-            },
+    create: Effect.fn("ExternalAcpDriver.create")(function* ({
+      instanceId,
+      displayName,
+      accentColor,
+      environment,
+      enabled,
+      config,
+    }) {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const crypto = yield* Crypto.Crypto;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const hostCwd = yield* HostProcess.WorkingDirectory;
+      const env = yield* mergeProviderInstanceEnvironment(environment);
+      // Explicit values override dangerous ambient DSH policy. The installed profile must also be trusted.
+      const processEnv: NodeJS.ProcessEnv =
+        kind === "dsh"
+          ? {
+              ...env,
+              DSH_PERMISSION_MODE: "workspace-write",
+              DSH_TELEMETRY_DISABLED: "1",
+              ...(config.homePath ? { DSH_HOME: config.homePath } : {}),
+            }
+          : { ...env, ...(config.homePath ? { MINIMAX_DATA_DIR: config.homePath } : {}) };
+      const homeKey = (
+        kind === "dsh"
+          ? ["DSH_HOME", "HOME", "USERPROFILE"]
+          : ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR", "HOME", "USERPROFILE"]
+      ).find((key) => processEnv[key] !== undefined);
+      const home = homeKey === undefined ? "" : processEnv[homeKey]!;
+      const continuationIdentity = defaultProviderContinuationIdentity({
+        driverKind: provider,
+        instanceId,
+      });
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const now = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+      const openRuntime = (
+        cwd: string,
+        scope: Scope.Closeable,
+        resume?: string,
+        canonicalHome?: string,
+        transport?: Pick<
+          AcpSessionRuntime.AcpSessionRuntimeOptions,
+          "onOutgoingResponse" | "onOutgoingResponseFailure" | "onTermination"
+        >,
+      ) =>
+        AcpSessionRuntime.make({
+          ...transport,
+          spawn: {
+            command: config.binaryPath,
+            args: kind === "mcode" ? ["acp"] : ["--profile", "opent3code"],
             cwd,
-            clientInfo: { name: "opent3code", version: "0.1.0-alpha.1" },
-            ...(resume ? { resumeSessionId: resume, resumeMethod: "resume" as const } : {}),
-            authenticateOnAuthRequired: false,
-            cancelBehavior: "wait-for-prompt",
-            cancelTimeout: "15 seconds",
-          }).pipe(
-            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-            Effect.provideService(Crypto.Crypto, crypto),
-            Effect.provideService(Scope.Scope, scope),
-          );
-        const orchestrationAdapter = makeExternalAcpAdapterV2({
-          driver: provider,
-          instanceId,
-          enabled,
-          home,
-          homePath: config.homePath,
-          fileSystem: fs,
-          path,
-          crypto,
-          idAllocator,
-          openRuntime,
-        });
-        const snapshot: ServerProvider = {
-          instanceId,
-          driver: provider,
-          displayName: displayName ?? name,
-          ...(accentColor ? { accentColor } : {}),
-          continuation: { groupKey: continuationIdentity.continuationKey },
-          badgeLabel: "Preview",
-          enabled,
-          installed: false,
-          version: null,
-          status: enabled ? "warning" : "disabled",
-          auth: { status: "unknown" },
-          checkedAt: yield* now,
-          message:
-            "Refresh to probe the official CLI. Supervised text sessions only; CLI login is managed outside OpenT3Code.",
-          models: [
-            {
-              slug: "cli-default",
-              name: "CLI configured model",
-              isDefault: true,
-              isCustom: false,
-              capabilities: {},
-            },
-          ],
-          slashCommands: [],
-          skills: [],
-          supportsTextGeneration: false,
-          supportsConversationRollback: false,
-          showInteractionModeToggle: false,
-          requiresNewThreadForModelChange: true,
-        };
-        const state = yield* SubscriptionRef.make(snapshot);
-        const refresh = Effect.gen(function* () {
-          if (!enabled) return yield* SubscriptionRef.get(state);
-          const probe = Effect.scoped(
-            Effect.gen(function* () {
-              const scope = yield* Scope.make();
-              yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-              const runtime = yield* openRuntime(hostCwd, scope);
-              return yield* runtime.initialize();
-            }),
-          ).pipe(Effect.timeout("20 seconds"));
-          const checkedAt = yield* now;
-          const next = yield* probe.pipe(
-            Effect.match({
-              onFailure: () => ({
-                ...snapshot,
-                checkedAt,
-                status: "error" as const,
-                message:
-                  "Official ACP CLI unavailable. Check the binary, Node version, and the DSH opent3code profile installation.",
-              }),
-              onSuccess: (result) => ({
-                ...snapshot,
-                checkedAt,
-                installed: true,
-                version: result.agentInfo?.version ?? null,
-                status: "ready" as const,
-                message:
-                  "ACP handshake succeeded; account authentication and model availability are not verified by this probe.",
-              }),
-            }),
-          );
-          yield* SubscriptionRef.set(state, next);
-          return next;
-        });
-        // Only opted-in instances are probed, scoped to the provider's lifecycle.
-        if (enabled) yield* refresh;
-        const unsupportedText = (operation: string) =>
-          Effect.fail(
-            new TextGenerationError({
-              operation,
-              detail: `${name} preview does not provide background text generation; select another provider for titles and commit messages.`,
-            }),
-          );
-        return {
-          instanceId,
-          driverKind: provider,
-          continuationIdentity,
-          displayName,
-          accentColor,
-          enabled,
-          orchestrationAdapter,
-          snapshot: {
-            getSnapshot: SubscriptionRef.get(state),
-            refresh,
-            streamChanges: SubscriptionRef.changes(state),
-            applyUsageLimits: () => Effect.void,
-            resolveMaintenance: () =>
-              Effect.succeed(
-                makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
-              ),
+            env:
+              canonicalHome === undefined || homeKey === undefined
+                ? processEnv
+                : { ...processEnv, [homeKey]: canonicalHome },
           },
-          textGeneration: {
-            generateCommitMessage: () => unsupportedText("generateCommitMessage"),
-            generatePrContent: () => unsupportedText("generatePrContent"),
-            generateBranchName: () => unsupportedText("generateBranchName"),
-            generateThreadTitle: () => unsupportedText("generateThreadTitle"),
-            generateReviewGuide: () => unsupportedText("generateReviewGuide"),
+          cwd,
+          clientInfo: { name: "opent3code", version: "0.1.0-alpha.1" },
+          ...(resume ? { resumeSessionId: resume, resumeMethod: "resume" as const } : {}),
+          authenticateOnAuthRequired: false,
+          cancelBehavior: "wait-for-prompt",
+          cancelTimeout: "15 seconds",
+        }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.provideService(Scope.Scope, scope),
+        );
+      const orchestrationAdapter = makeExternalAcpAdapterV2({
+        driver: provider,
+        instanceId,
+        enabled,
+        home,
+        homePath: config.homePath,
+        fileSystem: fs,
+        path,
+        crypto,
+        idAllocator,
+        openRuntime,
+      });
+      const snapshot: ServerProvider = {
+        instanceId,
+        driver: provider,
+        displayName: displayName ?? name,
+        ...(accentColor ? { accentColor } : {}),
+        continuation: { groupKey: continuationIdentity.continuationKey },
+        badgeLabel: "Preview",
+        enabled,
+        installed: false,
+        version: null,
+        status: enabled ? "warning" : "disabled",
+        auth: { status: "unknown" },
+        checkedAt: yield* now,
+        message:
+          "Refresh to probe the official CLI. Supervised text sessions only; CLI login is managed outside OpenT3Code.",
+        models: [
+          {
+            slug: "cli-default",
+            name: "CLI configured model",
+            isDefault: true,
+            isCustom: false,
+            capabilities: {},
           },
-        };
-      }),
+        ],
+        slashCommands: [],
+        skills: [],
+        supportsTextGeneration: false,
+        supportsConversationRollback: false,
+        showInteractionModeToggle: false,
+        requiresNewThreadForModelChange: true,
+      };
+      const state = yield* SubscriptionRef.make(snapshot);
+      const refresh = Effect.gen(function* () {
+        if (!enabled) return yield* SubscriptionRef.get(state);
+        const probe = Effect.scoped(
+          Effect.gen(function* () {
+            const scope = yield* Scope.make();
+            yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+            const runtime = yield* openRuntime(hostCwd, scope);
+            return yield* runtime.initialize();
+          }),
+        ).pipe(Effect.timeout("20 seconds"));
+        const checkedAt = yield* now;
+        const next = yield* probe.pipe(
+          Effect.match({
+            onFailure: () => ({
+              ...snapshot,
+              checkedAt,
+              status: "error" as const,
+              message:
+                "Official ACP CLI unavailable. Check the binary, Node version, and the DSH opent3code profile installation.",
+            }),
+            onSuccess: (result) => ({
+              ...snapshot,
+              checkedAt,
+              installed: true,
+              version: result.agentInfo?.version ?? null,
+              status: "ready" as const,
+              message:
+                "ACP handshake succeeded; account authentication and model availability are not verified by this probe.",
+            }),
+          }),
+        );
+        yield* SubscriptionRef.set(state, next);
+        return next;
+      });
+      // Only opted-in instances are probed, scoped to the provider's lifecycle.
+      if (enabled) yield* refresh;
+      const unsupportedText = (operation: string) =>
+        Effect.fail(
+          new TextGenerationError({
+            operation,
+            detail: `${name} preview does not provide background text generation; select another provider for titles and commit messages.`,
+          }),
+        );
+      return {
+        instanceId,
+        driverKind: provider,
+        continuationIdentity,
+        displayName,
+        accentColor,
+        enabled,
+        orchestrationAdapter,
+        snapshot: {
+          getSnapshot: SubscriptionRef.get(state),
+          refresh,
+          streamChanges: SubscriptionRef.changes(state),
+          applyUsageLimits: () => Effect.void,
+          resolveMaintenance: () =>
+            Effect.succeed(
+              makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
+            ),
+        },
+        textGeneration: {
+          generateCommitMessage: () => unsupportedText("generateCommitMessage"),
+          generatePrContent: () => unsupportedText("generatePrContent"),
+          generateBranchName: () => unsupportedText("generateBranchName"),
+          generateThreadTitle: () => unsupportedText("generateThreadTitle"),
+          generateReviewGuide: () => unsupportedText("generateReviewGuide"),
+        },
+      };
+    }),
   };
 }
 export const MCodeDriver = makeExternalDriver("mcode", MCodeSettings);

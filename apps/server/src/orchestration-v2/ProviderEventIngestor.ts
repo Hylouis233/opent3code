@@ -750,12 +750,13 @@ export const layer: Layer.Layer<
           ),
       );
 
-    const publish = (
-      input: IngestInput,
-      events: ReadonlyArray<OrchestrationV2DomainEvent>,
-      guardPendingUserInputCancellations = true,
-    ) =>
-      Effect.gen(function* () {
+    const publish =
+      /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
+      Effect.fnUntraced(function* (
+        input: IngestInput,
+        events: ReadonlyArray<OrchestrationV2DomainEvent>,
+        guardPendingUserInputCancellations = true,
+      ) {
         if (events.length === 0) return [];
         if (input.writeIfProviderThreadOwner !== undefined) {
           return (yield* eventSink.writeIfProviderThreadOwner({
@@ -1190,201 +1191,209 @@ export const layer: Layer.Layer<
         }
       },
       normalize,
-      ingestNormalized: (input) =>
-        Effect.gen(function* () {
-          if (lifetimes.sessionId(input.runtimeLifetime) !== input.providerSessionId) return [];
-          const requestId = linkedRequestId(input.event);
-          if (requestId !== undefined) return yield* ingestRequestGroup(input, requestId);
-          const events = yield* normalize(input);
-          // Turn-terminal normalization may cancel user inputs. Only the
-          // originating lifetime may contribute those mutable artifact groups.
-          const ownedRequestIds = new Set(
-            events.flatMap((event) =>
-              event.type === "runtime-request.updated" &&
-              lifetimes.group(input.runtimeLifetime, event.payload.id) !== undefined
-                ? [event.payload.id]
-                : [],
-            ),
-          );
-          const cancellationEvents: Array<OrchestrationV2StoredEvent> = [];
-          for (const requestEvent of events) {
-            if (
-              requestEvent.type !== "runtime-request.updated" ||
-              !ownedRequestIds.has(requestEvent.payload.id)
-            )
-              continue;
-            const group = lifetimes.group(input.runtimeLifetime, requestEvent.payload.id)!;
-            const groupEvents = events.filter(
-              (event) =>
-                event === requestEvent ||
-                (event.type === "node.updated" &&
-                  event.payload.runtimeRequestId === group.requestId) ||
-                (event.type === "turn-item.updated" &&
-                  (event.payload.type === "approval_request" ||
-                    event.payload.type === "user_input_request") &&
-                  event.payload.requestId === group.requestId),
-            );
-            const result = yield* lifetimes.lifecycle.withLifetimeWrite(
-              input.runtimeLifetime,
-              eventSink.writeIfRuntimeRequestCurrent({
-                threadId: group.threadId,
-                expectedRequest: { ...requestEvent.payload, status: "pending" },
-                events: groupEvents,
-              }),
-            );
-            cancellationEvents.push(...result.storedEvents);
-          }
-          const filtered = events.filter(
-            (event) =>
-              event.type !== "runtime-request.updated" &&
-              !(event.type === "node.updated" && event.payload.runtimeRequestId !== null) &&
-              !(
-                event.type === "turn-item.updated" &&
-                (event.payload.type === "approval_request" ||
-                  event.payload.type === "user_input_request")
+      ingestNormalized:
+        /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
+        Effect.fnUntraced(
+          function* (input) {
+            if (lifetimes.sessionId(input.runtimeLifetime) !== input.providerSessionId) return [];
+            const requestId = linkedRequestId(input.event);
+            if (requestId !== undefined) return yield* ingestRequestGroup(input, requestId);
+            const events = yield* normalize(input);
+            // Turn-terminal normalization may cancel user inputs. Only the
+            // originating lifetime may contribute those mutable artifact groups.
+            const ownedRequestIds = new Set(
+              events.flatMap((event) =>
+                event.type === "runtime-request.updated" &&
+                lifetimes.group(input.runtimeLifetime, event.payload.id) !== undefined
+                  ? [event.payload.id]
+                  : [],
               ),
-          );
-          if (input.event.type === "provider_session.updated") {
-            return (
-              (yield* lifetimes.lifecycle.withSessionWrite(
-                input.runtimeLifetime,
-                Effect.suspend(() =>
-                  lifetimes.isActive(input.runtimeLifetime)
-                    ? publish(input, filtered)
-                    : Effect.succeed([]),
-                ),
-              )) ?? []
             );
-          }
-          // Ordinary transcript updates remain allowed after retirement, but
-          // may not steal an identity already assigned to a request artifact.
-          if (input.event.type === "node.updated" || input.event.type === "turn_item.updated") {
-            return yield* lifetimes.withAdmission(
-              Effect.gen(function* () {
-                if (input.event.type === "node.updated") {
-                  const existing = yield* projections.getNodeById(
-                    input.event.node.threadId,
-                    input.event.node.id,
-                  );
-                  if (existing?.runtimeRequestId != null) return [];
-                  if (lifetimes.nodeRequestId(input.event.node.id) !== undefined) return [];
-                  if (existing === undefined) {
-                    const reservation = yield* projections.getRuntimeRequestByNodeId(
+            const cancellationEvents: Array<OrchestrationV2StoredEvent> = [];
+            for (const requestEvent of events) {
+              if (
+                requestEvent.type !== "runtime-request.updated" ||
+                !ownedRequestIds.has(requestEvent.payload.id)
+              )
+                continue;
+              const group = lifetimes.group(input.runtimeLifetime, requestEvent.payload.id)!;
+              const groupEvents = events.filter(
+                (event) =>
+                  event === requestEvent ||
+                  (event.type === "node.updated" &&
+                    event.payload.runtimeRequestId === group.requestId) ||
+                  (event.type === "turn-item.updated" &&
+                    (event.payload.type === "approval_request" ||
+                      event.payload.type === "user_input_request") &&
+                    event.payload.requestId === group.requestId),
+              );
+              const result = yield* lifetimes.lifecycle.withLifetimeWrite(
+                input.runtimeLifetime,
+                eventSink.writeIfRuntimeRequestCurrent({
+                  threadId: group.threadId,
+                  expectedRequest: { ...requestEvent.payload, status: "pending" },
+                  events: groupEvents,
+                }),
+              );
+              cancellationEvents.push(...result.storedEvents);
+            }
+            const filtered = events.filter(
+              (event) =>
+                event.type !== "runtime-request.updated" &&
+                !(event.type === "node.updated" && event.payload.runtimeRequestId !== null) &&
+                !(
+                  event.type === "turn-item.updated" &&
+                  (event.payload.type === "approval_request" ||
+                    event.payload.type === "user_input_request")
+                ),
+            );
+            if (input.event.type === "provider_session.updated") {
+              return (
+                (yield* lifetimes.lifecycle.withSessionWrite(
+                  input.runtimeLifetime,
+                  Effect.suspend(() =>
+                    lifetimes.isActive(input.runtimeLifetime)
+                      ? publish(input, filtered)
+                      : Effect.succeed([]),
+                  ),
+                )) ?? []
+              );
+            }
+            // Ordinary transcript updates remain allowed after retirement, but
+            // may not steal an identity already assigned to a request artifact.
+            if (input.event.type === "node.updated" || input.event.type === "turn_item.updated") {
+              return yield* lifetimes.withAdmission(
+                Effect.gen(function* () {
+                  if (input.event.type === "node.updated") {
+                    const existing = yield* projections.getNodeById(
                       input.event.node.threadId,
                       input.event.node.id,
                     );
-                    if (reservation !== undefined) return [];
+                    if (existing?.runtimeRequestId != null) return [];
+                    if (lifetimes.nodeRequestId(input.event.node.id) !== undefined) return [];
+                    if (existing === undefined) {
+                      const reservation = yield* projections.getRuntimeRequestByNodeId(
+                        input.event.node.threadId,
+                        input.event.node.id,
+                      );
+                      if (reservation !== undefined) return [];
+                    }
+                  } else if (input.event.type === "turn_item.updated") {
+                    const existing = yield* projections.getTurnItemById(
+                      input.event.turnItem.threadId,
+                      input.event.turnItem.id,
+                    );
+                    if (
+                      existing?.type === "approval_request" ||
+                      existing?.type === "user_input_request"
+                    )
+                      return [];
                   }
-                } else if (input.event.type === "turn_item.updated") {
-                  const existing = yield* projections.getTurnItemById(
-                    input.event.turnItem.threadId,
-                    input.event.turnItem.id,
-                  );
-                  if (
-                    existing?.type === "approval_request" ||
-                    existing?.type === "user_input_request"
-                  )
-                    return [];
-                }
-                return yield* publish(input, filtered);
-              }),
-            );
-          }
-          return [...cancellationEvents, ...(yield* publish(input, filtered))];
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderEventPublishError({
-                providerSessionId: input.providerSessionId,
-                eventCount: 1,
-                cause,
-              }),
-          ),
-          Effect.flatMap((storedEvents) =>
-            Effect.gen(function* () {
-              if (input.event.type !== "app_thread.created") return storedEvents;
-              const created = storedEvents.find((stored) => stored.event.type === "thread.created");
-              if (created?.event.type !== "thread.created") return storedEvents;
-              const child = created.event.payload;
-              if (
-                child.worktreePath === null ||
-                child.branch === null ||
-                !isTemporaryWorktreeBranch(child.branch)
-              )
-                return storedEvents;
-              // Git renames before scanning committed threads. If that scan missed this
-              // creation, HEAD already has the new name, even if the parent moved away.
-              const branch = yield* git.resolveBranchName(child.worktreePath, "HEAD");
-              if (branch === null || branch === child.branch) return storedEvents;
-              const now = yield* DateTime.now;
-              const event = yield* makeDomainEvent(input, {
-                type: "thread.metadata-updated",
-                threadId: child.id,
-                payload: { ...child, branch, updatedAt: now },
-                occurredAt: now,
-              });
-              const synced = yield* eventSink.write({ events: [event] });
-              return [...storedEvents, ...synced];
-            }).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("Native thread worktree branch recheck failed", {
-                  threadId:
-                    input.event.type === "app_thread.created"
-                      ? input.event.appThread.id
-                      : input.threadId,
-                  cause,
-                }).pipe(Effect.as(storedEvents)),
-              ),
-            ),
-          ),
-          Effect.flatMap((storedEvents) =>
-            storedEvents.length === 0 || input.event.type !== "subagent.updated"
-              ? Effect.succeed(storedEvents)
-              : syncSubagentThreadModel(input, input.event.subagent).pipe(
-                  Effect.map((synced) => [...storedEvents, ...synced]),
-                  Effect.mapError(
-                    (cause) =>
-                      new ProviderEventPublishError({
-                        providerSessionId: input.providerSessionId,
-                        eventCount: 1,
-                        cause,
-                      }),
-                  ),
-                ),
-          ),
-          Effect.tap((storedEvents) =>
-            Effect.gen(function* () {
-              if (storedEvents.length === 0 || input.event.type !== "provider_turn.updated") return;
-              const providerTurn = input.event.providerTurn;
-              if (
-                providerTurn.status !== "completed" &&
-                providerTurn.status !== "failed" &&
-                providerTurn.status !== "interrupted" &&
-                providerTurn.status !== "cancelled"
-              )
-                return;
-              const key = `${input.providerInstanceId}:${providerTurn.id}`;
-              if (completedTurnAnalytics.has(key)) return;
-              completedTurnAnalytics.add(key);
-              if (completedTurnAnalytics.size > 4096) {
-                const oldest = completedTurnAnalytics.values().next().value;
-                if (oldest !== undefined) completedTurnAnalytics.delete(oldest);
-              }
-              yield* analytics.record(
-                providerTurnAnalyticsProperties({
-                  driver: input.event.driver,
-                  providerTurn,
-                  ...(input.analyticsContext === undefined
-                    ? {}
-                    : { context: input.analyticsContext }),
+                  return yield* publish(input, filtered);
                 }),
               );
-            }),
-          ),
-          (effect) =>
-            input.event.type === "app_thread.created"
-              ? threadCommands.withLock(input.event.appThread.id, effect)
-              : effect,
+            }
+            return [...cancellationEvents, ...(yield* publish(input, filtered))];
+          },
+          (effect, input) =>
+            effect.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderEventPublishError({
+                    providerSessionId: input.providerSessionId,
+                    eventCount: 1,
+                    cause,
+                  }),
+              ),
+              Effect.flatMap((storedEvents) =>
+                Effect.gen(function* () {
+                  if (input.event.type !== "app_thread.created") return storedEvents;
+                  const created = storedEvents.find(
+                    (stored) => stored.event.type === "thread.created",
+                  );
+                  if (created?.event.type !== "thread.created") return storedEvents;
+                  const child = created.event.payload;
+                  if (
+                    child.worktreePath === null ||
+                    child.branch === null ||
+                    !isTemporaryWorktreeBranch(child.branch)
+                  )
+                    return storedEvents;
+                  // Git renames before scanning committed threads. If that scan missed this
+                  // creation, HEAD already has the new name, even if the parent moved away.
+                  const branch = yield* git.resolveBranchName(child.worktreePath, "HEAD");
+                  if (branch === null || branch === child.branch) return storedEvents;
+                  const now = yield* DateTime.now;
+                  const event = yield* makeDomainEvent(input, {
+                    type: "thread.metadata-updated",
+                    threadId: child.id,
+                    payload: { ...child, branch, updatedAt: now },
+                    occurredAt: now,
+                  });
+                  const synced = yield* eventSink.write({ events: [event] });
+                  return [...storedEvents, ...synced];
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("Native thread worktree branch recheck failed", {
+                      threadId:
+                        input.event.type === "app_thread.created"
+                          ? input.event.appThread.id
+                          : input.threadId,
+                      cause,
+                    }).pipe(Effect.as(storedEvents)),
+                  ),
+                ),
+              ),
+              Effect.flatMap((storedEvents) =>
+                storedEvents.length === 0 || input.event.type !== "subagent.updated"
+                  ? Effect.succeed(storedEvents)
+                  : syncSubagentThreadModel(input, input.event.subagent).pipe(
+                      Effect.map((synced) => [...storedEvents, ...synced]),
+                      Effect.mapError(
+                        (cause) =>
+                          new ProviderEventPublishError({
+                            providerSessionId: input.providerSessionId,
+                            eventCount: 1,
+                            cause,
+                          }),
+                      ),
+                    ),
+              ),
+              Effect.tap((storedEvents) =>
+                Effect.gen(function* () {
+                  if (storedEvents.length === 0 || input.event.type !== "provider_turn.updated")
+                    return;
+                  const providerTurn = input.event.providerTurn;
+                  if (
+                    providerTurn.status !== "completed" &&
+                    providerTurn.status !== "failed" &&
+                    providerTurn.status !== "interrupted" &&
+                    providerTurn.status !== "cancelled"
+                  )
+                    return;
+                  const key = `${input.providerInstanceId}:${providerTurn.id}`;
+                  if (completedTurnAnalytics.has(key)) return;
+                  completedTurnAnalytics.add(key);
+                  if (completedTurnAnalytics.size > 4096) {
+                    const oldest = completedTurnAnalytics.values().next().value;
+                    if (oldest !== undefined) completedTurnAnalytics.delete(oldest);
+                  }
+                  yield* analytics.record(
+                    providerTurnAnalyticsProperties({
+                      driver: input.event.driver,
+                      providerTurn,
+                      ...(input.analyticsContext === undefined
+                        ? {}
+                        : { context: input.analyticsContext }),
+                    }),
+                  );
+                }),
+              ),
+              (effect) =>
+                input.event.type === "app_thread.created"
+                  ? threadCommands.withLock(input.event.appThread.id, effect)
+                  : effect,
+            ),
         ),
     });
   }),

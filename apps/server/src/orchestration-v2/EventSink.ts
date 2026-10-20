@@ -393,23 +393,25 @@ const layerBase: Layer.Layer<
     // Request IDs are globally claimed at admission. The remaining fields
     // identify the exact request observed by the caller, without relying on
     // clock ordering. This read must stay inside the event-write transaction.
-    const runtimeRequestIsCurrent = (threadId: ThreadId, expected: OrchestrationV2RuntimeRequest) =>
-      Effect.gen(function* () {
-        const current = yield* projectionStore.getRuntimeRequest(threadId, expected.id);
-        return (
-          current !== undefined &&
-          current.id === expected.id &&
-          current.nodeId === expected.nodeId &&
-          current.providerTurnId === expected.providerTurnId &&
-          current.kind === expected.kind &&
-          current.status === expected.status &&
-          current.responseCapability.type === expected.responseCapability.type &&
-          (expected.responseCapability.type !== "live" ||
-            (current.responseCapability.type === "live" &&
-              current.responseCapability.providerSessionId ===
-                expected.responseCapability.providerSessionId))
-        );
-      });
+    const runtimeRequestIsCurrent = Effect.fn("EventSink.runtimeRequestIsCurrent")(function* (
+      threadId: ThreadId,
+      expected: OrchestrationV2RuntimeRequest,
+    ) {
+      const current = yield* projectionStore.getRuntimeRequest(threadId, expected.id);
+      return (
+        current !== undefined &&
+        current.id === expected.id &&
+        current.nodeId === expected.nodeId &&
+        current.providerTurnId === expected.providerTurnId &&
+        current.kind === expected.kind &&
+        current.status === expected.status &&
+        current.responseCapability.type === expected.responseCapability.type &&
+        (expected.responseCapability.type !== "live" ||
+          (current.responseCapability.type === "live" &&
+            current.responseCapability.providerSessionId ===
+              expected.responseCapability.providerSessionId))
+      );
+    });
 
     const writeIfRuntimeRequestCurrentEffect = Effect.fn(
       "orchestrationV2.EventSink.writeIfRuntimeRequestCurrent",
