@@ -104,6 +104,8 @@ jobs:
         run: vp check
       - name: Typecheck
         run: vp run typecheck
+      - name: Install Chromium for web browser tests
+        run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
       - name: Test application workspaces
         run: vp run test
       - name: Build desktop pipeline
