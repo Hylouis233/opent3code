@@ -2158,7 +2158,7 @@ layer("ProviderEventIngestorV2", (it) => {
         const now = yield* DateTime.now;
         const eventSink = yield* EventSink.EventSinkV2;
         const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-        const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+        const ingestor = yield* testIngestor;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
         const rootEvent = yield* threadCreatedEvent(now);
         if (rootEvent.type !== "thread.created") throw new Error("Expected thread fixture");
