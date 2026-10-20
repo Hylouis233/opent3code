@@ -1,5 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  ORCHESTRATION_PROTOCOL_VERSION,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -192,6 +197,39 @@ describe("provider compatibility", () => {
     assert.strictEqual(
       resolveProviderCompatibility(policies, opencode, "2.0.18", "0.0.45")?.status,
       "broken",
+    );
+  });
+
+  it("keeps fork-only protocol tags on bundled OpenCode and Pi policies", () => {
+    // Adapter generations are split by T3 Code range in the manifest: OpenCode V1
+    // (< 0.0.46) runs protocol 1, while OpenCode V2 and Pi run the current protocol.
+    const tagged = (ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility ?? [])
+      .filter((entry) => entry.driver === "opencode" || entry.driver === "pi")
+      .map((entry) => ({
+        driver: entry.driver,
+        t3CodeRange: entry.t3CodeRange,
+        orchestrationProtocolVersion: entry.orchestrationProtocolVersion,
+      }));
+    assert.deepStrictEqual(
+      tagged,
+      [
+        { driver: "opencode", t3CodeRange: ">=0.0.42 <0.0.46", orchestrationProtocolVersion: 1 },
+        {
+          driver: "opencode",
+          t3CodeRange: ">=0.0.46",
+          orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+        },
+        {
+          driver: "pi",
+          t3CodeRange: ">=0.0.46",
+          orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+        },
+      ],
+      "apps/server/src/provider/model-manifest.json must tag OpenCode V1 with " +
+        `orchestrationProtocolVersion 1, and OpenCode V2 and Pi with ${ORCHESTRATION_PROTOCOL_VERSION}. ` +
+        "The tag is fork-only and upstream's manifest lacks it, so taking upstream's file during a " +
+        "sync silently drops it and leaves that generation without any compatibility policy. " +
+        "Restore the fork's tags.",
     );
   });
 
