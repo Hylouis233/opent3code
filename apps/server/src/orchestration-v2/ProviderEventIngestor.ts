@@ -333,18 +333,19 @@ export const layer: Layer.Layer<
       BufferedSiblings
     >();
 
-    const makeDomainEvent = (
-      input: ProviderEventIngestInput,
-      payloadInput: {
-        readonly type: OrchestrationV2DomainEvent["type"];
-        readonly payload: OrchestrationV2DomainEvent["payload"];
-        readonly threadId?: ThreadId;
-        readonly runId?: RunId | null;
-        readonly nodeId?: NodeId | null;
-        readonly occurredAt?: DateTime.Utc;
-      },
-    ) =>
-      Effect.gen(function* () {
+    const makeDomainEvent =
+      /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
+      Effect.fnUntraced(function* (
+        input: ProviderEventIngestInput,
+        payloadInput: {
+          readonly type: OrchestrationV2DomainEvent["type"];
+          readonly payload: OrchestrationV2DomainEvent["payload"];
+          readonly threadId?: ThreadId;
+          readonly runId?: RunId | null;
+          readonly nodeId?: NodeId | null;
+          readonly occurredAt?: DateTime.Utc;
+        },
+      ) {
         const threadId = payloadInput.threadId ?? input.threadId;
         const eventId = yield* idAllocator.allocate.event({
           threadId,
@@ -540,207 +541,213 @@ export const layer: Layer.Layer<
       return events;
     });
 
-    const normalize: ProviderEventIngestorV2Shape["normalize"] = (input) =>
-      Effect.gen(function* () {
-        switch (input.event.type) {
-          case "app_thread.created": {
-            const offered = input.event.appThread;
-            const existing = yield* projections.getThread(offered.id).pipe(
-              Effect.catchTags({
-                ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
-              }),
-            );
-            if (
-              existing !== null &&
-              existing.title === offered.title &&
-              modelSelectionsEqual(existing.modelSelection, offered.modelSelection)
-            )
-              return [];
-            const now = yield* DateTime.now;
-            return [
-              yield* makeDomainEvent(input, {
-                type: existing === null ? "thread.created" : "thread.metadata-updated",
-                threadId: offered.id,
-                payload:
-                  existing === null
-                    ? offered
-                    : {
-                        ...existing,
-                        title: offered.title,
-                        modelSelection: offered.modelSelection,
-                        updatedAt: now,
-                      },
-                occurredAt: now,
-              }),
-            ];
-          }
-          case "provider_session.updated":
-            return [
-              yield* makeDomainEvent(input, {
-                type: "provider-session.updated",
-                payload: input.event.providerSession,
-              }),
-            ];
-          case "provider_thread.updated": {
-            const threadId = input.event.providerThread.appThreadId ?? input.threadId;
-            const updated = yield* makeDomainEvent(input, {
-              type: "provider-thread.updated",
-              threadId,
-              payload: input.event.providerThread,
-            });
-            return input.event.retainedNativeTurnIds === undefined
-              ? [updated]
-              : [
-                  updated,
-                  ...(yield* rollBackRewoundRuns(input, {
-                    threadId,
-                    providerThreadId: input.event.providerThread.id,
-                    retainedNativeTurnIds: new Set(input.event.retainedNativeTurnIds),
-                  })),
-                ];
-          }
-          case "provider_turn.updated":
-            return [
-              ...(["completed", "interrupted", "failed", "cancelled"].includes(
-                input.event.providerTurn.status,
+    const normalize: ProviderEventIngestorV2Shape["normalize"] =
+      /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
+      Effect.fnUntraced(
+        function* (input) {
+          switch (input.event.type) {
+            case "app_thread.created": {
+              const offered = input.event.appThread;
+              const existing = yield* projections.getThread(offered.id).pipe(
+                Effect.catchTags({
+                  ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+                }),
+              );
+              if (
+                existing !== null &&
+                (input.event.createOnly === true ||
+                  (existing.title === offered.title &&
+                    modelSelectionsEqual(existing.modelSelection, offered.modelSelection)))
               )
-                ? yield* dismissNativeUserInputs(
-                    input,
-                    input.event.providerTurn.id,
-                    input.event.threadId,
-                  )
-                : []),
-              yield* makeDomainEvent(input, {
-                type: "provider-turn.updated",
-                ...(input.event.threadId === undefined ? {} : { threadId: input.event.threadId }),
-                payload: input.event.providerTurn,
-                nodeId: input.event.providerTurn.nodeId,
-              }),
-            ];
-          case "node.updated":
-            // Adapters send an unchanged node again with each text delta. Compare with the
-            // stored node, not the last one sent, because the server also writes nodes.
-            if (yield* projections.isNodeStored(input.event.node)) return [];
-            return [
-              yield* makeDomainEvent(input, {
-                type: "node.updated",
-                threadId: input.event.node.threadId,
-                payload: input.event.node,
-                runId: input.event.node.runId,
-                nodeId: input.event.node.id,
-              }),
-            ];
-          case "subagent.updated":
-            return [
-              yield* makeDomainEvent(input, {
-                type: "subagent.updated",
-                threadId: input.event.subagent.threadId,
-                payload: input.event.subagent,
-                runId: input.event.subagent.runId,
-                nodeId: input.event.subagent.id,
-              }),
-            ];
-          case "message.updated":
-            return [
-              yield* makeDomainEvent(input, {
-                type: "message.updated",
-                threadId: input.event.message.threadId,
-                payload: input.event.message,
-                runId: input.event.message.runId,
-                nodeId: input.event.message.nodeId,
-              }),
-            ];
-          case "turn_item.updated":
-            return [
-              yield* makeDomainEvent(input, {
-                type: "turn-item.updated",
-                threadId: input.event.turnItem.threadId,
-                payload: boundFileChangeForStorage(
-                  stripUnservedToolOutputImageBytes(input.event.turnItem),
-                ),
-                runId: input.event.turnItem.runId,
-                nodeId: input.event.turnItem.nodeId,
-              }),
-            ];
-          case "runtime_request.updated":
-            return [
-              yield* makeDomainEvent(input, {
-                type: "runtime-request.updated",
-                ...(input.event.threadId === undefined ? {} : { threadId: input.event.threadId }),
-                payload: input.event.runtimeRequest,
-                nodeId: input.event.runtimeRequest.nodeId,
-              }),
-            ];
-          case "plan.updated": {
-            const occurredAt = yield* DateTime.now;
-            const plan = input.event.plan;
-            const previous =
-              plan.kind === "todo_list"
-                ? yield* projections.getPlan(plan.threadId, plan.id)
-                : undefined;
-            const payload =
-              plan.kind === "todo_list"
-                ? withPlanStepDurations(
-                    plan,
-                    previous?.kind === "todo_list" ? previous : undefined,
-                    occurredAt,
-                  )
-                : plan;
-            return [
-              yield* makeDomainEvent(input, {
-                type: "plan.updated",
-                threadId: plan.threadId,
-                payload,
-                runId: plan.runId,
-                nodeId: plan.nodeId,
-                occurredAt,
-              }),
-            ];
-          }
-          case "command_output.delta":
-            // Live output is routed to the command output hub before ingestion.
-            return [];
-          case "turn.terminal":
-            const dismissed = yield* dismissNativeUserInputs(input, input.event.providerTurnId);
-            if (input.event.status !== "failed") {
-              return dismissed;
+                return [];
+              const now = yield* DateTime.now;
+              return [
+                yield* makeDomainEvent(input, {
+                  type: existing === null ? "thread.created" : "thread.metadata-updated",
+                  threadId: offered.id,
+                  payload:
+                    existing === null
+                      ? offered
+                      : {
+                          ...existing,
+                          title: offered.title,
+                          modelSelection: offered.modelSelection,
+                          updatedAt: now,
+                        },
+                  occurredAt: now,
+                }),
+              ];
             }
-            const occurredAt = yield* DateTime.now;
-            const failure = (yield* agentScope.oomKilled(input.threadId))
-              ? { ...input.event.failure, message: "Killed: out of memory.", code: "oom_kill" }
-              : input.event.failure;
-            return [
-              ...dismissed,
-              yield* makeDomainEvent(input, {
-                type: "turn-item.updated",
-                payload: makeProviderFailureTurnItem({
-                  driver: input.event.driver,
-                  threadId: input.threadId,
-                  runId: input.runId ?? null,
-                  nodeId: input.nodeId ?? null,
-                  providerThreadId: input.event.providerThreadId,
-                  providerTurnId: input.event.providerTurnId,
-                  itemOrdinal: input.event.failureItemOrdinal,
-                  failure,
-                  ...(input.event.retry === undefined ? {} : { retry: input.event.retry }),
-                  ...(input.event.retryStartedAt === undefined
-                    ? {}
-                    : { retryStartedAt: input.event.retryStartedAt }),
+            case "provider_session.updated":
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "provider-session.updated",
+                  payload: input.event.providerSession,
+                }),
+              ];
+            case "provider_thread.updated": {
+              const threadId = input.event.providerThread.appThreadId ?? input.threadId;
+              const updated = yield* makeDomainEvent(input, {
+                type: "provider-thread.updated",
+                threadId,
+                payload: input.event.providerThread,
+              });
+              return input.event.retainedNativeTurnIds === undefined
+                ? [updated]
+                : [
+                    updated,
+                    ...(yield* rollBackRewoundRuns(input, {
+                      threadId,
+                      providerThreadId: input.event.providerThread.id,
+                      retainedNativeTurnIds: new Set(input.event.retainedNativeTurnIds),
+                    })),
+                  ];
+            }
+            case "provider_turn.updated":
+              return [
+                ...(["completed", "interrupted", "failed", "cancelled"].includes(
+                  input.event.providerTurn.status,
+                )
+                  ? yield* dismissNativeUserInputs(
+                      input,
+                      input.event.providerTurn.id,
+                      input.event.threadId,
+                    )
+                  : []),
+                yield* makeDomainEvent(input, {
+                  type: "provider-turn.updated",
+                  ...(input.event.threadId === undefined ? {} : { threadId: input.event.threadId }),
+                  payload: input.event.providerTurn,
+                  nodeId: input.event.providerTurn.nodeId,
+                }),
+              ];
+            case "node.updated":
+              // Adapters send an unchanged node again with each text delta. Compare with the
+              // stored node, not the last one sent, because the server also writes nodes.
+              if (yield* projections.isNodeStored(input.event.node)) return [];
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "node.updated",
+                  threadId: input.event.node.threadId,
+                  payload: input.event.node,
+                  runId: input.event.node.runId,
+                  nodeId: input.event.node.id,
+                }),
+              ];
+            case "subagent.updated":
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "subagent.updated",
+                  threadId: input.event.subagent.threadId,
+                  payload: input.event.subagent,
+                  runId: input.event.subagent.runId,
+                  nodeId: input.event.subagent.id,
+                }),
+              ];
+            case "message.updated":
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "message.updated",
+                  threadId: input.event.message.threadId,
+                  payload: input.event.message,
+                  runId: input.event.message.runId,
+                  nodeId: input.event.message.nodeId,
+                }),
+              ];
+            case "turn_item.updated":
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "turn-item.updated",
+                  threadId: input.event.turnItem.threadId,
+                  payload: boundFileChangeForStorage(
+                    stripUnservedToolOutputImageBytes(input.event.turnItem),
+                  ),
+                  runId: input.event.turnItem.runId,
+                  nodeId: input.event.turnItem.nodeId,
+                }),
+              ];
+            case "runtime_request.updated":
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "runtime-request.updated",
+                  ...(input.event.threadId === undefined ? {} : { threadId: input.event.threadId }),
+                  payload: input.event.runtimeRequest,
+                  nodeId: input.event.runtimeRequest.nodeId,
+                }),
+              ];
+            case "plan.updated": {
+              const occurredAt = yield* DateTime.now;
+              const plan = input.event.plan;
+              const previous =
+                plan.kind === "todo_list"
+                  ? yield* projections.getPlan(plan.threadId, plan.id)
+                  : undefined;
+              const payload =
+                plan.kind === "todo_list"
+                  ? withPlanStepDurations(
+                      plan,
+                      previous?.kind === "todo_list" ? previous : undefined,
+                      occurredAt,
+                    )
+                  : plan;
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "plan.updated",
+                  threadId: plan.threadId,
+                  payload,
+                  runId: plan.runId,
+                  nodeId: plan.nodeId,
                   occurredAt,
                 }),
-              }),
-            ];
-        }
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderEventNormalizeError({
-              providerSessionId: input.providerSessionId,
-              threadId: input.threadId,
-              providerEvent: input.event,
-              cause,
-            }),
-        ),
+              ];
+            }
+            case "command_output.delta":
+              // Live output is routed to the command output hub before ingestion.
+              return [];
+            case "turn.terminal":
+              const dismissed = yield* dismissNativeUserInputs(input, input.event.providerTurnId);
+              if (input.event.status !== "failed") {
+                return dismissed;
+              }
+              const occurredAt = yield* DateTime.now;
+              const failure = (yield* agentScope.oomKilled(input.threadId))
+                ? { ...input.event.failure, message: "Killed: out of memory.", code: "oom_kill" }
+                : input.event.failure;
+              return [
+                ...dismissed,
+                yield* makeDomainEvent(input, {
+                  type: "turn-item.updated",
+                  payload: makeProviderFailureTurnItem({
+                    driver: input.event.driver,
+                    threadId: input.threadId,
+                    runId: input.runId ?? null,
+                    nodeId: input.nodeId ?? null,
+                    providerThreadId: input.event.providerThreadId,
+                    providerTurnId: input.event.providerTurnId,
+                    itemOrdinal: input.event.failureItemOrdinal,
+                    failure,
+                    ...(input.event.retry === undefined ? {} : { retry: input.event.retry }),
+                    ...(input.event.retryStartedAt === undefined
+                      ? {}
+                      : { retryStartedAt: input.event.retryStartedAt }),
+                    occurredAt,
+                  }),
+                }),
+              ];
+          }
+        },
+        (effect, input) =>
+          effect.pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderEventNormalizeError({
+                  providerSessionId: input.providerSessionId,
+                  threadId: input.threadId,
+                  providerEvent: input.event,
+                  cause,
+                }),
+            ),
+          ),
       );
 
     const publish = (

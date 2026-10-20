@@ -560,47 +560,51 @@ export const layerWithOptions = (
           ),
         );
 
-      const failSubscribers = (entry: LiveSessionEntry, detail: string) =>
-        Effect.gen(function* () {
-          const error = new ProviderAdapter.ProviderAdapterEventStreamError({
-            driver: entry.runtime.driver,
-            providerSessionId: entry.runtime.providerSessionId,
-            cause: detail,
-          });
-          const subscribers = yield* Ref.getAndSet(entry.eventSubscribers, new Map());
-          yield* Effect.forEach(
-            subscribers.values(),
-            (queue) =>
-              Queue.offer(queue, {
-                type: "failure",
-                cause: Cause.fail(error),
-              }),
-            { discard: true },
-          );
+      const failSubscribers = Effect.fn("ProviderSessionManager.failSubscribers")(function* (
+        entry: LiveSessionEntry,
+        detail: string,
+      ) {
+        const error = new ProviderAdapter.ProviderAdapterEventStreamError({
+          driver: entry.runtime.driver,
+          providerSessionId: entry.runtime.providerSessionId,
+          cause: detail,
         });
+        const subscribers = yield* Ref.getAndSet(entry.eventSubscribers, new Map());
+        yield* Effect.forEach(
+          subscribers.values(),
+          (queue) =>
+            Queue.offer(queue, {
+              type: "failure",
+              cause: Cause.fail(error),
+            }),
+          { discard: true },
+        );
+      });
 
       // Server shutdown interrupts subscribers rather than ending them: a
       // cleanly ended stream without a terminal fails its run, while an
       // interrupted one leaves run settlement to restart recovery.
-      const interruptSubscribers = (entry: LiveSessionEntry) =>
-        Effect.gen(function* () {
+      const interruptSubscribers = Effect.fn("ProviderSessionManager.interruptSubscribers")(
+        function* (entry: LiveSessionEntry) {
           const subscribers = yield* Ref.getAndSet(entry.eventSubscribers, new Map());
           yield* Effect.forEach(
             subscribers.values(),
             (queue) => Queue.clear(queue).pipe(Effect.andThen(Queue.interrupt(queue))),
             { discard: true },
           );
-        });
+        },
+      );
 
       // Server shutdown intentionally clears them; a provider-announced Stop
       // must let consumers drain them before the stream completes.
-      const endSubscribers = (entry: LiveSessionEntry) =>
-        Effect.gen(function* () {
-          const subscribers = yield* Ref.getAndSet(entry.eventSubscribers, new Map());
-          yield* Effect.forEach(subscribers.values(), (queue) => Queue.end(queue), {
-            discard: true,
-          });
+      const endSubscribers = Effect.fn("ProviderSessionManager.endSubscribers")(function* (
+        entry: LiveSessionEntry,
+      ) {
+        const subscribers = yield* Ref.getAndSet(entry.eventSubscribers, new Map());
+        yield* Effect.forEach(subscribers.values(), (queue) => Queue.end(queue), {
+          discard: true,
         });
+      });
 
       const cancelIdleFiber = (fiber: Fiber.Fiber<void, never> | null) =>
         fiber === null ? Effect.void : Fiber.interrupt(fiber).pipe(Effect.ignore);
@@ -798,12 +802,14 @@ export const layerWithOptions = (
       // own on the same provider threads. OpenCode's background subagents run
       // on a server shared by its sessions and can outlive this one, so their
       // roster stays.
-      const readReleasedBackgroundTasks = (input: {
-        readonly entry: LiveSessionEntry;
-        readonly reason: ProviderSessionReleaseReason;
-        readonly detachedThreadId?: ThreadId;
-      }) =>
-        Effect.gen(function* () {
+      const readReleasedBackgroundTasks = Effect.fn(
+        "ProviderSessionManager.readReleasedBackgroundTasks",
+      )(
+        function* (input: {
+          readonly entry: LiveSessionEntry;
+          readonly reason: ProviderSessionReleaseReason;
+          readonly detachedThreadId?: ThreadId;
+        }) {
           if (
             input.reason === "server_shutdown" ||
             input.entry.runtime.backgroundTasksEndWithProcess !== true
@@ -834,14 +840,17 @@ export const layerWithOptions = (
             }
           }
           return released;
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("orchestration-v2.provider-session-release-roster-read-failed", {
-              providerSessionId: input.entry.runtime.providerSessionId,
-              cause,
-            }).pipe(Effect.as([])),
+        },
+        (effect, input) =>
+          effect.pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("orchestration-v2.provider-session-release-roster-read-failed", {
+                providerSessionId: input.entry.runtime.providerSessionId,
+                cause,
+              }).pipe(Effect.as([])),
+            ),
           ),
-        );
+      );
       type ReleasedBackgroundTasks = Effect.Success<
         ReturnType<typeof readReleasedBackgroundTasks>
       >[number];
@@ -999,40 +1008,39 @@ export const layerWithOptions = (
 
       // Scope close can wedge on a misbehaving adapter finalizer (e.g. a
       // provider process that never yields its message stream).
-      const closeScopeWithin = (
+      const closeScopeWithin = Effect.fn("ProviderSessionManager.closeScopeWithin")(function* (
         scope: Scope.Closeable,
         annotations: { readonly providerSessionId?: ProviderSessionId; readonly reason: string },
-      ) =>
-        Effect.gen(function* () {
-          const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
-            Effect.exit,
-            Effect.forkDetach({ startImmediately: true }),
+      ) {
+        const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
+          Effect.exit,
+          Effect.forkDetach({ startImmediately: true }),
+        );
+        const closeExit = yield* Fiber.join(closeFiber).pipe(
+          Effect.timeoutOption(RELEASE_SCOPE_CLOSE_TIMEOUT_MS),
+        );
+        if (Option.isNone(closeExit)) {
+          yield* Effect.logWarning("orchestration-v2.provider-session-scope-close-timeout", {
+            ...annotations,
+            timeoutMs: RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
+          });
+          yield* Fiber.join(closeFiber).pipe(
+            Effect.flatMap((exit) =>
+              Exit.isFailure(exit)
+                ? Effect.logWarning("orchestration-v2.provider-session-scope-close-failed", {
+                    ...annotations,
+                    cause: exit.cause,
+                  })
+                : Effect.logInfo(
+                    "orchestration-v2.provider-session-scope-close-completed-late",
+                    annotations,
+                  ),
+            ),
+            Effect.forkDetach,
           );
-          const closeExit = yield* Fiber.join(closeFiber).pipe(
-            Effect.timeoutOption(RELEASE_SCOPE_CLOSE_TIMEOUT_MS),
-          );
-          if (Option.isNone(closeExit)) {
-            yield* Effect.logWarning("orchestration-v2.provider-session-scope-close-timeout", {
-              ...annotations,
-              timeoutMs: RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
-            });
-            yield* Fiber.join(closeFiber).pipe(
-              Effect.flatMap((exit) =>
-                Exit.isFailure(exit)
-                  ? Effect.logWarning("orchestration-v2.provider-session-scope-close-failed", {
-                      ...annotations,
-                      cause: exit.cause,
-                    })
-                  : Effect.logInfo(
-                      "orchestration-v2.provider-session-scope-close-completed-late",
-                      annotations,
-                    ),
-              ),
-              Effect.forkDetach,
-            );
-          }
-          return closeExit;
-        });
+        }
+        return closeExit;
+      });
 
       const releaseEntry = (input: {
         readonly providerSessionId: ProviderSessionId;
@@ -1797,12 +1805,12 @@ export const layerWithOptions = (
           ),
         );
 
-      const makeEventSubscription = (
-        subscribers: Ref.Ref<
-          ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
-        >,
-      ): Effect.Effect<ProviderAdapter.ProviderAdapterV2EventSubscription> =>
-        Effect.gen(function* () {
+      const makeEventSubscription = Effect.fn("ProviderSessionManager.makeEventSubscription")(
+        function* (
+          subscribers: Ref.Ref<
+            ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
+          >,
+        ): Effect.fn.Return<ProviderAdapter.ProviderAdapterV2EventSubscription> {
           const queue = yield* Queue.unbounded<ProviderSessionEventSignal, Cause.Done>();
           const subscriberId = yield* Ref.getAndUpdate(nextSubscriberId, (value) => value + 1);
           yield* Ref.update(subscribers, (current) => {
@@ -1833,7 +1841,8 @@ export const layerWithOptions = (
             Stream.ensuring(close),
           );
           return { events, close } satisfies ProviderAdapter.ProviderAdapterV2EventSubscription;
-        });
+        },
+      );
 
       const requireCurrentRuntime = <A, E, R>(
         runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
@@ -2060,14 +2069,16 @@ export const layerWithOptions = (
         };
       };
 
-      const persistProviderSessionUpdate = (
-        entry: LiveSessionEntry,
-        event: Extract<
-          ProviderAdapter.ProviderAdapterV2Event,
-          { readonly type: "provider_session.updated" }
-        >,
-      ) =>
-        Effect.gen(function* () {
+      const persistProviderSessionUpdate = Effect.fn(
+        "ProviderSessionManager.persistProviderSessionUpdate",
+      )(
+        function* (
+          entry: LiveSessionEntry,
+          event: Extract<
+            ProviderAdapter.ProviderAdapterV2Event,
+            { readonly type: "provider_session.updated" }
+          >,
+        ) {
           const current = (yield* Ref.get(sessions)).get(
             sessionKey(entry.runtime.providerSessionId),
           );
@@ -2081,14 +2092,17 @@ export const layerWithOptions = (
             type: "provider-session.updated",
             payload: event.providerSession,
           });
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("orchestration-v2.driver-session.status-persist-failed", {
-              providerSessionId: entry.runtime.providerSessionId,
-              cause,
-            }),
+        },
+        (effect, entry, _event) =>
+          effect.pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("orchestration-v2.driver-session.status-persist-failed", {
+                providerSessionId: entry.runtime.providerSessionId,
+                cause,
+              }),
+            ),
           ),
-        );
+      );
 
       const startEventPump = (entry: LiveSessionEntry) => {
         let stoppedByProvider = false;
@@ -2136,6 +2150,25 @@ export const layerWithOptions = (
               ),
               Effect.andThen(
                 Effect.gen(function* () {
+                  if (
+                    event.type === "provider_thread.updated" &&
+                    event.providerThread.status === "error"
+                  ) {
+                    const threadId = event.providerThread.appThreadId;
+                    yield* Ref.update(sessions, (sessions) => {
+                      const key = sessionKey(entry.runtime.providerSessionId);
+                      const latest = sessions.get(key);
+                      if (latest?.runtime !== entry.runtime || threadId === null) return sessions;
+                      const loadedProviderThreadKeyByThread = new Map(
+                        latest.loadedProviderThreadKeyByThread,
+                      );
+                      loadedProviderThreadKeyByThread.delete(threadId);
+                      return new Map(sessions).set(key, {
+                        ...latest,
+                        loadedProviderThreadKeyByThread,
+                      });
+                    });
+                  }
                   // Some providers can block before a run subscriber exists
                   // (project trust, login, or session-switch hooks). Persist
                   // their runless request artifacts directly so the normal T3
@@ -2525,23 +2558,26 @@ export const layerWithOptions = (
           Ref.get(sessions).pipe(
             Effect.map((current) => current.has(sessionKey(providerSessionId))),
           ),
-        get: (providerSessionId) =>
-          Effect.gen(function* () {
+        get: Effect.fn("ProviderSessionManager.get")(
+          function* (providerSessionId) {
             const entry = (yield* Ref.get(sessions)).get(sessionKey(providerSessionId));
             if (entry === undefined) {
               return Option.none<ManagedProviderSessionRuntime>();
             }
             yield* touchActivity(providerSessionId, entry.runtime);
             return Option.some(entry.exposedRuntime);
-          }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderSessionLookupError({
-                  providerSessionId,
-                  cause,
-                }),
+          },
+          (effect, providerSessionId) =>
+            effect.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderSessionLookupError({
+                    providerSessionId,
+                    cause,
+                  }),
+              ),
             ),
-          ),
+        ),
         close: (providerSessionId) =>
           releaseEntry({ providerSessionId, reason: "manual_shutdown" }).pipe(
             Effect.mapError(
@@ -2552,8 +2588,8 @@ export const layerWithOptions = (
                 }),
             ),
           ),
-        closeInstance: (instanceId) =>
-          Effect.gen(function* () {
+        closeInstance: Effect.fn("ProviderSessionManager.closeInstance")(
+          function* (instanceId) {
             const active = [...(yield* Ref.get(sessions)).values()].filter(
               (entry) => entry.runtime.instanceId === instanceId,
             );
@@ -2572,20 +2608,23 @@ export const layerWithOptions = (
             if (failure !== undefined && Exit.isFailure(failure)) {
               return yield* Effect.failCause(failure.cause);
             }
-          }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderSessionCloseError({
-                  providerSessionId: ProviderSessionId.make(
-                    `provider-session:provider-instance:${instanceId}`,
-                  ),
-                  cause,
-                }),
+          },
+          (effect, instanceId) =>
+            effect.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderSessionCloseError({
+                    providerSessionId: ProviderSessionId.make(
+                      `provider-session:provider-instance:${instanceId}`,
+                    ),
+                    cause,
+                  }),
+              ),
             ),
-          ),
+        ),
         release: releaseEntry,
-        detach: (input) =>
-          Effect.gen(function* () {
+        detach: Effect.fn("ProviderSessionManager.detach")(
+          function* (input) {
             const key = sessionKey(input.providerSessionId);
             const currentEntry = (yield* Ref.get(sessions)).get(key);
             let detachedProviderThreads: ReadonlyArray<OrchestrationV2ProviderThread> = [];
@@ -2775,17 +2814,20 @@ export const layerWithOptions = (
               );
             }
             yield* scheduleIdleRelease(input.providerSessionId, detached.value.runtime);
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.fail(
-                new ProviderSessionReleaseError({
-                  providerSessionId: input.providerSessionId,
-                  reason: "manual_shutdown",
-                  cause,
-                }),
+          },
+          (effect, input) =>
+            effect.pipe(
+              Effect.catchCause((cause) =>
+                Effect.fail(
+                  new ProviderSessionReleaseError({
+                    providerSessionId: input.providerSessionId,
+                    reason: "manual_shutdown",
+                    cause,
+                  }),
+                ),
               ),
             ),
-          ),
+        ),
       } satisfies ProviderSessionManagerV2Shape);
     }),
   );
