@@ -146,7 +146,12 @@ const imageUrl = `data:image/svg+xml,${encodeURIComponent(
 
 function addFiles(paths: string[]) {
   state.entries = paths.map((path) => ({ path, kind: "file" }));
-  for (const path of paths) state.assets.set(path, Atom.make<AssetResult>(AsyncResult.initial()));
+  // Rows subscribe in a passive effect after the IntersectionObserver render that calls createUrl.
+  // The registry drops a value set on an atom nobody subscribes to yet, so keep these mocks alive
+  // or a URL published inside that window is lost and the row never shows its preview.
+  for (const path of paths) {
+    state.assets.set(path, Atom.make<AssetResult>(AsyncResult.initial()).pipe(Atom.keepAlive));
+  }
 }
 
 function fileRow(path: string) {
@@ -166,9 +171,15 @@ async function publishUrl(path: string, url: string) {
   });
 }
 
+// The image decodes (naturalWidth) before its load event commits and removes the fallback,
+// so wait for the whole loaded state instead of asserting the fallback right after decode.
 async function expectPreview(row: HTMLElement) {
-  await expect.poll(() => row.querySelector("img")?.naturalWidth).toBe(8);
-  expect(row.querySelector("svg")).toBeNull();
+  await expect
+    .poll(() => ({
+      width: row.querySelector("img")?.naturalWidth,
+      fallback: row.querySelector("svg") !== null,
+    }))
+    .toEqual({ width: 8, fallback: false });
 }
 
 it("loads previews asynchronously and only acquires offscreen images after scrolling", async () => {
