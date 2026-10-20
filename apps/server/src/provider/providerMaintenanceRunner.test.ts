@@ -269,7 +269,7 @@ describe("providerMaintenanceRunner", () => {
                   updateLockKey: "npm-global",
                 }),
               ),
-            refreshInstance: () =>
+            refreshAfterUpdate: () =>
               Ref.updateAndGet(providersRef, (providers) =>
                 providers.map((entry) => ({ ...entry, version: "2.0.19" })),
               ),
@@ -1066,6 +1066,7 @@ it.effect.each([
         {
           driver: OPENCODE_DRIVER,
           t3CodeRange: ">=0.0.42",
+          orchestrationProtocolVersion: 2,
           recommendedVersion: "1.14.20",
           ranges: [{ range: "=1.14.20", status: "supported" }],
         },
