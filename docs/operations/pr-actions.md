@@ -50,7 +50,7 @@ These controls live in **Settings > Rules** (or **Branches**) and **Settings > A
 
 ## External review services
 
-The existing `.coderabbit.yaml` requests automatic review, but YAML does not install or authorize the CodeRabbit GitHub App. The inherited Cursor hygiene webhook skips when its URL/auth secrets are absent; it is not a credential-free AI review service. Any inherited Macroscope or other bot configuration also requires a separately connected service. None is claimed to be active just because its configuration was inherited, and none is required by `PR Gate`.
+The existing `.coderabbit.yaml` requests automatic review, but YAML does not install or authorize the CodeRabbit GitHub App. The inherited Cursor hygiene webhook workflow was deleted upstream (3e250a8387) and is no longer present in the fork; it was never a credential-free AI review service. Any inherited Macroscope or other bot configuration also requires a separately connected service. None is claimed to be active just because its configuration was inherited, and none is required by `PR Gate`.
 
 ## Verification and security boundaries
 
