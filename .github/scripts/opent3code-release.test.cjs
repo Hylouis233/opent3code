@@ -120,11 +120,14 @@ test("asset receipt, checksums, extra files and path traversal fail closed", () 
 });
 
 test("upstream APK publication and Cursor forwarding cannot run in the fork", () => {
-  for (const [workflow, job] of [
-    ["mobile-android-apk.yml", "mirror"],
-    ["cursor-hygiene-webhook.yml", "forward"],
+  for (const [workflow, job, optional] of [
+    ["mobile-android-apk.yml", "mirror", false],
+    // Upstream deleted this workflow (3e250a8387); when it is absent, forwarding cannot run.
+    ["cursor-hygiene-webhook.yml", "forward", true],
   ]) {
-    const source = fs.readFileSync(path.join(__dirname, "../workflows", workflow), "utf8");
+    const workflowPath = path.join(__dirname, "../workflows", workflow);
+    if (optional && !fs.existsSync(workflowPath)) continue;
+    const source = fs.readFileSync(workflowPath, "utf8");
     const jobs = source.split(/^jobs:\s*$/m)[1];
     assert.ok(jobs, `${workflow} must declare jobs`);
     const sections = jobs.split(/^  (?=[a-zA-Z0-9_-]+:\s*$)/m);
