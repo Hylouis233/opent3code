@@ -4935,6 +4935,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 if (descendants.length > 0) {
                   return { type: "descendants", descendants } as const;
                 }
+                // turn/completed records "ended" before it waits for this
+                // permit, and the scan above can yield to it, so the
+                // containment is checked again right before abandoning.
+                if (context.rateLimitContainment !== "unconfirmed") {
+                  return { type: "settled" } as const;
+                }
                 context.rateLimitContainment = "abandoned";
                 yield* Effect.logWarning("orchestration-v2.codex-rate-limit-turn-abandoned", {
                   nativeTurnId: context.nativeTurnId,
