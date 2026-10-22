@@ -7475,6 +7475,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         threadId,
                         turnId: context.nativeTurnId,
                       }),
+                    ).pipe(
+                      // Codex confirmed this stop, so a 429 stop it left
+                      // unconfirmed no longer marks the thread broken.
+                      Effect.tap(() =>
+                        Effect.sync(() => {
+                          context.rateLimitStopAcknowledged = true;
+                        }),
+                      ),
                     ),
                   { concurrency: "unbounded", discard: true },
                 ).pipe(Effect.timeoutOption("10 seconds"));

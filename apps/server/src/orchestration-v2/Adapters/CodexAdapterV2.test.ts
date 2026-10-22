@@ -5311,6 +5311,128 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect("keeps a late descendant idle when Stop confirms its unconfirmed 429 interrupt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const lateChildStartedIndex = interruptLateSubagentTurnTranscript.entries.findIndex(
+          (entry) => entry.type === "emit_inbound" && entry.label === "turn/started/late-child",
+        );
+        const lateChildStopIndex = interruptLateSubagentTurnTranscript.entries.findIndex(
+          (entry) =>
+            entry.type === "expect_outbound" && entry.label === "turn/interrupt/late-child",
+        );
+        const transcript = makeCodexReplayTranscript({
+          scenario: "codex-rate-limit-late-descendant-stop-ack",
+          entries: [
+            ...interruptLateSubagentTurnTranscript.entries.slice(0, lateChildStartedIndex + 1),
+            // The late nested turn hits a 429 while Stop waits, and Codex
+            // rejects the deadline's interrupt, so its stop is unconfirmed.
+            rateLimitRetryNotice(INTERRUPT_CHILD_NATIVE_THREAD, INTERRUPT_LATE_CHILD_NATIVE_TURN),
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/late-child-deadline",
+              frame: {
+                id: 7,
+                method: "turn/interrupt",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turnId: INTERRUPT_LATE_CHILD_NATIVE_TURN,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/interrupt/late-child-deadline",
+              frame: { id: 7, error: { code: -32603, message: "interrupt failed" } },
+            },
+            ...interruptLateSubagentTurnTranscript.entries.slice(
+              lateChildStartedIndex + 1,
+              lateChildStopIndex,
+            ),
+            // Stop's late-descendant pass then interrupts it, and Codex
+            // acknowledges that interrupt.
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/late-child-stop",
+              frame: {
+                id: 8,
+                method: "turn/interrupt",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turnId: INTERRUPT_LATE_CHILD_NATIVE_TURN,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/interrupt/late-child-stop",
+              frame: { id: 8, result: {} },
+            },
+            { type: "runtime_exit", status: "success" },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-rate-limit-late-descendant-stop-ack"),
+            text: INTERRUPT_PROMPT,
+          }),
+        );
+        yield* harness.until(() =>
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.nativeItemRef?.nativeId === INTERRUPT_CHILD_COMMAND_ITEM &&
+              event.turnItem.status === "running",
+          ),
+        );
+        const providerTurnId = harness.events.find(
+          (
+            event,
+          ): event is Extract<
+            ProviderAdapter.ProviderAdapterV2Event,
+            { type: "provider_turn.updated" }
+          > => event.type === "provider_turn.updated" && event.threadId === harness.threadId,
+        )?.providerTurn.id;
+        assert.isDefined(providerTurnId);
+
+        yield* harness.runtime.interruptTurn({
+          providerThread: harness.providerThread,
+          providerTurnId,
+        });
+        yield* harness.awaitTerminal(1);
+
+        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
+        const lateChildUpdates = harness.events.filter(
+          (
+            event,
+          ): event is Extract<
+            ProviderAdapter.ProviderAdapterV2Event,
+            { type: "provider_turn.updated" }
+          > =>
+            event.type === "provider_turn.updated" &&
+            event.providerTurn.nativeTurnRef?.nativeId === INTERRUPT_LATE_CHILD_NATIVE_TURN,
+        );
+        assert.equal(lateChildUpdates.at(-1)?.providerTurn.status, "interrupted");
+        assert.equal(
+          lastChildThreadStatus(harness.events),
+          "idle",
+          "Codex acknowledged Stop's interrupt, so the nested turn is contained",
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("marks an abandoned subagent 429 thread as errored rather than idle", () =>
     Effect.scoped(
       Effect.gen(function* () {
