@@ -732,7 +732,7 @@ function makeLocalCommandHarness(input: {
                     driver: providerThread.driver,
                     providerSessionId,
                     interruptTurn,
-                  } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime),
+                  } as unknown as ProviderSessionManager.ManagedProviderSessionRuntime),
             ),
         }),
         Layer.mock(ProviderAuthService.ProviderAuthService)({ tryHandlePromptCommand }),

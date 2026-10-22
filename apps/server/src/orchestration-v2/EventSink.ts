@@ -447,10 +447,13 @@ const layerBase: Layer.Layer<
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
-          yield* applyStoredEvents(storedEvents);
-          return { committed: true as const, storedEvents };
+          const outcomes = yield* applyStoredEvents(storedEvents);
+          return { committed: true as const, storedEvents, outcomes };
         }),
-        (result) => (result.committed ? publishStoredEvents(result.storedEvents) : Effect.void),
+        (result) =>
+          result.committed
+            ? publishStoredEvents(result.storedEvents, result.outcomes)
+            : Effect.void,
       );
     });
 
