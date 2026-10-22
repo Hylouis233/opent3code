@@ -1183,9 +1183,10 @@ interface ActiveCodexTurnContext {
   /** Fails an "unconfirmed" turn once its bound passes. */
   rateLimitContainmentTimer?: Fiber.Fiber<void>;
   /**
-   * Whether Codex acknowledged a Stop's turn/interrupt for this turn. Stop
-   * can end an "unconfirmed" turn before its bound; without this
-   * acknowledgement the turn was never confirmed stopped either.
+   * Whether Codex acknowledged a later turn/interrupt for this turn, from
+   * Stop or from an ancestor's 429 lineage stop. Either can end an
+   * "unconfirmed" turn before its bound; without this acknowledgement the
+   * turn was never confirmed stopped either.
    */
   rateLimitStopAcknowledged?: boolean;
   readonly nativeStartReady?: Deferred.Deferred<void>;
@@ -4785,7 +4786,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           descendant: ActiveCodexTurnContext,
         ) {
           const interrupted = yield* interruptRateLimitedNativeTurn(descendant);
-          if (!interrupted && descendant.rateLimitContainment !== "ended") {
+          if (interrupted) {
+            // Codex confirmed this stop, so an earlier unconfirmed interrupt
+            // no longer leaves the descendant's thread broken.
+            descendant.rateLimitStopAcknowledged = true;
+          } else if (descendant.rateLimitContainment !== "ended") {
             descendant.rateLimitContainment = "abandoned";
           }
         });
@@ -4896,12 +4901,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 stoppedDescendants.add(descendant);
                 yield* interruptRateLimitedDescendant(descendant);
               }
+              // A descendant can start after the deadline stopped the root, so
+              // it settles at the time its interrupt finished, not the
+              // deadline's, which would end it before it started.
+              const completedAt = yield* DateTime.now;
               for (const descendant of step.descendants) {
                 yield* finalizeCodexTurn({
                   context: descendant,
                   nativeTurnId: descendant.nativeTurnId,
                   status: "interrupted",
-                  completedAt: now,
+                  completedAt,
                 });
               }
             }
@@ -4917,6 +4926,55 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
 
         /**
+         * Stops the active lineage of a root the 429 deadline stopped, then
+         * settles the root. The lineage is re-scanned until no new nested
+         * turn appears; the last, empty scan and settle share one
+         * terminalization permit with turn/started, so a nested turn either is
+         * stopped here or starts after the root is terminal, where the
+         * late-subagent path interrupts it. Descendants settle first, so the
+         * root terminal neither waits for them nor reports them as running.
+         */
+        const stopRateLimitedLineageThenSettle = Effect.fn(
+          "CodexAdapterV2.stopRateLimitedLineageThenSettle",
+        )(function* <E, R>(input: {
+          readonly context: ActiveCodexTurnContext;
+          /** Checked holding the permit; false stops without settling. */
+          readonly isPending: Effect.Effect<boolean, E, R>;
+          /** Runs holding the permit once no unstopped descendant is active. */
+          readonly settle: Effect.Effect<void, E, R>;
+        }) {
+          const stoppedDescendants = new Set<ActiveCodexTurnContext>();
+          while (true) {
+            const descendants = yield* turnTerminalizationPermit.withPermits(1)(
+              Effect.gen(function* () {
+                if (!(yield* input.isPending)) return [];
+                const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
+                  (candidate) =>
+                    !stoppedDescendants.has(candidate) &&
+                    isDescendantCodexTurn(candidate, input.context),
+                );
+                if (descendants.length === 0) yield* input.settle;
+                return descendants;
+              }),
+            );
+            if (descendants.length === 0) return;
+            for (const descendant of descendants) {
+              stoppedDescendants.add(descendant);
+              yield* interruptRateLimitedDescendant(descendant);
+            }
+            const completedAt = yield* DateTime.now;
+            for (const descendant of descendants) {
+              yield* finalizeCodexTurn({
+                context: descendant,
+                nativeTurnId: descendant.nativeTurnId,
+                status: "interrupted",
+                completedAt,
+              });
+            }
+          }
+        });
+
+        /**
          * Fails a stopped 429 turn whose stop Codex never confirmed. The turn
          * may still be running natively, so the terminal marks its thread
          * broken and the next turn resumes it rather than reusing it.
@@ -4927,62 +4985,34 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           yield* Effect.sleep(`${CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS} millis`);
           // A subagent can start a nested turn while the root waits, so the
           // lineage is stopped again before the root fails, as the deadline
-          // did. The last, empty scan, the abandonment and the terminal share
-          // one terminalization permit with turn/started and turn/completed:
-          // a turn/completed either ends the turn first or is ignored, and a
-          // nested turn either is stopped here or starts after the terminal.
-          const stoppedDescendants = new Set<ActiveCodexTurnContext>();
-          while (true) {
-            const step = yield* turnTerminalizationPermit.withPermits(1)(
-              Effect.gen(function* () {
-                if (
-                  context.rateLimitContainment !== "unconfirmed" ||
-                  (yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context
-                ) {
-                  return { type: "settled" } as const;
-                }
-                const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
-                  (candidate) =>
-                    !stoppedDescendants.has(candidate) && isDescendantCodexTurn(candidate, context),
-                );
-                if (descendants.length > 0) {
-                  return { type: "descendants", descendants } as const;
-                }
-                // turn/completed records "ended" before it waits for this
-                // permit, and the scan above can yield to it, so the
-                // containment is checked again right before abandoning.
-                if (context.rateLimitContainment !== "unconfirmed") {
-                  return { type: "settled" } as const;
-                }
-                context.rateLimitContainment = "abandoned";
-                yield* Effect.logWarning("orchestration-v2.codex-rate-limit-turn-abandoned", {
-                  nativeTurnId: context.nativeTurnId,
-                  timeoutMs: CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS,
-                });
-                yield* finalizeCodexTurnHoldingPermit({
-                  context,
-                  nativeTurnId: context.nativeTurnId,
-                  status: "failed",
-                  completedAt: yield* DateTime.now,
-                });
-                return { type: "settled" } as const;
-              }),
-            );
-            if (step.type === "settled") return;
-            for (const descendant of step.descendants) {
-              stoppedDescendants.add(descendant);
-              yield* interruptRateLimitedDescendant(descendant);
-            }
-            const completedAt = yield* DateTime.now;
-            for (const descendant of step.descendants) {
-              yield* finalizeCodexTurn({
-                context: descendant,
-                nativeTurnId: descendant.nativeTurnId,
-                status: "interrupted",
-                completedAt,
+          // did. A turn/completed either ends the turn first or is ignored.
+          yield* stopRateLimitedLineageThenSettle({
+            context,
+            isPending: Ref.get(activeTurns).pipe(
+              Effect.map(
+                (turns) =>
+                  context.rateLimitContainment === "unconfirmed" &&
+                  turns.get(context.nativeTurnId) === context,
+              ),
+            ),
+            settle: Effect.gen(function* () {
+              // turn/completed records "ended" before it waits for the
+              // permit, and the scan can yield to it, so the containment is
+              // checked again right before abandoning.
+              if (context.rateLimitContainment !== "unconfirmed") return;
+              context.rateLimitContainment = "abandoned";
+              yield* Effect.logWarning("orchestration-v2.codex-rate-limit-turn-abandoned", {
+                nativeTurnId: context.nativeTurnId,
+                timeoutMs: CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS,
               });
-            }
-          }
+              yield* finalizeCodexTurnHoldingPermit({
+                context,
+                nativeTurnId: context.nativeTurnId,
+                status: "failed",
+                completedAt: yield* DateTime.now,
+              });
+            }),
+          });
         });
 
         const emitCompactionItem = Effect.fn("CodexAdapterV2.emitCompactionItem")(function* (
@@ -6524,15 +6554,27 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 return;
               }
               context.rateLimitContainment = "ended";
-              yield* finalizeCodexTurn({
-                context,
-                nativeTurnId: payload.turn.id,
-                status: "failed",
-                completedAt: codexTimestamp(payload.turn.completedAt),
-              });
-              if (context.rateLimitContainmentTimer !== undefined) {
-                yield* Fiber.interrupt(context.rateLimitContainmentTimer);
-              }
+              // A subagent can start a nested turn during the unconfirmed
+              // wait. It must not outlive the root, so the lineage is stopped
+              // before the root fails, as the deadline and the bound do. Its
+              // interrupts await Codex's replies, so it runs off this handler.
+              yield* Effect.gen(function* () {
+                yield* stopRateLimitedLineageThenSettle({
+                  context,
+                  isPending: Ref.get(activeTurns).pipe(
+                    Effect.map((turns) => turns.get(payload.turn.id) === context),
+                  ),
+                  settle: finalizeCodexTurnHoldingPermit({
+                    context,
+                    nativeTurnId: payload.turn.id,
+                    status: "failed",
+                    completedAt: codexTimestamp(payload.turn.completedAt),
+                  }).pipe(Effect.asVoid),
+                });
+                if (context.rateLimitContainmentTimer !== undefined) {
+                  yield* Fiber.interrupt(context.rateLimitContainmentTimer);
+                }
+              }).pipe(Effect.forkIn(scope));
               return;
             }
             const nativeStatus = mapCodexTurnStatus(payload.turn.status);
