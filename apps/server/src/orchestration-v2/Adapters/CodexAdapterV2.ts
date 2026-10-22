@@ -17,6 +17,7 @@ import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.t
 import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts";
 import {
   codexErrorHttpStatusCode,
+  codexErrorTextIndicatesHttp429,
   decideCodexRateLimitRetry,
   parseCodexRetryAfterMs,
   type CodexRateLimitRetryDecision,
@@ -1162,6 +1163,12 @@ interface ActiveCodexTurnContext {
     readonly nativeCode: string | null;
     readonly failure: OrchestrationV2ProviderFailure;
   };
+  /**
+   * Set once a stalled HTTP 429 retry is being stopped. The stopping fiber
+   * then owns the turn's terminal, so the interrupt's own turn/completed
+   * cannot replace the rate-limit failure.
+   */
+  rateLimitRetryExhausted?: OrchestrationV2ProviderFailure;
   readonly nativeStartReady?: Deferred.Deferred<void>;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly projectionAppThread: OrchestrationV2AppThread;
@@ -4619,14 +4626,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const attempt = progress?.attempt ?? (previous?.retry.attempt ?? 0) + 1;
             const code = codexErrorInfoCode(payload.error.codexErrorInfo);
             const additionalDetails = payload.error.additionalDetails?.trim();
+            const noticedAtMs = DateTime.toEpochMillis(updatedAt);
             const retryAfterMs =
-              parseCodexRetryAfterMs(additionalDetails) ??
-              parseCodexRetryAfterMs(payload.error.message);
+              parseCodexRetryAfterMs(additionalDetails, noticedAtMs) ??
+              parseCodexRetryAfterMs(payload.error.message, noticedAtMs);
             // Codex sleeps for any Retry-After it gets, uncapped and silently,
             // so a rate-limited retry is bounded here instead.
+            // The structured status is optional, so a 429 only named in the
+            // error text still counts when Codex attached no status at all.
+            const httpStatusCode = codexErrorHttpStatusCode(payload.error.codexErrorInfo);
             const rateLimitDecision =
               codexUsageLimitError(code, payload.error.codexErrorInfo) ||
-              codexErrorHttpStatusCode(payload.error.codexErrorInfo) === 429
+              httpStatusCode === 429 ||
+              (httpStatusCode === null &&
+                (codexErrorTextIndicatesHttp429(additionalDetails) ||
+                  codexErrorTextIndicatesHttp429(payload.error.message)))
                 ? decideCodexRateLimitRetry({ attempt, retryAfterMs })
                 : null;
             const retry: OrchestrationV2ProviderRetry = {
@@ -4716,6 +4730,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* Effect.sleep(`${decision.deadlineMs} millis`);
             }
             if (
+              context.rateLimitRetryExhausted !== undefined ||
               (yield* Ref.get(providerRetries)).get(context.providerTurnId) !== state ||
               (yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context ||
               context.latestProviderFailure !== input.failureAtArm
@@ -4739,39 +4754,68 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 : decision.reason === "attempts_exhausted"
                   ? `Provider rate limit (HTTP 429): gave up after ${attempts} retry attempts.`
                   : `Provider rate limit (HTTP 429): the provider asked to wait ${Math.round((input.retryAfterMs ?? 0) / 1000)}s before retrying, longer than the allowed retry delay, so the turn was stopped.`;
+            const failure = makeProviderFailure({
+              message,
+              code: "rateLimitRetryExhausted",
+              class: "usage_limit",
+              retryable: true,
+              ...(resetAt === null || !DateTime.isGreaterThan(resetAt, now)
+                ? {}
+                : { resetAt: DateTime.formatIso(resetAt) }),
+            });
             context.latestProviderFailure = {
               nativeMessage: state.nativeMessage,
               nativeCode: state.nativeCode,
-              failure: makeProviderFailure({
-                message,
-                code: "rateLimitRetryExhausted",
-                class: "usage_limit",
-                retryable: true,
-                ...(resetAt === null || !DateTime.isGreaterThan(resetAt, now)
-                  ? {}
-                  : { resetAt: DateTime.formatIso(resetAt) }),
-              }),
+              failure,
             };
-            const finalized = yield* finalizeCodexTurn({
+            context.rateLimitRetryExhausted = failure;
+            // Native subagents run on their own threads and outlive a failed
+            // root, so the deadline stops the whole active lineage, like Stop.
+            const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
+              (candidate) => isDescendantCodexTurn(candidate, context),
+            );
+            // Stop Codex's own retry sleep before publishing the terminal: once
+            // the turn is terminal the thread is idle, and a queued follow-up
+            // must not start while Codex still runs the rate-limited turn.
+            for (const target of [context, ...descendants]) {
+              const nativeThreadId = target.providerThread.nativeThreadRef?.nativeId;
+              if (nativeThreadId == null) continue;
+              const acknowledged = yield* client
+                .request("turn/interrupt", {
+                  threadId: nativeThreadId,
+                  turnId: target.nativeTurnId,
+                })
+                .pipe(
+                  Effect.timeoutOption("10 seconds"),
+                  Effect.catch((cause) =>
+                    Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-failed", {
+                      nativeTurnId: target.nativeTurnId,
+                      cause,
+                    }).pipe(Effect.as(Option.some(undefined))),
+                  ),
+                );
+              if (Option.isNone(acknowledged)) {
+                yield* Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-timeout", {
+                  nativeTurnId: target.nativeTurnId,
+                });
+              }
+            }
+            // Descendants settle first, so the root terminal neither waits for
+            // them nor reports them as still running.
+            for (const descendant of descendants) {
+              yield* finalizeCodexTurn({
+                context: descendant,
+                nativeTurnId: descendant.nativeTurnId,
+                status: "interrupted",
+                completedAt: now,
+              });
+            }
+            yield* finalizeCodexTurn({
               context,
               nativeTurnId: context.nativeTurnId,
               status: "failed",
               completedAt: now,
             });
-            const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
-            if (!finalized || nativeThreadId == null) {
-              return;
-            }
-            // Stop Codex's own retry sleep so the thread can take the next turn.
-            yield* client
-              .request("turn/interrupt", { threadId: nativeThreadId, turnId: context.nativeTurnId })
-              .pipe(
-                Effect.catch((cause) =>
-                  Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-failed", {
-                    cause,
-                  }),
-                ),
-              );
           },
         );
 
@@ -4859,6 +4903,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "contextCompaction") {
+              // Compaction is a model request too, so it proves a retried
+              // request went through and must clear the retry deadline.
+              yield* completeProviderRetry(context, yield* DateTime.now);
               yield* emitCompactionItem(
                 context,
                 payload.item.id,
@@ -5019,6 +5066,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "contextCompaction") {
+              yield* completeProviderRetry(context, yield* DateTime.now);
               yield* emitCompactionItem(
                 context,
                 payload.item.id,
@@ -6051,7 +6099,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     providerThreadId: input.context.providerThread.id,
                     providerTurnId: input.context.providerTurnId,
                     itemOrdinal: providerRetry.itemOrdinal,
-                    failure: providerRetry.failure,
+                    // A subagent has no root terminal, so its retry item is
+                    // where a stalled 429's usage-limit failure shows.
+                    failure:
+                      input.status === "failed" &&
+                      input.context.rateLimitRetryExhausted !== undefined
+                        ? input.context.rateLimitRetryExhausted
+                        : providerRetry.failure,
                     retry: providerRetry.retry,
                     status: providerTurnStatusToTerminal(input.status),
                     startedAt: providerRetry.startedAt,
@@ -6280,7 +6334,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
-            if (context === undefined) {
+            // A turn stopped for a stalled 429 retry is finalized by the fiber
+            // that interrupted it, with the rate-limit failure.
+            if (context === undefined || context.rateLimitRetryExhausted !== undefined) {
               return;
             }
             const nativeStatus = mapCodexTurnStatus(payload.turn.status);
