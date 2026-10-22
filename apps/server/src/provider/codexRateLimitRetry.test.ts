@@ -52,6 +52,16 @@ describe("codexRateLimitRetry", () => {
     expect(parseCodexRetryAfterMs(null)).toBeNull();
   });
 
+  it("reads the unit a retry-after delay names", () => {
+    expect(parseCodexRetryAfterMs("Rate limited. Please retry after 2 minutes.")).toBe(120_000);
+    expect(parseCodexRetryAfterMs("Rate limited; retry after 500ms")).toBe(500);
+    expect(parseCodexRetryAfterMs("retry-after: 1 hour")).toBe(3_600_000);
+    expect(parseCodexRetryAfterMs("Retry-After: 30s")).toBe(30_000);
+    expect(parseCodexRetryAfterMs("retry-after-ms: 250")).toBe(250);
+    // A bare Retry-After value stays delay-seconds.
+    expect(parseCodexRetryAfterMs("Retry-After: 30; so retry later")).toBe(30_000);
+  });
+
   it("reads an HTTP-date Retry-After as the delay until that date", () => {
     const nowMs = Date.parse("2026-10-22T11:59:30Z");
     expect(

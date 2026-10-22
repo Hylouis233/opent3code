@@ -96,14 +96,32 @@ const UNIT_MS: Record<string, number> = {
   hours: 3_600_000,
 };
 
+const DELAY_UNIT = String.raw`milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h`;
+
+const RETRY_AFTER_DELAY = new RegExp(
+  String.raw`retry[-_ ]?after([-_]ms)?["']?\s*[:=]?\s*["']?(\d+(?:\.\d+)?)(?:["']?[ \t]*(${DELAY_UNIT})\b)?`,
+  "iu",
+);
+
+const RETRY_IN_PHRASE = new RegExp(
+  String.raw`(?:try again|retry) in\s+(\d+(?:\.\d+)?)\s*(${DELAY_UNIT})\b`,
+  "iu",
+);
+
+const toDelayMs = (amount: string, unitMs: number | undefined): number | null => {
+  const value = Number.parseFloat(amount);
+  return unitMs === undefined || !Number.isFinite(value) ? null : Math.round(value * unitMs);
+};
+
 // RFC 9110 lets Retry-After carry an IMF-fixdate instead of delay-seconds.
 const RETRY_AFTER_HTTP_DATE =
   /retry[-_ ]?after["']?\s*[:=]?\s*["']?((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s*\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/iu;
 
 /**
  * Reads a retry delay from provider error text: a `Retry-After` header or
- * field (seconds, or an HTTP date measured from `nowMs` when the caller
- * supplies it), a `reset_seconds` field, or "try again in N <unit>".
+ * field (seconds unless it names a unit, or an HTTP date measured from
+ * `nowMs` when the caller supplies it), a `retry-after-ms` header, a
+ * `reset_seconds` field, or "try again in N <unit>".
  */
 export function parseCodexRetryAfterMs(
   text: string | null | undefined,
@@ -115,21 +133,19 @@ export function parseCodexRetryAfterMs(
     const retryAt = httpDate === undefined ? Number.NaN : Date.parse(httpDate);
     if (Number.isFinite(retryAt)) return Math.max(0, retryAt - nowMs);
   }
-  const seconds =
-    /retry[-_ ]?after["']?\s*[:=]?\s*["']?(\d+(?:\.\d+)?)/iu.exec(text)?.[1] ??
-    /reset_seconds["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)/iu.exec(text)?.[1];
-  if (seconds !== undefined) {
-    const value = Number.parseFloat(seconds);
-    return Number.isFinite(value) ? Math.round(value * 1_000) : null;
+  const retryAfter = RETRY_AFTER_DELAY.exec(text);
+  if (retryAfter?.[2] !== undefined) {
+    // A bare value is delay-seconds; `retry-after-ms` and a named unit
+    // ("retry after 2 minutes") override it.
+    const unit =
+      retryAfter[1] !== undefined ? UNIT_MS.ms : UNIT_MS[retryAfter[3]?.toLowerCase() ?? "s"];
+    return toDelayMs(retryAfter[2], unit);
   }
-  const phrase =
-    /(?:try again|retry) in\s+(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b/iu.exec(
-      text,
-    );
+  const resetSeconds = /reset_seconds["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)/iu.exec(text)?.[1];
+  if (resetSeconds !== undefined) return toDelayMs(resetSeconds, UNIT_MS.s);
+  const phrase = RETRY_IN_PHRASE.exec(text);
   if (phrase?.[1] === undefined || phrase[2] === undefined) return null;
-  const unit = UNIT_MS[phrase[2].toLowerCase()];
-  const value = Number.parseFloat(phrase[1]);
-  return unit === undefined || !Number.isFinite(value) ? null : Math.round(value * unit);
+  return toDelayMs(phrase[1], UNIT_MS[phrase[2].toLowerCase()]);
 }
 
 /** The HTTP status Codex attached to a structured error, whatever its variant. */
