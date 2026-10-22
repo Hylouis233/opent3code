@@ -4504,6 +4504,137 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect(
+    "settles a nested turn started during the 429 root interrupt no earlier than it started",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // The deadline stops the root at DEADLINE_AT; the nested turn starts
+          // two seconds later, while the root interrupt is still in flight.
+          const DEADLINE_AT_MS = 1782622445000;
+          const LATE_CHILD_STARTED_AT_SECONDS = DEADLINE_AT_MS / 1000 + 2;
+          yield* TestClock.setTime(DEADLINE_AT_MS);
+          const transcript = makeCodexReplayTranscript({
+            scenario: "codex-rate-limit-late-descendant-completed-at",
+            entries: [
+              ...rateLimitSubagentEntries,
+              rateLimitRetryNotice(INTERRUPT_NATIVE_THREAD, INTERRUPT_NATIVE_TURN),
+              {
+                type: "expect_outbound",
+                label: "turn/interrupt/root",
+                frame: {
+                  id: 4,
+                  method: "turn/interrupt",
+                  params: { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
+                },
+              },
+              // The subagent starts a nested turn while the root interrupt is in flight.
+              {
+                type: "emit_inbound",
+                label: "turn/started/late-child",
+                afterMs: 5_000,
+                frame: {
+                  method: "turn/started",
+                  params: {
+                    threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                    turn: {
+                      ...makeCodexReplayTurn({
+                        id: INTERRUPT_LATE_CHILD_NATIVE_TURN,
+                        status: "inProgress",
+                      }),
+                      // Codex starts it after the deadline stopped the root.
+                      startedAt: LATE_CHILD_STARTED_AT_SECONDS,
+                    },
+                  },
+                },
+              },
+              { type: "emit_inbound", label: "turn/interrupt/root", frame: { id: 4, result: {} } },
+              {
+                type: "expect_outbound",
+                label: "turn/interrupt/child",
+                frame: {
+                  id: 5,
+                  method: "turn/interrupt",
+                  params: {
+                    threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                    turnId: INTERRUPT_CHILD_NATIVE_TURN,
+                  },
+                },
+              },
+              { type: "emit_inbound", label: "turn/interrupt/child", frame: { id: 5, result: {} } },
+              {
+                type: "expect_outbound",
+                label: "turn/interrupt/late-child",
+                frame: {
+                  id: 6,
+                  method: "turn/interrupt",
+                  params: {
+                    threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                    turnId: INTERRUPT_LATE_CHILD_NATIVE_TURN,
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/interrupt/late-child",
+                frame: { id: 6, result: {} },
+              },
+            ],
+          });
+          const rootInterruptSent = yield* Deferred.make<void>();
+          const harness = yield* makeCodexReplayHarness(
+            transcript,
+            () => Effect.void,
+            (method) =>
+              method === "turn/interrupt"
+                ? Deferred.succeed(rootInterruptSent, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+          );
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-codex-rate-limit-late-descendant-completed-at"),
+              text: INTERRUPT_PROMPT,
+            }),
+          );
+          yield* Deferred.await(rootInterruptSent);
+          yield* TestClock.adjust("5 seconds");
+          yield* harness.awaitTerminal(1);
+
+          const terminal = harness.terminalEvents()[0];
+          assert.equal(terminal?.status, "failed");
+          const lateChildSettled = harness.events.findLast(
+            (
+              event,
+            ): event is Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "provider_turn.updated" }
+            > =>
+              event.type === "provider_turn.updated" &&
+              event.providerTurn.nativeTurnRef?.nativeId === INTERRUPT_LATE_CHILD_NATIVE_TURN,
+          );
+          assert.isDefined(lateChildSettled);
+          assert.equal(lateChildSettled.providerTurn.status, "interrupted");
+          const { startedAt, completedAt } = lateChildSettled.providerTurn;
+          assert.isNotNull(startedAt);
+          assert.isNotNull(completedAt);
+          if (startedAt === null || completedAt === null) return;
+          assert.equal(DateTime.toEpochMillis(startedAt), LATE_CHILD_STARTED_AT_SECONDS * 1000);
+          assert.isAtLeast(
+            DateTime.toEpochMillis(completedAt),
+            DateTime.toEpochMillis(startedAt),
+            "a nested turn cannot complete before it started",
+          );
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
   it.effect("interrupts a nested turn that starts after the last 429 lineage scan", () =>
     Effect.scoped(
       Effect.gen(function* () {
