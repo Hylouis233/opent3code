@@ -51,6 +51,21 @@ describe("codexRateLimitRetry", () => {
     expect(parseCodexRetryAfterMs(null)).toBeNull();
   });
 
+  it("reads an HTTP-date Retry-After as the delay until that date", () => {
+    const nowMs = Date.parse("2026-10-22T11:59:30Z");
+    expect(
+      parseCodexRetryAfterMs(
+        "429 Too Many Requests; Retry-After: Thu, 22 Oct 2026 12:00:00 GMT",
+        nowMs,
+      ),
+    ).toBe(30_000);
+    expect(parseCodexRetryAfterMs('{"retry-after":"Thu, 22 Oct 2026 13:00:00 GMT"}', nowMs)).toBe(
+      3_630_000,
+    );
+    // A date already in the past allows an immediate retry.
+    expect(parseCodexRetryAfterMs("Retry-After: Thu, 22 Oct 2026 11:00:00 GMT", nowMs)).toBe(0);
+  });
+
   it("reads the HTTP status from any structured Codex error", () => {
     expect(codexErrorHttpStatusCode({ responseStreamDisconnected: { httpStatusCode: 429 } })).toBe(
       429,

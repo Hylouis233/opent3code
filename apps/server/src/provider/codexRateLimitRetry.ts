@@ -85,12 +85,25 @@ const UNIT_MS: Record<string, number> = {
   hours: 3_600_000,
 };
 
+// RFC 9110 lets Retry-After carry an IMF-fixdate instead of delay-seconds.
+const RETRY_AFTER_HTTP_DATE =
+  /retry[-_ ]?after["']?\s*[:=]?\s*["']?((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s*\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/iu;
+
 /**
  * Reads a retry delay from provider error text: a `Retry-After` header or
- * field (seconds), a `reset_seconds` field, or "try again in N <unit>".
+ * field (seconds, or an HTTP date measured from `nowMs` when the caller
+ * supplies it), a `reset_seconds` field, or "try again in N <unit>".
  */
-export function parseCodexRetryAfterMs(text: string | null | undefined): number | null {
+export function parseCodexRetryAfterMs(
+  text: string | null | undefined,
+  nowMs?: number,
+): number | null {
   if (text == null || text.length === 0) return null;
+  if (nowMs !== undefined) {
+    const httpDate = RETRY_AFTER_HTTP_DATE.exec(text)?.[1];
+    const retryAt = httpDate === undefined ? Number.NaN : Date.parse(httpDate);
+    if (Number.isFinite(retryAt)) return Math.max(0, retryAt - nowMs);
+  }
   const seconds =
     /retry[-_ ]?after["']?\s*[:=]?\s*["']?(\d+(?:\.\d+)?)/iu.exec(text)?.[1] ??
     /reset_seconds["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)/iu.exec(text)?.[1];

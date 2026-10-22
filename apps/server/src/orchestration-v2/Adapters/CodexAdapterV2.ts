@@ -4619,9 +4619,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const attempt = progress?.attempt ?? (previous?.retry.attempt ?? 0) + 1;
             const code = codexErrorInfoCode(payload.error.codexErrorInfo);
             const additionalDetails = payload.error.additionalDetails?.trim();
+            const noticedAtMs = DateTime.toEpochMillis(updatedAt);
             const retryAfterMs =
-              parseCodexRetryAfterMs(additionalDetails) ??
-              parseCodexRetryAfterMs(payload.error.message);
+              parseCodexRetryAfterMs(additionalDetails, noticedAtMs) ??
+              parseCodexRetryAfterMs(payload.error.message, noticedAtMs);
             // Codex sleeps for any Retry-After it gets, uncapped and silently,
             // so a rate-limited retry is bounded here instead.
             const rateLimitDecision =

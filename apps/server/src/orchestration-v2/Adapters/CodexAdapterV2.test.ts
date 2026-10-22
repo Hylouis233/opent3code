@@ -2187,6 +2187,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       retryDelayMs: 5_000,
       deadlineMs: 65_000,
       resetAfterMs: null,
+      resetAt: null,
     },
     {
       name: "short-retry-after",
@@ -2195,6 +2196,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       deadlineMs: 90_000,
       // The Retry-After already elapsed while waiting, so it is no reset time.
       resetAfterMs: null,
+      resetAt: null,
     },
     {
       name: "long-retry-after",
@@ -2202,10 +2204,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       retryDelayMs: null,
       deadlineMs: null,
       resetAfterMs: 384_882_000,
+      resetAt: null,
+    },
+    {
+      name: "http-date-retry-after",
+      details: "429 Too Many Requests; Retry-After: Thu, 22 Oct 2026 12:00:00 GMT",
+      retryDelayMs: null,
+      deadlineMs: null,
+      resetAfterMs: null,
+      // The provider's own reset date is kept, so auto-resume waits for it.
+      resetAt: "2026-10-22T12:00:00.000Z",
     },
   ] as const)(
     "ends a stalled post-tool 429 retry with an explicit failure ($name)",
-    ({ name, details, retryDelayMs, deadlineMs, resetAfterMs }) =>
+    ({ name, details, retryDelayMs, deadlineMs, resetAfterMs, resetAt }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const scenario = `codex-rate-limit-stall-${name}`;
@@ -2388,7 +2400,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           assert.equal(
             terminal.failure.resetAt ?? null,
             resetAfterMs === null
-              ? null
+              ? resetAt
               : DateTime.formatIso(DateTime.add(noticedAt, { milliseconds: resetAfterMs })),
           );
           assert.lengthOf(harness.terminalEvents(), 1);
