@@ -1176,7 +1176,8 @@ interface ActiveCodexTurnContext {
    * an unconfirmed turn; "unconfirmed" keeps the turn active until Codex
    * reports it ended, for at most CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS;
    * "abandoned" means that bound passed and the adapter failed the turn
-   * itself, so its native thread is treated as broken.
+   * itself, or that a descendant the deadline stopped with its root never
+   * acknowledged its interrupt, so its native thread is treated as broken.
    */
   rateLimitContainment?: "ended" | "unconfirmed" | "abandoned";
   /** Fails an "unconfirmed" turn once its bound passes. */
@@ -4762,6 +4763,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         });
 
         /**
+         * Interrupts a descendant the 429 deadline stops with its root. A
+         * descendant Codex did not confirm stopped may still run natively, so
+         * it is marked abandoned and its terminal publishes its thread as
+         * broken rather than idle.
+         */
+        const interruptRateLimitedDescendant = Effect.fnUntraced(function* (
+          descendant: ActiveCodexTurnContext,
+        ) {
+          const interrupted = yield* interruptRateLimitedNativeTurn(descendant);
+          if (!interrupted && descendant.rateLimitContainment !== "ended") {
+            descendant.rateLimitContainment = "abandoned";
+          }
+        });
+
+        /**
          * Ends a turn whose rate-limited retry made no progress within the
          * retry budget. Progress or another retry notice replaces the tracked
          * retry state, which turns this into a no-op.
@@ -4865,7 +4881,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (step.type === "unconfirmed") break;
               for (const descendant of step.descendants) {
                 stoppedDescendants.add(descendant);
-                yield* interruptRateLimitedNativeTurn(descendant);
+                yield* interruptRateLimitedDescendant(descendant);
               }
               for (const descendant of step.descendants) {
                 yield* finalizeCodexTurn({
@@ -4936,7 +4952,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (step.type === "settled") return;
             for (const descendant of step.descendants) {
               stoppedDescendants.add(descendant);
-              yield* interruptRateLimitedNativeTurn(descendant);
+              yield* interruptRateLimitedDescendant(descendant);
             }
             const completedAt = yield* DateTime.now;
             for (const descendant of step.descendants) {
