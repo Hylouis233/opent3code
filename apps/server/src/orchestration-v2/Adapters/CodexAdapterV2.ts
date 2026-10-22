@@ -1181,6 +1181,12 @@ interface ActiveCodexTurnContext {
   rateLimitContainment?: "ended" | "unconfirmed" | "abandoned";
   /** Fails an "unconfirmed" turn once its bound passes. */
   rateLimitContainmentTimer?: Fiber.Fiber<void>;
+  /**
+   * Whether Codex acknowledged a Stop's turn/interrupt for this turn. Stop
+   * can end an "unconfirmed" turn before its bound; without this
+   * acknowledgement the turn was never confirmed stopped either.
+   */
+  rateLimitStopAcknowledged?: boolean;
   readonly nativeStartReady?: Deferred.Deferred<void>;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly projectionAppThread: OrchestrationV2AppThread;
@@ -1280,10 +1286,13 @@ const approvalOwnerCodexTurn = (
 
 /**
  * A 429 turn the adapter ended without Codex confirming it stopped may still
- * run natively, so its thread must be resumed rather than reused.
+ * run natively, so its thread must be resumed rather than reused. That holds
+ * whether the bound abandoned it or a Stop Codex never acknowledged ended it
+ * first.
  */
 const isUncontainedRateLimitedTurn = (context: ActiveCodexTurnContext): boolean =>
-  context.rateLimitContainment === "abandoned";
+  context.rateLimitContainment === "abandoned" ||
+  (context.rateLimitContainment === "unconfirmed" && context.rateLimitStopAcknowledged !== true);
 
 const isDescendantCodexTurn = (
   candidate: ActiveCodexTurnContext,
@@ -6038,7 +6047,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               runOrdinal: input.context.input.runOrdinal,
               status: terminalStatus,
               failure: null,
-              threadDisposition: "reusable",
+              // Stop can end a 429 turn Codex never confirmed stopped.
+              threadDisposition: isUncontainedRateLimitedTurn(input.context)
+                ? "broken"
+                : "reusable",
             };
           },
         );
@@ -7372,6 +7384,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                             turnId: context.nativeTurnId,
                           }),
                         ).pipe(
+                          Effect.tap(() =>
+                            Effect.sync(() => {
+                              context.rateLimitStopAcknowledged = true;
+                            }),
+                          ),
                           Effect.catch((cause) =>
                             Effect.logWarning(
                               "orchestration-v2.codex-remaining-lineage-interrupt-failed",
@@ -7478,6 +7495,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     threadId: yield* getNativeThreadId(context.providerThread),
                     turnId: context.nativeTurnId,
                   });
+                  context.rateLimitStopAcknowledged = true;
                 }
                 const containedTerminalKeys = new Set<string>();
                 const attemptedTerminalKeys = new Set<string>();
