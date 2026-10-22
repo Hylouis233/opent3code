@@ -17,6 +17,7 @@ import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.t
 import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts";
 import {
   codexErrorHttpStatusCode,
+  codexErrorTextIndicatesHttp429,
   decideCodexRateLimitRetry,
   parseCodexRetryAfterMs,
   type CodexRateLimitRetryDecision,
@@ -4625,9 +4626,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               parseCodexRetryAfterMs(payload.error.message, noticedAtMs);
             // Codex sleeps for any Retry-After it gets, uncapped and silently,
             // so a rate-limited retry is bounded here instead.
+            // The structured status is optional, so a 429 only named in the
+            // error text still counts when Codex attached no status at all.
+            const httpStatusCode = codexErrorHttpStatusCode(payload.error.codexErrorInfo);
             const rateLimitDecision =
               codexUsageLimitError(code, payload.error.codexErrorInfo) ||
-              codexErrorHttpStatusCode(payload.error.codexErrorInfo) === 429
+              httpStatusCode === 429 ||
+              (httpStatusCode === null &&
+                (codexErrorTextIndicatesHttp429(additionalDetails) ||
+                  codexErrorTextIndicatesHttp429(payload.error.message)))
                 ? decideCodexRateLimitRetry({ attempt, retryAfterMs })
                 : null;
             const retry: OrchestrationV2ProviderRetry = {

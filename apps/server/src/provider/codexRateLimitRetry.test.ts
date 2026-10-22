@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   CODEX_RATE_LIMIT_RETRY_POLICY,
   codexErrorHttpStatusCode,
+  codexErrorTextIndicatesHttp429,
   codexRateLimitBackoffMs,
   decideCodexRateLimitRetry,
   parseCodexRetryAfterMs,
@@ -64,6 +65,16 @@ describe("codexRateLimitRetry", () => {
     );
     // A date already in the past allows an immediate retry.
     expect(parseCodexRetryAfterMs("Retry-After: Thu, 22 Oct 2026 11:00:00 GMT", nowMs)).toBe(0);
+  });
+
+  it("recognizes HTTP 429 in provider error text", () => {
+    expect(codexErrorTextIndicatesHttp429("429 Too Many Requests; Retry-After: 30")).toBe(true);
+    expect(codexErrorTextIndicatesHttp429('{"status": 429, "error": "rate_limited"}')).toBe(true);
+    expect(codexErrorTextIndicatesHttp429("unexpected status code 429")).toBe(true);
+    expect(codexErrorTextIndicatesHttp429("HTTP 429")).toBe(true);
+    expect(codexErrorTextIndicatesHttp429("The response stream disconnected.")).toBe(false);
+    expect(codexErrorTextIndicatesHttp429("unexpected status 503; request id 4291")).toBe(false);
+    expect(codexErrorTextIndicatesHttp429(undefined)).toBe(false);
   });
 
   it("reads the HTTP status from any structured Codex error", () => {

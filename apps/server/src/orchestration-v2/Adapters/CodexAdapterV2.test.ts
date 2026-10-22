@@ -2183,6 +2183,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   it.effect.each([
     {
       name: "backoff",
+      errorInfo: { responseStreamDisconnected: { httpStatusCode: 429 } },
       details: "429 Too Many Requests",
       retryDelayMs: 5_000,
       deadlineMs: 65_000,
@@ -2191,6 +2192,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     },
     {
       name: "short-retry-after",
+      errorInfo: { responseStreamDisconnected: { httpStatusCode: 429 } },
       details: "429 Too Many Requests; Retry-After: 30",
       retryDelayMs: 30_000,
       deadlineMs: 90_000,
@@ -2200,6 +2202,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     },
     {
       name: "long-retry-after",
+      errorInfo: { responseStreamDisconnected: { httpStatusCode: 429 } },
       details: '429 Too Many Requests; Retry-After: 384882 {"error":{"code":"model_cooldown"}}',
       retryDelayMs: null,
       deadlineMs: null,
@@ -2208,6 +2211,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     },
     {
       name: "http-date-retry-after",
+      errorInfo: { responseStreamDisconnected: { httpStatusCode: 429 } },
       details: "429 Too Many Requests; Retry-After: Thu, 22 Oct 2026 12:00:00 GMT",
       retryDelayMs: null,
       deadlineMs: null,
@@ -2215,9 +2219,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       // The provider's own reset date is kept, so auto-resume waits for it.
       resetAt: "2026-10-22T12:00:00.000Z",
     },
+    {
+      // Codex's structured status is optional; only the text names the 429.
+      name: "textual-429",
+      errorInfo: { responseStreamDisconnected: {} },
+      details: "429 Too Many Requests; Retry-After: 384882",
+      retryDelayMs: null,
+      deadlineMs: null,
+      resetAfterMs: 384_882_000,
+      resetAt: null,
+    },
   ] as const)(
     "ends a stalled post-tool 429 retry with an explicit failure ($name)",
-    ({ name, details, retryDelayMs, deadlineMs, resetAfterMs, resetAt }) =>
+    ({ name, errorInfo, details, retryDelayMs, deadlineMs, resetAfterMs, resetAt }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const scenario = `codex-rate-limit-stall-${name}`;
@@ -2287,9 +2301,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     error: {
                       message: "Reconnecting... 1/5",
                       additionalDetails: details,
-                      codexErrorInfo: {
-                        responseStreamDisconnected: { httpStatusCode: 429 },
-                      },
+                      codexErrorInfo: errorInfo,
                     },
                   },
                 },

@@ -132,3 +132,14 @@ export function codexErrorHttpStatusCode(errorInfo: unknown): number | null {
   }
   return null;
 }
+
+const TEXTUAL_HTTP_429 =
+  /\btoo many requests\b|\b(?:http|status(?:[ _]?code)?)["']?\s*[:=]?\s*["']?429\b|^\s*429\b/imu;
+
+/**
+ * Whether provider error text reports HTTP 429. Codex's structured status is
+ * optional, so the text is the fallback evidence when it is missing.
+ */
+export function codexErrorTextIndicatesHttp429(text: string | null | undefined): boolean {
+  return text != null && TEXTUAL_HTTP_429.test(text);
+}
