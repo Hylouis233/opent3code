@@ -6099,7 +6099,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     providerThreadId: input.context.providerThread.id,
                     providerTurnId: input.context.providerTurnId,
                     itemOrdinal: providerRetry.itemOrdinal,
-                    failure: providerRetry.failure,
+                    // A subagent has no root terminal, so its retry item is
+                    // where a stalled 429's usage-limit failure shows.
+                    failure:
+                      input.status === "failed" &&
+                      input.context.rateLimitRetryExhausted !== undefined
+                        ? input.context.rateLimitRetryExhausted
+                        : providerRetry.failure,
                     retry: providerRetry.retry,
                     status: providerTurnStatusToTerminal(input.status),
                     startedAt: providerRetry.startedAt,

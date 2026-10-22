@@ -4378,6 +4378,88 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect("fails an exhausted subagent 429 retry with the usage-limit failure", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const transcript = makeCodexReplayTranscript({
+          scenario: "codex-rate-limit-subagent",
+          entries: [
+            ...rateLimitSubagentEntries,
+            rateLimitRetryNotice(INTERRUPT_CHILD_NATIVE_THREAD, INTERRUPT_CHILD_NATIVE_TURN),
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/child",
+              frame: {
+                id: 4,
+                method: "turn/interrupt",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turnId: INTERRUPT_CHILD_NATIVE_TURN,
+                },
+              },
+            },
+            { type: "emit_inbound", label: "turn/interrupt/child", frame: { id: 4, result: {} } },
+            {
+              type: "emit_inbound",
+              label: "turn/completed/child",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turn: makeCodexReplayTurn({
+                    id: INTERRUPT_CHILD_NATIVE_TURN,
+                    status: "interrupted",
+                  }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-codex-rate-limit-subagent"),
+            text: INTERRUPT_PROMPT,
+          }),
+        );
+        // The subagent update is the last event of the child's terminalization.
+        yield* harness.until(() => harness.subagentUpdates().at(-1)?.subagent.status === "failed");
+
+        const childRetryItems = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "error" &&
+          event.turnItem.retry !== undefined &&
+          event.turnItem.threadId !== harness.threadId
+            ? [event.turnItem]
+            : [],
+        );
+        assert.deepEqual(
+          childRetryItems.map((item) => item.status),
+          ["running", "failed"],
+        );
+        const [notice, exhausted] = childRetryItems;
+        assert.isDefined(notice);
+        assert.isDefined(exhausted);
+        assert.equal(exhausted.failure.code, "rateLimitRetryExhausted");
+        assert.equal(exhausted.failure.class, "usage_limit");
+        assert.equal(exhausted.failure.retryable, true);
+        assert.equal(
+          exhausted.failure.resetAt,
+          DateTime.formatIso(DateTime.add(notice.updatedAt, { milliseconds: 384_882_000 })),
+        );
+        assert.deepEqual(exhausted.retry, { attempt: 1, maxAttempts: 5, retryDelayMs: null });
+        assert.lengthOf(harness.terminalEvents(), 0, "the root turn keeps running");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect.each([
     {
       name: "usage",
