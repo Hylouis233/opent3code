@@ -34,6 +34,7 @@ import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import {
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
+  OrchestrationV2ProviderFailureClass,
   OrchestrationV2RunStatus,
   OrchestrationV2TurnItemStatus,
 } from "./orchestrationV2.ts";
@@ -191,6 +192,18 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
 });
 export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTaskInput.Type;
 
+export const OrchestratorMcpTaskProviderRetry = Schema.Struct({
+  failureClass: OrchestrationV2ProviderFailureClass,
+  message: Schema.String,
+  attempt: PositiveInt,
+  maxAttempts: Schema.NullOr(PositiveInt),
+  retryDelayMs: Schema.NullOr(NonNegativeInt),
+  retryingSince: IsoDateTime,
+  nextRetryAt: Schema.NullOr(IsoDateTime),
+  resetAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestratorMcpTaskProviderRetry = typeof OrchestratorMcpTaskProviderRetry.Type;
+
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   taskId: NodeId,
   childThreadId: ThreadId,
@@ -226,6 +239,10 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   waitTimedOut: Schema.Boolean.annotate({
     description:
       "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later task_status reads return false and use status for liveness.",
+  }),
+  providerRetry: Schema.optional(Schema.NullOr(OrchestratorMcpTaskProviderRetry)).annotate({
+    description:
+      "Set while the unfinished child's provider is retrying a failed model request (for example an HTTP 429 rate limit); status stays running meanwhile. attempt/maxAttempts come from the provider, nextRetryAt is the last retry notice plus retryDelayMs when the delay is known, and resetAt is the usage-limit reset when known. Null when no retry is in progress.",
   }),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;

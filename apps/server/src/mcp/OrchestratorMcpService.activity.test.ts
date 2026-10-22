@@ -538,3 +538,174 @@ it("readThread and sendToThread reach threads in other projects", async () => {
     expect(stopped.code).toBe("parent_not_active");
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
+
+// regression: pingdotgg/t3code#17503 a parent saw only "running" while its child sat in a provider retry
+it("taskStatus exposes the child's in-progress provider retry", async () => {
+  const parentProjection = {
+    thread: baseThread({
+      threadId: parentThreadId,
+      title: "Parent",
+      instanceId: parentInstanceId,
+      model: "gpt-5.4",
+    }),
+    runs: [makeRun({ id: activeRunId, ordinal: 1, status: "running" })],
+    visibleTurnItems: [],
+    runtimeRequests: [],
+    messages: [],
+    contextTransfers: [],
+    subagents: [
+      {
+        id: taskId,
+        threadId: parentThreadId,
+        runId: activeRunId,
+        parentNodeId: NodeId.make("node-parent"),
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: codexDriver,
+        providerInstanceId: parentInstanceId,
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "Keep working through a rate limit.",
+        title: null,
+        model: "gpt-5.4",
+        status: "running",
+        result: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    ],
+    updatedAt: now,
+  } as unknown as OrchestrationV2ThreadProjection;
+  const retryStartedAt = DateTime.makeUnsafe("2026-08-04T12:00:05.000Z");
+  const retryUpdatedAt = DateTime.makeUnsafe("2026-08-04T12:00:10.000Z");
+  const retryItem = (input: {
+    readonly id: string;
+    readonly runId: RunId;
+    readonly status: "running" | "completed";
+    readonly attempt: number;
+  }) => ({
+    id: input.id,
+    threadId: childThreadId,
+    runId: input.runId,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 1,
+    type: "error",
+    status: input.status,
+    title: "Provider retry",
+    startedAt: retryStartedAt,
+    completedAt: input.status === "running" ? null : retryUpdatedAt,
+    updatedAt: retryUpdatedAt,
+    failure: {
+      class: "usage_limit",
+      message: "Reconnecting... 2/5",
+      code: "responseStreamDisconnected",
+      retryable: true,
+    },
+    retry: { attempt: input.attempt, maxAttempts: 5, retryDelayMs: 30_000 },
+  });
+  const childProjection = {
+    thread: {
+      ...baseThread({
+        threadId: childThreadId,
+        title: "Child",
+        instanceId: parentInstanceId,
+        model: "gpt-5.4",
+      }),
+      lineage: {
+        parentThreadId,
+        relationshipToParent: "subagent",
+        rootThreadId: parentThreadId,
+      },
+      createdBy: "agent",
+    },
+    runs: [makeRun({ id: childRunId, ordinal: 1, status: "running" })],
+    visibleTurnItems: [],
+    runtimeRequests: [],
+    messages: [],
+    contextTransfers: [
+      {
+        type: "subagent_spawn",
+        sourceThreadId: parentThreadId,
+        targetThreadId: childThreadId,
+        targetRunId: childRunId,
+      },
+    ],
+    subagents: [],
+    providerThreads: [],
+    updatedAt: now,
+  } as unknown as OrchestrationV2ThreadProjection;
+  let retryItems: ReadonlyArray<unknown> = [
+    retryItem({ id: "retry-recovered", runId: childRunId, status: "completed", attempt: 1 }),
+    retryItem({ id: "retry-other-run", runId: activeRunId, status: "running", attempt: 4 }),
+    retryItem({ id: "retry-live", runId: childRunId, status: "running", attempt: 2 }),
+  ];
+  const requestedTurnItemRunIds: Array<ReadonlyArray<RunId | null> | undefined> = [];
+
+  const layer = layerOrchestratorService.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getTimelinePage: () => Effect.succeed({ items: [], totalItems: 0, hasMore: false }),
+          getThreadRecords: (threadId, _records, options) => {
+            if (threadId === parentThreadId) return Effect.succeed(parentProjection);
+            if (threadId !== childThreadId) return Effect.die(`unexpected thread ${threadId}`);
+            if (options?.turnItemTypes !== undefined) {
+              requestedTurnItemRunIds.push(options.turnItemRunIds);
+              // Mirror the store: only turn items of the requested runs are loaded.
+              return Effect.succeed({
+                ...childProjection,
+                turnItems: retryItems.filter((item) =>
+                  (options.turnItemRunIds ?? []).includes((item as { runId: RunId }).runId),
+                ),
+              } as unknown as OrchestrationV2ThreadProjection);
+            }
+            return Effect.succeed(childProjection);
+          },
+        } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
+        ServerSettings.layerTest(),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([]),
+        } satisfies Partial<ProviderRegistry.ProviderRegistry["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+          list: () => Effect.succeed({ tasks: [] }),
+        } satisfies Partial<ScheduledTaskService.ScheduledTaskService["Service"]>),
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+          list: () => Effect.succeed([]),
+        } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        NodeCrypto.layer,
+      ),
+    ),
+  );
+
+  await Effect.gen(function* () {
+    const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+    const retrying = yield* service.taskStatus(makeScope(), taskId);
+    expect(retrying.status).toBe("running");
+    expect(requestedTurnItemRunIds.at(-1)).toContain(childRunId);
+    expect(retrying.providerRetry).toEqual({
+      failureClass: "usage_limit",
+      message: "Reconnecting... 2/5",
+      attempt: 2,
+      maxAttempts: 5,
+      retryDelayMs: 30_000,
+      retryingSince: "2026-08-04T12:00:05.000Z",
+      nextRetryAt: "2026-08-04T12:00:40.000Z",
+      resetAt: null,
+    });
+
+    retryItems = [
+      retryItem({ id: "retry-live", runId: childRunId, status: "completed", attempt: 2 }),
+    ];
+    const recovered = yield* service.taskStatus(makeScope(), taskId);
+    expect(recovered.status).toBe("running");
+    expect(recovered.providerRetry).toBeNull();
+  }).pipe(Effect.provide(layer), Effect.runPromise);
+});

@@ -1948,6 +1948,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const turnTerminalizationPermit = yield* Semaphore.make(1);
         const goalsByNativeThread = new Map<string, OrchestrationV2ProviderGoal | null>();
         const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
+        // Native threads Codex last reported in `systemError`. A turn that fails
+        // there leaves the loaded thread unusable until it is resumed again.
+        const systemErrorNativeThreads = new Set<string>();
         const goalHolds = new Map<string, CodexGoalHold>();
         const goalRuns = new Map<ProviderTurnId, Array<ActiveCodexTurnContext>>();
         const goalActivations = new Map<string, { stopped: boolean }>();
@@ -4570,6 +4573,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(turnTerminalizationPermit.withPermits(1)),
         );
 
+        yield* client.handleServerNotification("thread/status/changed", (payload) =>
+          Effect.sync(() => {
+            if (payload.status.type === "systemError") {
+              systemErrorNativeThreads.add(payload.threadId);
+            } else {
+              systemErrorNativeThreads.delete(payload.threadId);
+            }
+          }),
+        );
+
         yield* client.handleServerNotification("error", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
@@ -5664,6 +5677,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             readonly providerRetry?: ActiveCodexProviderRetry;
           }): Effect.fn.Return<CodexRootTerminalEvent> {
             const terminalStatus = providerTurnStatusToTerminal(input.status);
+            const nativeThreadId = input.context.providerThread.nativeThreadRef?.nativeId;
             if (terminalStatus === "failed") {
               const previousFailure = input.context.latestProviderFailure ?? input.providerRetry;
               const failureCode =
@@ -5716,7 +5730,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       retry: input.providerRetry.retry,
                       retryStartedAt: input.providerRetry.startedAt,
                     }),
-                threadDisposition: "reusable",
+                // A failure in Codex's systemError state must not reuse the
+                // loaded thread: "broken" makes the next turn resume it.
+                threadDisposition:
+                  nativeThreadId != null && systemErrorNativeThreads.delete(nativeThreadId)
+                    ? "broken"
+                    : "reusable",
               };
             }
             return {
