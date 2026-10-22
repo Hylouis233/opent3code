@@ -16,6 +16,7 @@ import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapsh
 import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
 import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts";
 import {
+  CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS,
   codexErrorHttpStatusCode,
   codexErrorTextIndicatesHttp429,
   decideCodexRateLimitRetry,
@@ -1171,10 +1172,15 @@ interface ActiveCodexTurnContext {
   rateLimitRetryExhausted?: OrchestrationV2ProviderFailure;
   /**
    * Whether Codex confirmed the stalled 429 turn stopped. "ended" records a
-   * turn/completed that arrived while the interrupt was in flight;
-   * "unconfirmed" keeps the turn active until Codex reports it ended.
+   * turn/completed that arrived while the interrupt was in flight or ended
+   * an unconfirmed turn; "unconfirmed" keeps the turn active until Codex
+   * reports it ended, for at most CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS;
+   * "abandoned" means that bound passed and the adapter failed the turn
+   * itself, so its native thread is treated as broken.
    */
-  rateLimitContainment?: "ended" | "unconfirmed";
+  rateLimitContainment?: "ended" | "unconfirmed" | "abandoned";
+  /** Fails an "unconfirmed" turn once its bound passes. */
+  rateLimitContainmentTimer?: Fiber.Fiber<void>;
   readonly nativeStartReady?: Deferred.Deferred<void>;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly projectionAppThread: OrchestrationV2AppThread;
@@ -4842,6 +4848,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* Effect.logWarning("orchestration-v2.codex-rate-limit-turn-uncontained", {
                 nativeTurnId: context.nativeTurnId,
               });
+              // Waiting for turn/completed alone could hang the turn again,
+              // so the wait is bounded.
+              context.rateLimitContainmentTimer = yield* abandonUncontainedRateLimitedTurn(
+                context,
+              ).pipe(Effect.forkIn(scope));
               return;
             }
             yield* finalizeCodexTurn({
@@ -4852,6 +4863,35 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             });
           },
         );
+
+        /**
+         * Fails a stopped 429 turn whose stop Codex never confirmed. The turn
+         * may still be running natively, so the terminal marks its thread
+         * broken and the next turn resumes it rather than reusing it.
+         */
+        const abandonUncontainedRateLimitedTurn = Effect.fn(
+          "CodexAdapterV2.abandonUncontainedRateLimitedTurn",
+        )(function* (context: ActiveCodexTurnContext) {
+          yield* Effect.sleep(`${CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS} millis`);
+          // Check and set with no yield in between, so a turn/completed either
+          // ends the turn first or is ignored afterwards.
+          const abandoned = yield* Effect.sync(() => {
+            if (context.rateLimitContainment !== "unconfirmed") return false;
+            context.rateLimitContainment = "abandoned";
+            return true;
+          });
+          if (!abandoned) return;
+          yield* Effect.logWarning("orchestration-v2.codex-rate-limit-turn-abandoned", {
+            nativeTurnId: context.nativeTurnId,
+            timeoutMs: CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS,
+          });
+          yield* finalizeCodexTurn({
+            context,
+            nativeTurnId: context.nativeTurnId,
+            status: "failed",
+            completedAt: yield* DateTime.now,
+          });
+        });
 
         const emitCompactionItem = Effect.fn("CodexAdapterV2.emitCompactionItem")(function* (
           context: ActiveCodexTurnContext,
@@ -5919,10 +5959,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       retry: input.providerRetry.retry,
                       retryStartedAt: input.providerRetry.startedAt,
                     }),
-                // A failure in Codex's systemError state must not reuse the
-                // loaded thread: "broken" makes the next turn resume it.
+                // A failure in Codex's systemError state, or a 429 turn Codex
+                // never confirmed stopped, must not reuse the loaded thread:
+                // "broken" makes the next turn resume it.
                 threadDisposition:
-                  nativeThreadId != null && systemErrorNativeThreads.delete(nativeThreadId)
+                  (nativeThreadId != null && systemErrorNativeThreads.delete(nativeThreadId)) ||
+                  input.context.rateLimitContainment === "abandoned"
                     ? "broken"
                     : "reusable",
               };
@@ -6372,17 +6414,25 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // A turn stopped for a stalled 429 retry is finalized by the fiber
             // that interrupted it, with the rate-limit failure, unless that
             // interrupt went unacknowledged and only this event confirms it.
+            // Once the unconfirmed wait was abandoned, that fiber owns the
+            // terminal and this late event is ignored.
             if (context.rateLimitRetryExhausted !== undefined) {
               if (context.rateLimitContainment !== "unconfirmed") {
-                context.rateLimitContainment = "ended";
+                if (context.rateLimitContainment === undefined) {
+                  context.rateLimitContainment = "ended";
+                }
                 return;
               }
+              context.rateLimitContainment = "ended";
               yield* finalizeCodexTurn({
                 context,
                 nativeTurnId: payload.turn.id,
                 status: "failed",
                 completedAt: codexTimestamp(payload.turn.completedAt),
               });
+              if (context.rateLimitContainmentTimer !== undefined) {
+                yield* Fiber.interrupt(context.rateLimitContainmentTimer);
+              }
               return;
             }
             const nativeStatus = mapCodexTurnStatus(payload.turn.status);
