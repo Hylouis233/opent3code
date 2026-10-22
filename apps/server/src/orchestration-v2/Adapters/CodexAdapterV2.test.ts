@@ -2331,8 +2331,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           });
           // Each interrupt request records the clock it was sent at, so the
           // assertions read observed state instead of waiting on elapsed time.
+          // The request is held until released, to observe what the adapter
+          // published while Codex had not acknowledged the interrupt yet.
           const interruptRequests: Array<{ readonly atMs: number }> = [];
           const interrupted = yield* Deferred.make<void>();
+          const releaseInterrupt = yield* Deferred.make<void>();
           const harness = yield* makeCodexReplayHarness(
             transcript,
             () => Effect.void,
@@ -2345,6 +2348,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                       }),
                     ),
                     Effect.andThen(Deferred.succeed(interrupted, undefined)),
+                    Effect.andThen(Deferred.await(releaseInterrupt)),
                   )
                 : Effect.void,
           );
@@ -2375,9 +2379,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           // first; TestClock wakes the deadline exactly when it is due.
           if (deadlineMs !== null) {
             yield* TestClock.adjust(`${deadlineMs} millis`);
+            // adjust returns once the woken deadline fiber and the event
+            // consumer it fed are idle; here that is the held interrupt. The
+            // native turn is interrupted before its terminal is published, so
+            // a queued follow-up cannot start while Codex still runs it.
+            assert.lengthOf(interruptRequests, 1);
+            assert.lengthOf(
+              harness.terminalEvents(),
+              0,
+              "the terminal must wait until Codex acknowledges the interrupt",
+            );
           }
-          yield* harness.awaitTerminal(1);
           yield* Deferred.await(interrupted);
+          yield* Deferred.succeed(releaseInterrupt, undefined);
+          yield* harness.awaitTerminal(1);
 
           const expectedStopMs = DateTime.toEpochMillis(noticedAt) + (deadlineMs ?? 0);
           const stoppedTurn = harness.events.findLast(

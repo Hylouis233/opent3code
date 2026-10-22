@@ -1163,6 +1163,12 @@ interface ActiveCodexTurnContext {
     readonly nativeCode: string | null;
     readonly failure: OrchestrationV2ProviderFailure;
   };
+  /**
+   * Set once a stalled HTTP 429 retry is being stopped. The stopping fiber
+   * then owns the turn's terminal, so the interrupt's own turn/completed
+   * cannot replace the rate-limit failure.
+   */
+  rateLimitRetryExhausted?: OrchestrationV2ProviderFailure;
   readonly nativeStartReady?: Deferred.Deferred<void>;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly projectionAppThread: OrchestrationV2AppThread;
@@ -4724,6 +4730,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* Effect.sleep(`${decision.deadlineMs} millis`);
             }
             if (
+              context.rateLimitRetryExhausted !== undefined ||
               (yield* Ref.get(providerRetries)).get(context.providerTurnId) !== state ||
               (yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context ||
               context.latestProviderFailure !== input.failureAtArm
@@ -4747,39 +4754,51 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 : decision.reason === "attempts_exhausted"
                   ? `Provider rate limit (HTTP 429): gave up after ${attempts} retry attempts.`
                   : `Provider rate limit (HTTP 429): the provider asked to wait ${Math.round((input.retryAfterMs ?? 0) / 1000)}s before retrying, longer than the allowed retry delay, so the turn was stopped.`;
+            const failure = makeProviderFailure({
+              message,
+              code: "rateLimitRetryExhausted",
+              class: "usage_limit",
+              retryable: true,
+              ...(resetAt === null || !DateTime.isGreaterThan(resetAt, now)
+                ? {}
+                : { resetAt: DateTime.formatIso(resetAt) }),
+            });
             context.latestProviderFailure = {
               nativeMessage: state.nativeMessage,
               nativeCode: state.nativeCode,
-              failure: makeProviderFailure({
-                message,
-                code: "rateLimitRetryExhausted",
-                class: "usage_limit",
-                retryable: true,
-                ...(resetAt === null || !DateTime.isGreaterThan(resetAt, now)
-                  ? {}
-                  : { resetAt: DateTime.formatIso(resetAt) }),
-              }),
+              failure,
             };
-            const finalized = yield* finalizeCodexTurn({
+            context.rateLimitRetryExhausted = failure;
+            // Stop Codex's own retry sleep before publishing the terminal: once
+            // the turn is terminal the thread is idle, and a queued follow-up
+            // must not start while Codex still runs the rate-limited turn.
+            const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
+            if (nativeThreadId != null) {
+              const acknowledged = yield* client
+                .request("turn/interrupt", {
+                  threadId: nativeThreadId,
+                  turnId: context.nativeTurnId,
+                })
+                .pipe(
+                  Effect.timeoutOption("10 seconds"),
+                  Effect.catch((cause) =>
+                    Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-failed", {
+                      cause,
+                    }).pipe(Effect.as(Option.some(undefined))),
+                  ),
+                );
+              if (Option.isNone(acknowledged)) {
+                yield* Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-timeout", {
+                  nativeTurnId: context.nativeTurnId,
+                });
+              }
+            }
+            yield* finalizeCodexTurn({
               context,
               nativeTurnId: context.nativeTurnId,
               status: "failed",
               completedAt: now,
             });
-            const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
-            if (!finalized || nativeThreadId == null) {
-              return;
-            }
-            // Stop Codex's own retry sleep so the thread can take the next turn.
-            yield* client
-              .request("turn/interrupt", { threadId: nativeThreadId, turnId: context.nativeTurnId })
-              .pipe(
-                Effect.catch((cause) =>
-                  Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-failed", {
-                    cause,
-                  }),
-                ),
-              );
           },
         );
 
@@ -6292,7 +6311,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
-            if (context === undefined) {
+            // A turn stopped for a stalled 429 retry is finalized by the fiber
+            // that interrupted it, with the rate-limit failure.
+            if (context === undefined || context.rateLimitRetryExhausted !== undefined) {
               return;
             }
             const nativeStatus = mapCodexTurnStatus(payload.turn.status);
