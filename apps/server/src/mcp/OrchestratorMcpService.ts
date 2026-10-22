@@ -430,6 +430,46 @@ function invalidOptionSelections(
   return problems;
 }
 
+/**
+ * The provider retry still in progress on a delegated task's run, from the
+ * running retry item the adapter keeps until progress or a terminal event.
+ */
+function taskProviderRetry(
+  turnItems: ReadonlyArray<OrchestrationV2TurnItem> | undefined,
+  runId: RunId | undefined,
+): NonNullable<OrchestratorMcpDelegateTaskResult["providerRetry"]> | null {
+  if (runId === undefined || turnItems === undefined) return null;
+  let latest: Extract<OrchestrationV2TurnItem, { readonly type: "error" }> | undefined;
+  for (const item of turnItems) {
+    if (
+      item.type !== "error" ||
+      item.runId !== runId ||
+      item.status !== "running" ||
+      item.retry === undefined
+    ) {
+      continue;
+    }
+    if (latest === undefined || DateTime.isGreaterThan(item.updatedAt, latest.updatedAt)) {
+      latest = item;
+    }
+  }
+  if (latest?.retry === undefined) return null;
+  const { retry, failure } = latest;
+  return {
+    failureClass: failure.class,
+    message: failure.message,
+    attempt: retry.attempt,
+    maxAttempts: retry.maxAttempts,
+    retryDelayMs: retry.retryDelayMs,
+    retryingSince: DateTime.formatIso(latest.startedAt ?? latest.updatedAt),
+    nextRetryAt:
+      retry.retryDelayMs === null
+        ? null
+        : DateTime.formatIso(DateTime.add(latest.updatedAt, { milliseconds: retry.retryDelayMs })),
+    resetAt: failure.resetAt ?? null,
+  };
+}
+
 function taskStatusForRun(
   run: Pick<OrchestrationV2Run, "status" | "restartCancelledBackgroundWork"> | undefined,
 ): OrchestratorMcpDelegateTaskResult["status"] {
@@ -1546,11 +1586,17 @@ const make = Effect.gen(function* () {
         [taskResultRun?.id, terminalRun?.id].filter((id): id is RunId => id !== undefined),
       ),
     ];
+    // The unfinished run's retry items let a parent see a provider retry.
+    const activeTaskRun = taskResultRun ?? childRun;
+    const turnItemRunIds =
+      activeTaskRun === undefined || resultRunIds.includes(activeTaskRun.id)
+        ? resultRunIds
+        : [...resultRunIds, activeTaskRun.id];
     const resultRecords = yield* threadManagement
       .getThreadRecords(task.childThreadId, ["messages", "turnItems"], {
         messageRoles: ["assistant"],
         messageRunIds: resultRunIds,
-        turnItemRunIds: resultRunIds,
+        turnItemRunIds,
         turnItemTypes: ["assistant_message", "error"],
       })
       .pipe(Effect.mapError(threadManagementFailure));
@@ -1650,6 +1696,9 @@ const make = Effect.gen(function* () {
           ? null
           : pendingTaskApproval(childControls, task.id, childRun),
       waitTimedOut,
+      providerRetry: isTerminalTaskStatus(status)
+        ? null
+        : taskProviderRetry(childProjection.turnItems, activeTaskRun?.id),
     } satisfies OrchestratorMcpDelegateTaskResult;
     if (
       acknowledgeTerminal &&

@@ -4334,6 +4334,91 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  // regression: pingdotgg/t3code#17503 a turn failing in systemError left the wedged native thread loaded
+  it.effect.each([
+    { name: "system-error", recovered: false, expectedDisposition: "broken" },
+    { name: "recovered", recovered: true, expectedDisposition: "reusable" },
+  ] as const)(
+    "marks a turn that fails in Codex systemError as a broken thread ($name)",
+    ({ name, recovered, expectedDisposition }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = `codex-system-error-${name}`;
+          const nativeThreadId = `native-${scenario}-thread`;
+          const nativeTurnId = `native-${scenario}-turn`;
+          const message = "exceeded retry limit, last status: 429 Too Many Requests";
+          const errorInfo = { responseTooManyFailedAttempts: { httpStatusCode: 429 } };
+          const status = (type: "systemError" | "active") => ({
+            type: "emit_inbound" as const,
+            label: `thread/status/changed/${type}`,
+            frame: {
+              method: "thread/status/changed",
+              params: {
+                threadId: nativeThreadId,
+                status: type === "active" ? { type, activeFlags: [] } : { type },
+              },
+            },
+          });
+          const transcript = makeCodexReplayTranscript({
+            scenario,
+            entries: [
+              ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Continue." }),
+              status("systemError"),
+              ...(recovered ? [status("active")] : []),
+              {
+                type: "emit_inbound",
+                label: "error",
+                frame: {
+                  method: "error",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    willRetry: false,
+                    error: { message, codexErrorInfo: errorInfo },
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/completed",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: {
+                      ...makeCodexReplayTurn({ id: nativeTurnId, status: "failed" }),
+                      error: { message, codexErrorInfo: errorInfo },
+                    },
+                  },
+                },
+              },
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(transcript);
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              text: "Continue.",
+              attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            }),
+          );
+          yield* harness.firstTerminal;
+          const terminal = harness.terminalEvents()[0];
+          assert.equal(terminal?.status, "failed");
+          if (terminal?.status !== "failed") return;
+          assert.equal(terminal.failure.class, "usage_limit");
+          assert.equal(terminal.failure.message, message);
+          assert.equal(terminal.threadDisposition, expectedDisposition);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
   // regression: #17501 Codex 429 retry exhaustion classifies as a usage limit
   it.effect.each([
     {
