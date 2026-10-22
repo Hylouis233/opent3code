@@ -5795,6 +5795,107 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect("keeps an unconfirmed subagent 429 thread idle once the root deadline stops it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-rate-limit-unconfirmed-descendant-stopped-by-root";
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...rateLimitSubagentEntries,
+            rateLimitRetryNotice(INTERRUPT_CHILD_NATIVE_THREAD, INTERRUPT_CHILD_NATIVE_TURN),
+            // Codex never answers the subagent's own deadline interrupt.
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/child",
+              frame: {
+                id: 4,
+                method: "turn/interrupt",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turnId: INTERRUPT_CHILD_NATIVE_TURN,
+                },
+              },
+            },
+            // While the subagent waits unconfirmed, the root's retry stalls too.
+            {
+              ...rateLimitRetryNotice(INTERRUPT_NATIVE_THREAD, INTERRUPT_NATIVE_TURN),
+              afterMs: 20_000,
+            },
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/root",
+              frame: {
+                id: 5,
+                method: "turn/interrupt",
+                params: { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
+              },
+            },
+            { type: "emit_inbound", label: "turn/interrupt/root", frame: { id: 5, result: {} } },
+            // The root's lineage stop interrupts the subagent, and Codex confirms it.
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/child-again",
+              frame: {
+                id: 6,
+                method: "turn/interrupt",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turnId: INTERRUPT_CHILD_NATIVE_TURN,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/interrupt/child-again",
+              frame: { id: 6, result: {} },
+            },
+          ],
+        });
+        const interruptSent = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          () => Effect.void,
+          (method) =>
+            method === "turn/interrupt"
+              ? Deferred.succeed(interruptSent, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            text: INTERRUPT_PROMPT,
+          }),
+        );
+        yield* Deferred.await(interruptSent);
+        // The subagent's interrupt times out, leaving its stop unconfirmed.
+        yield* TestClock.adjust("10 seconds");
+        assert.lengthOf(harness.terminalEvents(), 0);
+        // The root's 429 notice arrives inside the subagent's unconfirmed bound.
+        yield* TestClock.adjust("10 seconds");
+        yield* harness.awaitTerminal(1);
+
+        const terminal = harness.terminalEvents()[0];
+        assert.equal(terminal?.status, "failed");
+        if (terminal?.status !== "failed") return;
+        assert.equal(terminal.failure.code, "rateLimitRetryExhausted");
+        assert.isUndefined(terminal.childTurnsContinue);
+        assert.equal(
+          lastChildThreadStatus(harness.events),
+          "idle",
+          "a subagent whose interrupt Codex confirmed is stopped, not broken",
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps an unconfirmed 429 thread broken when Stop cannot interrupt it", () =>
     Effect.scoped(
       Effect.gen(function* () {

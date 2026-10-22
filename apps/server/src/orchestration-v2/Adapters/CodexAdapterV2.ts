@@ -1183,9 +1183,10 @@ interface ActiveCodexTurnContext {
   /** Fails an "unconfirmed" turn once its bound passes. */
   rateLimitContainmentTimer?: Fiber.Fiber<void>;
   /**
-   * Whether Codex acknowledged a Stop's turn/interrupt for this turn. Stop
-   * can end an "unconfirmed" turn before its bound; without this
-   * acknowledgement the turn was never confirmed stopped either.
+   * Whether Codex acknowledged a later turn/interrupt for this turn, from
+   * Stop or from an ancestor's 429 lineage stop. Either can end an
+   * "unconfirmed" turn before its bound; without this acknowledgement the
+   * turn was never confirmed stopped either.
    */
   rateLimitStopAcknowledged?: boolean;
   readonly nativeStartReady?: Deferred.Deferred<void>;
@@ -4785,7 +4786,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           descendant: ActiveCodexTurnContext,
         ) {
           const interrupted = yield* interruptRateLimitedNativeTurn(descendant);
-          if (!interrupted && descendant.rateLimitContainment !== "ended") {
+          if (interrupted) {
+            // Codex confirmed this stop, so an earlier unconfirmed interrupt
+            // no longer leaves the descendant's thread broken.
+            descendant.rateLimitStopAcknowledged = true;
+          } else if (descendant.rateLimitContainment !== "ended") {
             descendant.rateLimitContainment = "abandoned";
           }
         });
