@@ -4769,17 +4769,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               failure,
             };
             context.rateLimitRetryExhausted = failure;
-            // Native subagents run on their own threads and outlive a failed
-            // root, so the deadline stops the whole active lineage, like Stop.
-            const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
-              (candidate) => isDescendantCodexTurn(candidate, context),
-            );
             // Stop Codex's own retry sleep before publishing the terminal: once
             // the turn is terminal the thread is idle, and a queued follow-up
             // must not start while Codex still runs the rate-limited turn.
-            for (const target of [context, ...descendants]) {
+            const interruptNativeTurn = Effect.fnUntraced(function* (
+              target: ActiveCodexTurnContext,
+            ) {
               const nativeThreadId = target.providerThread.nativeThreadRef?.nativeId;
-              if (nativeThreadId == null) continue;
+              if (nativeThreadId == null) return;
               const acknowledged = yield* client
                 .request("turn/interrupt", {
                   threadId: nativeThreadId,
@@ -4799,16 +4796,33 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   nativeTurnId: target.nativeTurnId,
                 });
               }
-            }
+            });
+            yield* interruptNativeTurn(context);
+            // Native subagents run on their own threads and outlive a failed
+            // root, so the deadline stops the whole active lineage, like Stop.
+            // A subagent can start a nested turn while an interrupt is in
+            // flight, so the lineage is re-scanned until no new turn appears.
             // Descendants settle first, so the root terminal neither waits for
             // them nor reports them as still running.
-            for (const descendant of descendants) {
-              yield* finalizeCodexTurn({
-                context: descendant,
-                nativeTurnId: descendant.nativeTurnId,
-                status: "interrupted",
-                completedAt: now,
-              });
+            const stoppedDescendants = new Set<ActiveCodexTurnContext>();
+            while (true) {
+              const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
+                (candidate) =>
+                  !stoppedDescendants.has(candidate) && isDescendantCodexTurn(candidate, context),
+              );
+              if (descendants.length === 0) break;
+              for (const descendant of descendants) {
+                stoppedDescendants.add(descendant);
+                yield* interruptNativeTurn(descendant);
+              }
+              for (const descendant of descendants) {
+                yield* finalizeCodexTurn({
+                  context: descendant,
+                  nativeTurnId: descendant.nativeTurnId,
+                  status: "interrupted",
+                  completedAt: now,
+                });
+              }
             }
             yield* finalizeCodexTurn({
               context,
