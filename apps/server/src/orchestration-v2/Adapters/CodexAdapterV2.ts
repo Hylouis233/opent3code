@@ -1278,6 +1278,13 @@ const approvalOwnerCodexTurn = (
   return { owner, subagent };
 };
 
+/**
+ * A 429 turn the adapter ended without Codex confirming it stopped may still
+ * run natively, so its thread must be resumed rather than reused.
+ */
+const isUncontainedRateLimitedTurn = (context: ActiveCodexTurnContext): boolean =>
+  context.rateLimitContainment === "abandoned";
+
 const isDescendantCodexTurn = (
   candidate: ActiveCodexTurnContext,
   ancestor: ActiveCodexTurnContext,
@@ -6018,7 +6025,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 // "broken" makes the next turn resume it.
                 threadDisposition:
                   (nativeThreadId != null && systemErrorNativeThreads.delete(nativeThreadId)) ||
-                  input.context.rateLimitContainment === "abandoned"
+                  isUncontainedRateLimitedTurn(input.context)
                     ? "broken"
                     : "reusable",
               };
@@ -6330,12 +6337,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 completedAt: input.completedAt,
               },
             });
+            // A subagent has no root terminal to carry a broken disposition,
+            // so a 429 turn Codex never confirmed stopped marks its thread
+            // errored: the child identity then resumes it instead of reusing
+            // a thread that may still be running.
             yield* emitProviderEvent({
               type: "provider_thread.updated",
               driver: CODEX_PROVIDER,
               providerThread: {
                 ...input.context.providerThread,
-                status: "idle",
+                status: isUncontainedRateLimitedTurn(input.context) ? "error" : "idle",
                 updatedAt: input.completedAt,
               },
             });

@@ -5110,6 +5110,79 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect("marks an abandoned subagent 429 thread as errored rather than idle", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-rate-limit-subagent-abandoned";
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...rateLimitSubagentEntries,
+            rateLimitRetryNotice(INTERRUPT_CHILD_NATIVE_THREAD, INTERRUPT_CHILD_NATIVE_TURN),
+            // Codex never answers the subagent's deadline interrupt.
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/child",
+              frame: {
+                id: 4,
+                method: "turn/interrupt",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turnId: INTERRUPT_CHILD_NATIVE_TURN,
+                },
+              },
+            },
+          ],
+        });
+        const interruptSent = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          () => Effect.void,
+          (method) =>
+            method === "turn/interrupt"
+              ? Deferred.succeed(interruptSent, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            text: INTERRUPT_PROMPT,
+          }),
+        );
+        yield* Deferred.await(interruptSent);
+        yield* TestClock.adjust("10 seconds");
+        assert.notEqual(harness.subagentUpdates().at(-1)?.subagent.status, "failed");
+        yield* TestClock.adjust(`${CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS} millis`);
+        yield* harness.until(() => harness.subagentUpdates().at(-1)?.subagent.status === "failed");
+
+        const childThreadUpdate = harness.events.findLast(
+          (
+            event,
+          ): event is Extract<
+            ProviderAdapter.ProviderAdapterV2Event,
+            { type: "provider_thread.updated" }
+          > =>
+            event.type === "provider_thread.updated" &&
+            event.providerThread.nativeThreadRef?.nativeId === INTERRUPT_CHILD_NATIVE_THREAD,
+        );
+        assert.isDefined(childThreadUpdate);
+        assert.equal(
+          childThreadUpdate.providerThread.status,
+          "error",
+          "a subagent thread Codex never confirmed stopped must not be reused as idle",
+        );
+        assert.lengthOf(harness.terminalEvents(), 0, "the root turn keeps running");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps the 429 failure when a final error arrives during the interrupt", () =>
     Effect.scoped(
       Effect.gen(function* () {
