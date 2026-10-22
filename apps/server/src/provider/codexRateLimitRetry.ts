@@ -29,6 +29,17 @@ export const CODEX_RATE_LIMIT_RETRY_POLICY: CodexRateLimitRetryPolicy = {
   progressGraceMs: 60_000,
 };
 
+/**
+ * How long a stopped 429 turn may stay active after Codex failed to
+ * acknowledge its `turn/interrupt` (the request errored or timed out) and has
+ * not reported `turn/completed` either. Past this bound the adapter stops
+ * waiting: the turn fails with `rateLimitRetryExhausted` and the native thread
+ * is marked broken, so the next turn resumes it instead of reusing a loaded
+ * thread that may still be retrying. It matches `progressGraceMs`, the time
+ * the policy already allows Codex to show any sign of life after a retry.
+ */
+export const CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS = 60_000;
+
 export type CodexRateLimitRetryDecision =
   | {
       readonly type: "wait";
