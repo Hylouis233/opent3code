@@ -4605,7 +4605,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerNotification("error", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
-            if (context === undefined) {
+            // Once a stalled 429 retry is being stopped, the stopping fiber
+            // owns the failure, so a late error cannot replace it.
+            if (context === undefined || context.rateLimitRetryExhausted !== undefined) {
               return;
             }
             const notificationCode = codexErrorInfoCode(payload.error.codexErrorInfo);
