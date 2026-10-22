@@ -36,7 +36,6 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as FileSystem from "effect/FileSystem";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@t3tools/shared/mcpApp";
@@ -2186,14 +2185,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       name: "backoff",
       details: "429 Too Many Requests",
       retryDelayMs: 5_000,
-      quietMs: 64_000,
+      deadlineMs: 65_000,
       resetAfterMs: null,
     },
     {
       name: "short-retry-after",
       details: "429 Too Many Requests; Retry-After: 30",
       retryDelayMs: 30_000,
-      quietMs: 89_000,
+      deadlineMs: 90_000,
       // The Retry-After already elapsed while waiting, so it is no reset time.
       resetAfterMs: null,
     },
@@ -2201,12 +2200,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       name: "long-retry-after",
       details: '429 Too Many Requests; Retry-After: 384882 {"error":{"code":"model_cooldown"}}',
       retryDelayMs: null,
-      quietMs: null,
+      deadlineMs: null,
       resetAfterMs: 384_882_000,
     },
   ] as const)(
     "ends a stalled post-tool 429 retry with an explicit failure ($name)",
-    ({ name, details, retryDelayMs, quietMs, resetAfterMs }) =>
+    ({ name, details, retryDelayMs, deadlineMs, resetAfterMs }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const scenario = `codex-rate-limit-stall-${name}`;
@@ -2306,16 +2305,23 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               },
             ],
           });
-          let interruptSent = false;
+          // Each interrupt request records the clock it was sent at, so the
+          // assertions read observed state instead of waiting on elapsed time.
+          const interruptRequests: Array<{ readonly atMs: number }> = [];
           const interrupted = yield* Deferred.make<void>();
           const harness = yield* makeCodexReplayHarness(
             transcript,
             () => Effect.void,
             (method) =>
               method === "turn/interrupt"
-                ? Effect.sync(() => {
-                    interruptSent = true;
-                  }).pipe(Effect.andThen(Deferred.succeed(interrupted, undefined)))
+                ? DateTime.now.pipe(
+                    Effect.tap((now) =>
+                      Effect.sync(() => {
+                        interruptRequests.push({ atMs: DateTime.toEpochMillis(now) });
+                      }),
+                    ),
+                    Effect.andThen(Deferred.succeed(interrupted, undefined)),
+                  )
                 : Effect.void,
           );
           yield* harness.runtime.startTurn(
@@ -2335,29 +2341,41 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 ? [event.turnItem]
                 : [],
             );
-          yield* harness.until(
-            () => retryItems().length > 0 || harness.terminalEvents().length > 0,
-          );
-          const armedAt = yield* DateTime.now;
-          assert.equal(retryItems()[0]?.status, "running");
+          yield* harness.until(() => retryItems().length > 0);
+          const retryNotice = retryItems()[0];
+          assert.isDefined(retryNotice);
+          assert.equal(retryNotice.status, "running");
+          const noticedAt = retryNotice.updatedAt;
 
-          if (quietMs !== null) {
-            // The retry budget (backoff or Retry-After, plus grace) is honored first.
-            yield* TestClock.adjust(`${quietMs} millis`);
-            for (let attempt = 0; attempt < 100; attempt++) {
-              yield* Effect.yieldNow;
-            }
-            assert.lengthOf(harness.terminalEvents(), 0);
-            assert.isFalse(interruptSent);
-            yield* TestClock.adjust("2 seconds");
+          // The retry budget (backoff or Retry-After, plus grace) is honored
+          // first; TestClock wakes the deadline exactly when it is due.
+          if (deadlineMs !== null) {
+            yield* TestClock.adjust(`${deadlineMs} millis`);
           }
+          yield* harness.awaitTerminal(1);
+          yield* Deferred.await(interrupted);
 
-          const settled = yield* TestClock.withLive(
-            harness.awaitTerminal(1).pipe(Effect.timeoutOption("3 seconds")),
+          const expectedStopMs = DateTime.toEpochMillis(noticedAt) + (deadlineMs ?? 0);
+          const stoppedTurn = harness.events.findLast(
+            (
+              event,
+            ): event is Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "provider_turn.updated" }
+            > => event.type === "provider_turn.updated" && event.providerTurn.status === "failed",
           );
-          assert.isTrue(
-            Option.isSome(settled),
-            "a stalled 429 retry must end the turn instead of leaving it running",
+          assert.isDefined(stoppedTurn, "a stalled 429 retry must end the turn");
+          assert.equal(
+            stoppedTurn.providerTurn.completedAt === null
+              ? null
+              : DateTime.toEpochMillis(stoppedTurn.providerTurn.completedAt),
+            expectedStopMs,
+            "the turn must stop at the retry deadline, not before it",
+          );
+          assert.deepEqual(
+            interruptRequests.map((request) => request.atMs),
+            [expectedStopMs],
+            "Codex's own retry sleep must be interrupted once, at the deadline",
           );
           const terminal = harness.terminalEvents()[0];
           assert.equal(terminal?.status, "failed");
@@ -2371,15 +2389,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             terminal.failure.resetAt ?? null,
             resetAfterMs === null
               ? null
-              : DateTime.formatIso(DateTime.add(armedAt, { milliseconds: resetAfterMs })),
+              : DateTime.formatIso(DateTime.add(noticedAt, { milliseconds: resetAfterMs })),
           );
-          yield* TestClock.withLive(
-            Deferred.await(interrupted).pipe(Effect.timeoutOption("3 seconds")),
-          );
-          assert.isTrue(interruptSent, "Codex's own retry sleep must be interrupted");
-          for (let attempt = 0; attempt < 100; attempt++) {
-            yield* Effect.yieldNow;
-          }
           assert.lengthOf(harness.terminalEvents(), 1);
         }).pipe(
           Effect.provide(
