@@ -16,6 +16,12 @@ import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapsh
 import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
 import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts";
 import {
+  codexErrorHttpStatusCode,
+  decideCodexRateLimitRetry,
+  parseCodexRetryAfterMs,
+  type CodexRateLimitRetryDecision,
+} from "../../provider/codexRateLimitRetry.ts";
+import {
   buildCodexInitializeParams,
   codexAppServerEnvironment,
   codexDefaultReasoningEffortOverride,
@@ -4597,13 +4603,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const updatedAt = yield* DateTime.now;
             const previous = (yield* Ref.get(providerRetries)).get(context.providerTurnId);
             const progress = parseCodexRetryProgress(payload.error.message);
-            const retry: OrchestrationV2ProviderRetry = {
-              attempt: progress?.attempt ?? (previous?.retry.attempt ?? 0) + 1,
-              maxAttempts: progress?.maxAttempts ?? previous?.retry.maxAttempts ?? null,
-              retryDelayMs: null,
-            };
+            const attempt = progress?.attempt ?? (previous?.retry.attempt ?? 0) + 1;
             const code = codexErrorInfoCode(payload.error.codexErrorInfo);
             const additionalDetails = payload.error.additionalDetails?.trim();
+            const retryAfterMs =
+              parseCodexRetryAfterMs(additionalDetails) ??
+              parseCodexRetryAfterMs(payload.error.message);
+            // Codex sleeps for any Retry-After it gets, uncapped and silently,
+            // so a rate-limited retry is bounded here instead.
+            const rateLimitDecision =
+              codexUsageLimitError(code, payload.error.codexErrorInfo) ||
+              codexErrorHttpStatusCode(payload.error.codexErrorInfo) === 429
+                ? decideCodexRateLimitRetry({ attempt, retryAfterMs })
+                : null;
+            const retry: OrchestrationV2ProviderRetry = {
+              attempt,
+              maxAttempts: progress?.maxAttempts ?? previous?.retry.maxAttempts ?? null,
+              retryDelayMs: rateLimitDecision?.type === "wait" ? rateLimitDecision.delayMs : null,
+            };
             const failure = withCodexManagedFailure(
               makeProviderFailure({
                 message:
@@ -4654,7 +4671,95 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 updatedAt,
               }),
             });
+            if (rateLimitDecision !== null) {
+              yield* endStalledRateLimitedTurn({
+                context,
+                state,
+                decision: rateLimitDecision,
+                retryAfterMs,
+                noticedAt: updatedAt,
+                failureAtArm: context.latestProviderFailure,
+              }).pipe(Effect.forkIn(scope));
+            }
           }).pipe(Effect.orDie),
+        );
+
+        /**
+         * Ends a turn whose rate-limited retry made no progress within the
+         * retry budget. Progress or another retry notice replaces the tracked
+         * retry state, which turns this into a no-op.
+         */
+        const endStalledRateLimitedTurn = Effect.fn("CodexAdapterV2.endStalledRateLimitedTurn")(
+          function* (input: {
+            readonly context: ActiveCodexTurnContext;
+            readonly state: ActiveCodexProviderRetry;
+            readonly decision: CodexRateLimitRetryDecision;
+            readonly retryAfterMs: number | null;
+            readonly noticedAt: DateTime.Utc;
+            readonly failureAtArm: ActiveCodexTurnContext["latestProviderFailure"];
+          }) {
+            const { context, state, decision } = input;
+            if (decision.type === "wait") {
+              yield* Effect.sleep(`${decision.deadlineMs} millis`);
+            }
+            if (
+              (yield* Ref.get(providerRetries)).get(context.providerTurnId) !== state ||
+              (yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context ||
+              context.latestProviderFailure !== input.failureAtArm
+            ) {
+              return;
+            }
+            const now = yield* DateTime.now;
+            // A Retry-After that outlasts this wait becomes the limit's reset
+            // time, so the existing Limited state and auto-resume can use it.
+            const resetAt =
+              input.retryAfterMs === null
+                ? null
+                : DateTime.add(input.noticedAt, { milliseconds: input.retryAfterMs });
+            const attempts =
+              state.retry.maxAttempts === null
+                ? `${state.retry.attempt}`
+                : `${state.retry.attempt}/${state.retry.maxAttempts}`;
+            const message =
+              decision.type === "wait"
+                ? `Provider rate limit (HTTP 429): retry ${attempts} made no progress within ${Math.round(decision.deadlineMs / 1000)}s, so the turn was stopped.`
+                : decision.reason === "attempts_exhausted"
+                  ? `Provider rate limit (HTTP 429): gave up after ${attempts} retry attempts.`
+                  : `Provider rate limit (HTTP 429): the provider asked to wait ${Math.round((input.retryAfterMs ?? 0) / 1000)}s before retrying, longer than the allowed retry delay, so the turn was stopped.`;
+            context.latestProviderFailure = {
+              nativeMessage: state.nativeMessage,
+              nativeCode: state.nativeCode,
+              failure: makeProviderFailure({
+                message,
+                code: "rateLimitRetryExhausted",
+                class: "usage_limit",
+                retryable: true,
+                ...(resetAt === null || !DateTime.isGreaterThan(resetAt, now)
+                  ? {}
+                  : { resetAt: DateTime.formatIso(resetAt) }),
+              }),
+            };
+            const finalized = yield* finalizeCodexTurn({
+              context,
+              nativeTurnId: context.nativeTurnId,
+              status: "failed",
+              completedAt: now,
+            });
+            const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
+            if (!finalized || nativeThreadId == null) {
+              return;
+            }
+            // Stop Codex's own retry sleep so the thread can take the next turn.
+            yield* client
+              .request("turn/interrupt", { threadId: nativeThreadId, turnId: context.nativeTurnId })
+              .pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-failed", {
+                    cause,
+                  }),
+                ),
+              );
+          },
         );
 
         const emitCompactionItem = Effect.fn("CodexAdapterV2.emitCompactionItem")(function* (
@@ -5707,7 +5812,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   failure.class === "usage_limit"
                     ? {
                         ...failure,
-                        resetAt: codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot)),
+                        resetAt:
+                          failure.resetAt ??
+                          codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot)),
                       }
                     : failure,
                 ...(input.providerRetry === undefined
