@@ -16,7 +16,9 @@ import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapsh
 import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
 import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts";
 import {
+  CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS,
   codexErrorHttpStatusCode,
+  codexErrorTextIndicatesHttp429,
   decideCodexRateLimitRetry,
   parseCodexRetryAfterMs,
   type CodexRateLimitRetryDecision,
@@ -1162,6 +1164,29 @@ interface ActiveCodexTurnContext {
     readonly nativeCode: string | null;
     readonly failure: OrchestrationV2ProviderFailure;
   };
+  /**
+   * Set once a stalled HTTP 429 retry is being stopped. The stopping fiber
+   * then owns the turn's terminal, so the interrupt's own turn/completed
+   * cannot replace the rate-limit failure.
+   */
+  rateLimitRetryExhausted?: OrchestrationV2ProviderFailure;
+  /**
+   * Whether Codex confirmed the stalled 429 turn stopped. "ended" records a
+   * turn/completed that arrived while the interrupt was in flight or ended
+   * an unconfirmed turn; "unconfirmed" keeps the turn active until Codex
+   * reports it ended, for at most CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS;
+   * "abandoned" means that bound passed and the adapter failed the turn
+   * itself, so its native thread is treated as broken.
+   */
+  rateLimitContainment?: "ended" | "unconfirmed" | "abandoned";
+  /** Fails an "unconfirmed" turn once its bound passes. */
+  rateLimitContainmentTimer?: Fiber.Fiber<void>;
+  /**
+   * Whether Codex acknowledged a Stop's turn/interrupt for this turn. Stop
+   * can end an "unconfirmed" turn before its bound; without this
+   * acknowledgement the turn was never confirmed stopped either.
+   */
+  rateLimitStopAcknowledged?: boolean;
   readonly nativeStartReady?: Deferred.Deferred<void>;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly projectionAppThread: OrchestrationV2AppThread;
@@ -1258,6 +1283,16 @@ const approvalOwnerCodexTurn = (
   }
   return { owner, subagent };
 };
+
+/**
+ * A 429 turn the adapter ended without Codex confirming it stopped may still
+ * run natively, so its thread must be resumed rather than reused. That holds
+ * whether the bound abandoned it or a Stop Codex never acknowledged ended it
+ * first.
+ */
+const isUncontainedRateLimitedTurn = (context: ActiveCodexTurnContext): boolean =>
+  context.rateLimitContainment === "abandoned" ||
+  (context.rateLimitContainment === "unconfirmed" && context.rateLimitStopAcknowledged !== true);
 
 const isDescendantCodexTurn = (
   candidate: ActiveCodexTurnContext,
@@ -4579,7 +4614,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerNotification("error", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
-            if (context === undefined) {
+            // Once a stalled 429 retry is being stopped, the stopping fiber
+            // owns the failure, so a late error cannot replace it.
+            if (context === undefined || context.rateLimitRetryExhausted !== undefined) {
               return;
             }
             const notificationCode = codexErrorInfoCode(payload.error.codexErrorInfo);
@@ -4606,14 +4643,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const attempt = progress?.attempt ?? (previous?.retry.attempt ?? 0) + 1;
             const code = codexErrorInfoCode(payload.error.codexErrorInfo);
             const additionalDetails = payload.error.additionalDetails?.trim();
+            const noticedAtMs = DateTime.toEpochMillis(updatedAt);
             const retryAfterMs =
-              parseCodexRetryAfterMs(additionalDetails) ??
-              parseCodexRetryAfterMs(payload.error.message);
+              parseCodexRetryAfterMs(additionalDetails, noticedAtMs) ??
+              parseCodexRetryAfterMs(payload.error.message, noticedAtMs);
             // Codex sleeps for any Retry-After it gets, uncapped and silently,
             // so a rate-limited retry is bounded here instead.
+            // The structured status is optional, so a 429 only named in the
+            // error text still counts when Codex attached no status at all.
+            const httpStatusCode = codexErrorHttpStatusCode(payload.error.codexErrorInfo);
             const rateLimitDecision =
               codexUsageLimitError(code, payload.error.codexErrorInfo) ||
-              codexErrorHttpStatusCode(payload.error.codexErrorInfo) === 429
+              httpStatusCode === 429 ||
+              (httpStatusCode === null &&
+                (codexErrorTextIndicatesHttp429(additionalDetails) ||
+                  codexErrorTextIndicatesHttp429(payload.error.message)))
                 ? decideCodexRateLimitRetry({ attempt, retryAfterMs })
                 : null;
             const retry: OrchestrationV2ProviderRetry = {
@@ -4685,6 +4729,39 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
 
         /**
+         * Sends turn/interrupt for a turn stopped by the 429 retry deadline.
+         * True only when Codex acknowledged it within the bound.
+         */
+        const interruptRateLimitedNativeTurn = Effect.fnUntraced(function* (
+          target: ActiveCodexTurnContext,
+        ) {
+          const nativeThreadId = target.providerThread.nativeThreadRef?.nativeId;
+          if (nativeThreadId == null) return true;
+          const acknowledged = yield* client
+            .request("turn/interrupt", {
+              threadId: nativeThreadId,
+              turnId: target.nativeTurnId,
+            })
+            .pipe(
+              Effect.as(true),
+              Effect.timeoutOption("10 seconds"),
+              Effect.catch((cause) =>
+                Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-failed", {
+                  nativeTurnId: target.nativeTurnId,
+                  cause,
+                }).pipe(Effect.as(Option.some(false))),
+              ),
+            );
+          if (Option.isNone(acknowledged)) {
+            yield* Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-timeout", {
+              nativeTurnId: target.nativeTurnId,
+            });
+            return false;
+          }
+          return acknowledged.value;
+        });
+
+        /**
          * Ends a turn whose rate-limited retry made no progress within the
          * retry budget. Progress or another retry notice replaces the tracked
          * retry state, which turns this into a no-op.
@@ -4703,6 +4780,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* Effect.sleep(`${decision.deadlineMs} millis`);
             }
             if (
+              context.rateLimitRetryExhausted !== undefined ||
               (yield* Ref.get(providerRetries)).get(context.providerTurnId) !== state ||
               (yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context ||
               context.latestProviderFailure !== input.failureAtArm
@@ -4726,41 +4804,151 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 : decision.reason === "attempts_exhausted"
                   ? `Provider rate limit (HTTP 429): gave up after ${attempts} retry attempts.`
                   : `Provider rate limit (HTTP 429): the provider asked to wait ${Math.round((input.retryAfterMs ?? 0) / 1000)}s before retrying, longer than the allowed retry delay, so the turn was stopped.`;
+            const failure = makeProviderFailure({
+              message,
+              code: "rateLimitRetryExhausted",
+              class: "usage_limit",
+              retryable: true,
+              ...(resetAt === null || !DateTime.isGreaterThan(resetAt, now)
+                ? {}
+                : { resetAt: DateTime.formatIso(resetAt) }),
+            });
             context.latestProviderFailure = {
               nativeMessage: state.nativeMessage,
               nativeCode: state.nativeCode,
-              failure: makeProviderFailure({
-                message,
-                code: "rateLimitRetryExhausted",
-                class: "usage_limit",
-                retryable: true,
-                ...(resetAt === null || !DateTime.isGreaterThan(resetAt, now)
-                  ? {}
-                  : { resetAt: DateTime.formatIso(resetAt) }),
-              }),
+              failure,
             };
-            const finalized = yield* finalizeCodexTurn({
-              context,
-              nativeTurnId: context.nativeTurnId,
-              status: "failed",
-              completedAt: now,
-            });
-            const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
-            if (!finalized || nativeThreadId == null) {
-              return;
-            }
-            // Stop Codex's own retry sleep so the thread can take the next turn.
-            yield* client
-              .request("turn/interrupt", { threadId: nativeThreadId, turnId: context.nativeTurnId })
-              .pipe(
-                Effect.catch((cause) =>
-                  Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-failed", {
-                    cause,
-                  }),
-                ),
+            context.rateLimitRetryExhausted = failure;
+            // Stop Codex's own retry sleep before publishing the terminal: once
+            // the turn is terminal the thread is idle, and a queued follow-up
+            // must not start while Codex still runs the rate-limited turn.
+            const rootInterrupted = yield* interruptRateLimitedNativeTurn(context);
+            // Native subagents run on their own threads and outlive a failed
+            // root, so the deadline stops the whole active lineage, like Stop.
+            // A subagent can start a nested turn while an interrupt is in
+            // flight, so the lineage is re-scanned until no new turn appears.
+            // Descendants settle first, so the root terminal neither waits for
+            // them nor reports them as still running.
+            // The last, empty scan and the root's terminal share one
+            // terminalization permit with turn/started: a nested turn starts
+            // either before the scan, which then stops it, or after the root
+            // is terminal, where the late-subagent path interrupts it.
+            const stoppedDescendants = new Set<ActiveCodexTurnContext>();
+            while (true) {
+              const step = yield* turnTerminalizationPermit.withPermits(1)(
+                Effect.gen(function* () {
+                  const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
+                    (candidate) =>
+                      !stoppedDescendants.has(candidate) &&
+                      isDescendantCodexTurn(candidate, context),
+                  );
+                  if (descendants.length > 0) {
+                    return { type: "descendants", descendants } as const;
+                  }
+                  // An unacknowledged interrupt does not stop Codex's retry,
+                  // so the turn stays active until its turn/completed
+                  // confirms it ended.
+                  if (!rootInterrupted && context.rateLimitContainment !== "ended") {
+                    context.rateLimitContainment = "unconfirmed";
+                    return { type: "unconfirmed" } as const;
+                  }
+                  yield* finalizeCodexTurnHoldingPermit({
+                    context,
+                    nativeTurnId: context.nativeTurnId,
+                    status: "failed",
+                    completedAt: now,
+                  });
+                  return { type: "finalized" } as const;
+                }),
               );
+              if (step.type === "finalized") return;
+              if (step.type === "unconfirmed") break;
+              for (const descendant of step.descendants) {
+                stoppedDescendants.add(descendant);
+                yield* interruptRateLimitedNativeTurn(descendant);
+              }
+              for (const descendant of step.descendants) {
+                yield* finalizeCodexTurn({
+                  context: descendant,
+                  nativeTurnId: descendant.nativeTurnId,
+                  status: "interrupted",
+                  completedAt: now,
+                });
+              }
+            }
+            yield* Effect.logWarning("orchestration-v2.codex-rate-limit-turn-uncontained", {
+              nativeTurnId: context.nativeTurnId,
+            });
+            // Waiting for turn/completed alone could hang the turn again, so
+            // the wait is bounded.
+            context.rateLimitContainmentTimer = yield* abandonUncontainedRateLimitedTurn(
+              context,
+            ).pipe(Effect.forkIn(scope));
           },
         );
+
+        /**
+         * Fails a stopped 429 turn whose stop Codex never confirmed. The turn
+         * may still be running natively, so the terminal marks its thread
+         * broken and the next turn resumes it rather than reusing it.
+         */
+        const abandonUncontainedRateLimitedTurn = Effect.fn(
+          "CodexAdapterV2.abandonUncontainedRateLimitedTurn",
+        )(function* (context: ActiveCodexTurnContext) {
+          yield* Effect.sleep(`${CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS} millis`);
+          // A subagent can start a nested turn while the root waits, so the
+          // lineage is stopped again before the root fails, as the deadline
+          // did. The last, empty scan, the abandonment and the terminal share
+          // one terminalization permit with turn/started and turn/completed:
+          // a turn/completed either ends the turn first or is ignored, and a
+          // nested turn either is stopped here or starts after the terminal.
+          const stoppedDescendants = new Set<ActiveCodexTurnContext>();
+          while (true) {
+            const step = yield* turnTerminalizationPermit.withPermits(1)(
+              Effect.gen(function* () {
+                if (
+                  context.rateLimitContainment !== "unconfirmed" ||
+                  (yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context
+                ) {
+                  return { type: "settled" } as const;
+                }
+                const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
+                  (candidate) =>
+                    !stoppedDescendants.has(candidate) && isDescendantCodexTurn(candidate, context),
+                );
+                if (descendants.length > 0) {
+                  return { type: "descendants", descendants } as const;
+                }
+                context.rateLimitContainment = "abandoned";
+                yield* Effect.logWarning("orchestration-v2.codex-rate-limit-turn-abandoned", {
+                  nativeTurnId: context.nativeTurnId,
+                  timeoutMs: CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS,
+                });
+                yield* finalizeCodexTurnHoldingPermit({
+                  context,
+                  nativeTurnId: context.nativeTurnId,
+                  status: "failed",
+                  completedAt: yield* DateTime.now,
+                });
+                return { type: "settled" } as const;
+              }),
+            );
+            if (step.type === "settled") return;
+            for (const descendant of step.descendants) {
+              stoppedDescendants.add(descendant);
+              yield* interruptRateLimitedNativeTurn(descendant);
+            }
+            const completedAt = yield* DateTime.now;
+            for (const descendant of step.descendants) {
+              yield* finalizeCodexTurn({
+                context: descendant,
+                nativeTurnId: descendant.nativeTurnId,
+                status: "interrupted",
+                completedAt,
+              });
+            }
+          }
+        });
 
         const emitCompactionItem = Effect.fn("CodexAdapterV2.emitCompactionItem")(function* (
           context: ActiveCodexTurnContext,
@@ -4846,6 +5034,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "contextCompaction") {
+              // Compaction is a model request too, so it proves a retried
+              // request went through and must clear the retry deadline.
+              yield* completeProviderRetry(context, yield* DateTime.now);
               yield* emitCompactionItem(
                 context,
                 payload.item.id,
@@ -5006,6 +5197,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "contextCompaction") {
+              yield* completeProviderRetry(context, yield* DateTime.now);
               yield* emitCompactionItem(
                 context,
                 payload.item.id,
@@ -5823,7 +6015,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       retry: input.providerRetry.retry,
                       retryStartedAt: input.providerRetry.startedAt,
                     }),
-                threadDisposition: "reusable",
+                // A 429 turn Codex never confirmed stopped must not reuse the
+                // loaded thread: "broken" makes the next turn resume it.
+                threadDisposition: isUncontainedRateLimitedTurn(input.context)
+                  ? "broken"
+                  : "reusable",
               };
             }
             return {
@@ -5834,7 +6030,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               runOrdinal: input.context.input.runOrdinal,
               status: terminalStatus,
               failure: null,
-              threadDisposition: "reusable",
+              // Stop can end a 429 turn Codex never confirmed stopped.
+              threadDisposition: isUncontainedRateLimitedTurn(input.context)
+                ? "broken"
+                : "reusable",
             };
           },
         );
@@ -5993,275 +6192,308 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           },
         );
 
-        const finalizeCodexTurn = (input: {
+        interface FinalizeCodexTurnInput {
           readonly context: ActiveCodexTurnContext;
           readonly nativeTurnId: string;
           readonly status: OrchestrationV2ProviderTurn["status"];
           readonly completedAt: DateTime.Utc;
           readonly failureMessage?: string;
           readonly failureErrorInfo?: CodexErrorInfo;
-        }) =>
-          turnTerminalizationPermit.withPermits(1)(
-            Effect.gen(function* () {
-              const current = (yield* Ref.get(activeTurns)).get(input.nativeTurnId);
-              if (current !== input.context) {
-                return false;
-              }
-              input.context.fileChangeKindsByItem.clear();
-              const providerRetry = yield* Ref.modify(providerRetries, (current) => {
-                const retry = current.get(input.context.providerTurnId);
-                if (retry === undefined) {
-                  return [undefined, current] as const;
-                }
-                const updated = new Map(current);
-                updated.delete(input.context.providerTurnId);
-                return [retry, updated] as const;
-              });
-              if (
-                providerRetry !== undefined &&
-                (input.status !== "failed" || input.context.subagent !== null)
-              ) {
-                yield* emitProviderEvent({
-                  type: "turn_item.updated",
-                  driver: CODEX_PROVIDER,
-                  turnItem: makeProviderRetryTurnItem({
-                    driver: CODEX_PROVIDER,
-                    threadId: input.context.projectionThreadId,
-                    runId: input.context.projectionRunId,
-                    nodeId: input.context.providerNodeId,
-                    providerThreadId: input.context.providerThread.id,
-                    providerTurnId: input.context.providerTurnId,
-                    itemOrdinal: providerRetry.itemOrdinal,
-                    failure: providerRetry.failure,
-                    retry: providerRetry.retry,
-                    status: providerTurnStatusToTerminal(input.status),
-                    startedAt: providerRetry.startedAt,
-                    updatedAt: input.completedAt,
-                  }),
-                });
-              }
-              if (input.status !== "completed") {
-                yield* Ref.update(terminalizedNonCompletedNativeTurns, (current) => {
-                  const updated = new Set(current);
-                  updated.add(input.nativeTurnId);
-                  return updated;
-                });
-              }
-              yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
-              yield* reasoningDeltas.flushTurn(input.nativeTurnId);
-              yield* planDeltas.flushTurn(input.nativeTurnId);
-              for (const [key, part] of reasoningParts) {
-                if (part.turnId === input.nativeTurnId) reasoningParts.delete(key);
-              }
-              // Failed compaction can end the turn without item/completed.
-              for (const nativeItemId of input.context.runningCompactionItemIds) {
-                yield* emitCompactionItem(
-                  input.context,
-                  nativeItemId,
-                  providerTurnStatusToTerminal(input.status),
-                  input.completedAt,
-                );
-              }
-              const nativeThreadId = input.context.providerThread.nativeThreadRef?.nativeId;
-              const activation =
-                nativeThreadId == null ? undefined : goalActivations.get(nativeThreadId);
-              const holdsForGoal =
-                input.context.subagent === null &&
-                input.status === "completed" &&
-                nativeThreadId != null &&
-                (goalsByNativeThread.get(nativeThreadId)?.status === "active" ||
-                  (activation !== undefined && !activation.stopped));
-              const completedTurn: OrchestrationV2ProviderTurn = {
-                id: input.context.providerTurnId,
-                providerThreadId: input.context.providerThread.id,
+        }
+        const finalizeCodexTurn = (input: FinalizeCodexTurnInput) =>
+          turnTerminalizationPermit.withPermits(1)(finalizeCodexTurnHoldingPermit(input));
+        /** The body of finalizeCodexTurn, for callers that hold the permit. */
+        const finalizeCodexTurnHoldingPermit = Effect.fn(
+          "CodexAdapterV2.finalizeCodexTurnHoldingPermit",
+        )(function* (input: FinalizeCodexTurnInput) {
+          const current = (yield* Ref.get(activeTurns)).get(input.nativeTurnId);
+          if (current !== input.context) {
+            return false;
+          }
+          input.context.fileChangeKindsByItem.clear();
+          const providerRetry = yield* Ref.modify(providerRetries, (current) => {
+            const retry = current.get(input.context.providerTurnId);
+            if (retry === undefined) {
+              return [undefined, current] as const;
+            }
+            const updated = new Map(current);
+            updated.delete(input.context.providerTurnId);
+            return [retry, updated] as const;
+          });
+          if (
+            providerRetry !== undefined &&
+            (input.status !== "failed" || input.context.subagent !== null)
+          ) {
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: makeProviderRetryTurnItem({
+                driver: CODEX_PROVIDER,
+                threadId: input.context.projectionThreadId,
+                runId: input.context.projectionRunId,
                 nodeId: input.context.providerNodeId,
-                runAttemptId:
-                  input.context.subagent === null ? input.context.input.attemptId : null,
-                nativeTurnRef: {
-                  driver: CODEX_PROVIDER,
-                  nativeId: input.nativeTurnId,
-                  strength: "strong",
-                },
-                ordinal: input.context.providerTurnOrdinal,
+                providerThreadId: input.context.providerThread.id,
+                providerTurnId: input.context.providerTurnId,
+                itemOrdinal: providerRetry.itemOrdinal,
+                // A subagent has no root terminal, so its retry item is
+                // where a stalled 429's usage-limit failure shows.
+                failure:
+                  input.status === "failed" && input.context.rateLimitRetryExhausted !== undefined
+                    ? input.context.rateLimitRetryExhausted
+                    : providerRetry.failure,
+                retry: providerRetry.retry,
+                status: providerTurnStatusToTerminal(input.status),
+                startedAt: providerRetry.startedAt,
+                updatedAt: input.completedAt,
+              }),
+            });
+          }
+          if (input.status !== "completed") {
+            yield* Ref.update(terminalizedNonCompletedNativeTurns, (current) => {
+              const updated = new Set(current);
+              updated.add(input.nativeTurnId);
+              return updated;
+            });
+          }
+          yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
+          yield* reasoningDeltas.flushTurn(input.nativeTurnId);
+          yield* planDeltas.flushTurn(input.nativeTurnId);
+          for (const [key, part] of reasoningParts) {
+            if (part.turnId === input.nativeTurnId) reasoningParts.delete(key);
+          }
+          // Failed compaction can end the turn without item/completed.
+          for (const nativeItemId of input.context.runningCompactionItemIds) {
+            yield* emitCompactionItem(
+              input.context,
+              nativeItemId,
+              providerTurnStatusToTerminal(input.status),
+              input.completedAt,
+            );
+          }
+          const nativeThreadId = input.context.providerThread.nativeThreadRef?.nativeId;
+          const activation =
+            nativeThreadId == null ? undefined : goalActivations.get(nativeThreadId);
+          const holdsForGoal =
+            input.context.subagent === null &&
+            input.status === "completed" &&
+            nativeThreadId != null &&
+            (goalsByNativeThread.get(nativeThreadId)?.status === "active" ||
+              (activation !== undefined && !activation.stopped));
+          const completedTurn: OrchestrationV2ProviderTurn = {
+            id: input.context.providerTurnId,
+            providerThreadId: input.context.providerThread.id,
+            nodeId: input.context.providerNodeId,
+            runAttemptId: input.context.subagent === null ? input.context.input.attemptId : null,
+            nativeTurnRef: {
+              driver: CODEX_PROVIDER,
+              nativeId: input.nativeTurnId,
+              strength: "strong",
+            },
+            ordinal: input.context.providerTurnOrdinal,
+            status: input.status,
+            startedAt: input.context.startedAt,
+            completedAt: input.completedAt,
+            turnTokenUsage: completeCodexTurnTokenUsage(
+              usageStateForThread(
+                input.context.providerThread.nativeThreadRef?.nativeId ??
+                  String(input.context.providerThread.id),
+              ),
+              input.nativeTurnId,
+              input.status === "completed",
+            ),
+          };
+          if (!holdsForGoal) {
+            yield* emitProviderEvent({
+              type: "provider_turn.updated",
+              driver: CODEX_PROVIDER,
+              threadId: input.context.projectionThreadId,
+              providerTurn: completedTurn,
+            });
+          }
+          if (input.context.subagent !== null) {
+            yield* emitProviderEvent({
+              type: "node.updated",
+              driver: CODEX_PROVIDER,
+              node: {
+                id: input.context.providerNodeId,
+                threadId: input.context.projectionThreadId,
+                runId: null,
+                parentNodeId: null,
+                rootNodeId: input.context.rootNodeId,
+                kind: "root_turn",
                 status: input.status,
-                startedAt: input.context.startedAt,
+                countsForRun: false,
+                providerThreadId: input.context.providerThread.id,
+                providerTurnId: input.context.providerTurnId,
+                nativeItemRef: input.context.subagent.task.nativeTaskRef,
+                runtimeRequestId: null,
+                checkpointScopeId: null,
+                startedAt: input.context.providerNodeStartedAt,
                 completedAt: input.completedAt,
-                turnTokenUsage: completeCodexTurnTokenUsage(
-                  usageStateForThread(
-                    input.context.providerThread.nativeThreadRef?.nativeId ??
-                      String(input.context.providerThread.id),
-                  ),
-                  input.nativeTurnId,
-                  input.status === "completed",
-                ),
-              };
-              if (!holdsForGoal) {
-                yield* emitProviderEvent({
-                  type: "provider_turn.updated",
-                  driver: CODEX_PROVIDER,
-                  threadId: input.context.projectionThreadId,
-                  providerTurn: completedTurn,
-                });
-              }
-              if (input.context.subagent !== null) {
-                yield* emitProviderEvent({
-                  type: "node.updated",
-                  driver: CODEX_PROVIDER,
-                  node: {
-                    id: input.context.providerNodeId,
-                    threadId: input.context.projectionThreadId,
-                    runId: null,
-                    parentNodeId: null,
-                    rootNodeId: input.context.rootNodeId,
-                    kind: "root_turn",
-                    status: input.status,
-                    countsForRun: false,
-                    providerThreadId: input.context.providerThread.id,
-                    providerTurnId: input.context.providerTurnId,
-                    nativeItemRef: input.context.subagent.task.nativeTaskRef,
-                    runtimeRequestId: null,
-                    checkpointScopeId: null,
-                    startedAt: input.context.providerNodeStartedAt,
-                    completedAt: input.completedAt,
-                  },
-                });
-                yield* emitProviderEvent({
-                  type: "provider_thread.updated",
-                  driver: CODEX_PROVIDER,
-                  providerThread: {
-                    ...input.context.providerThread,
-                    status: "idle",
-                    updatedAt: input.completedAt,
-                  },
-                });
-                yield* emitProviderEvent({
-                  type: "node.updated",
-                  driver: CODEX_PROVIDER,
-                  node: {
-                    id: input.context.subagent.subagentNodeId,
-                    threadId: input.context.subagent.parentContext.projectionThreadId,
-                    runId: input.context.subagent.parentContext.projectionRunId,
-                    parentNodeId: input.context.subagent.parentContext.itemParentNodeId,
-                    rootNodeId: input.context.subagent.parentContext.rootNodeId,
-                    kind: "subagent",
-                    status: input.status,
-                    countsForRun: false,
-                    providerThreadId: input.context.providerThread.id,
-                    providerTurnId: input.context.subagent.parentContext.providerTurnId,
-                    nativeItemRef: input.context.subagent.task.nativeTaskRef,
-                    runtimeRequestId: null,
-                    checkpointScopeId: null,
-                    startedAt: input.context.subagent.startedAt,
-                    completedAt: input.completedAt,
-                  },
-                });
-                yield* emitSubagentTaskUpdate({
-                  subagent: input.context.subagent,
-                  status: input.status,
-                  completedAt: input.completedAt,
-                });
-              }
-              if (input.status === "interrupted" || input.status === "failed") {
-                yield* terminalizeRunningCommandItems(
-                  input.context,
-                  input.nativeTurnId,
-                  input.status,
-                  input.completedAt,
-                );
-                yield* terminalizeMcpAppCaptures(input.context, input.nativeTurnId);
-              }
-              const dynamicToolStatus: "cancelled" | "interrupted" | "failed" =
-                input.status === "interrupted" || input.status === "failed"
-                  ? input.status
-                  : "cancelled";
-              yield* terminalizeRunningDynamicTools(
-                input.context,
-                input.nativeTurnId,
-                dynamicToolStatus,
-                input.completedAt,
-                input.status === "interrupted" || input.status === "failed",
-              );
-              if (input.context.subagent === null) {
-                yield* emitOrDeferRootTerminal({
-                  ...input,
-                  ...(providerRetry === undefined ? {} : { providerRetry }),
-                  ...(holdsForGoal ? { goalHoldTurn: completedTurn } : {}),
-                });
-              }
-              const waiter = (yield* Ref.get(turnWaiters)).get(input.nativeTurnId);
-              if (waiter !== undefined) {
-                yield* Deferred.succeed(waiter, undefined);
-              }
-              const interruptInProgress = (yield* Ref.get(interruptingNativeTurns)).has(
-                input.nativeTurnId,
-              );
-              const retainSettledContext =
-                input.status === "completed" &&
-                (yield* turnHasRetainedBackgroundWork(input.nativeTurnId));
-              if (retainSettledContext) {
-                yield* Ref.update(settledTurns, (current) => {
-                  const updated = new Map(current);
-                  updated.set(input.nativeTurnId, input.context);
-                  return updated;
-                });
-                // Background work that finished between the check above and
-                // the turn being recorded as settled saw no settled turn to
-                // release, so it is re-checked once recorded.
-                yield* releaseSettledTurnIfIdle(input.nativeTurnId);
-              }
-              yield* Ref.update(activeTurns, (current) => {
-                const updated = new Map(current);
-                updated.delete(input.nativeTurnId);
-                return updated;
-              });
-              if (input.context.nativeStartReady !== undefined) {
-                yield* Deferred.succeed(input.context.nativeStartReady, undefined);
-              }
-              yield* flushReadyRootTerminals();
-              if (!retainSettledContext && !interruptInProgress) {
-                yield* Ref.update(runningCommandItemsByTurn, (current) => {
-                  if (!current.has(input.nativeTurnId)) {
-                    return current;
-                  }
-                  const updated = new Map(current);
-                  updated.delete(input.nativeTurnId);
-                  return updated;
-                });
-                yield* Ref.update(runningDynamicToolsByTurn, (current) => {
-                  if (!current.has(input.nativeTurnId)) {
-                    return current;
-                  }
-                  const updated = new Map(current);
-                  updated.delete(input.nativeTurnId);
-                  return updated;
-                });
-              }
-              if (!retainSettledContext) {
-                yield* Ref.update(completedFinalAnswerTextsByTurn, (current) => {
-                  if (!current.has(input.nativeTurnId)) {
-                    return current;
-                  }
-                  const updated = new Map(current);
-                  updated.delete(input.nativeTurnId);
-                  return updated;
-                });
-                yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
-                  if (!current.has(input.nativeTurnId)) {
-                    return current;
-                  }
-                  const updated = new Map(current);
-                  updated.delete(input.nativeTurnId);
-                  return updated;
-                });
-              }
-              return true;
-            }),
+              },
+            });
+            // A subagent has no root terminal to carry a broken disposition,
+            // so a 429 turn Codex never confirmed stopped marks its thread
+            // errored: the child identity then resumes it instead of reusing
+            // a thread that may still be running.
+            yield* emitProviderEvent({
+              type: "provider_thread.updated",
+              driver: CODEX_PROVIDER,
+              providerThread: {
+                ...input.context.providerThread,
+                status: isUncontainedRateLimitedTurn(input.context) ? "error" : "idle",
+                updatedAt: input.completedAt,
+              },
+            });
+            yield* emitProviderEvent({
+              type: "node.updated",
+              driver: CODEX_PROVIDER,
+              node: {
+                id: input.context.subagent.subagentNodeId,
+                threadId: input.context.subagent.parentContext.projectionThreadId,
+                runId: input.context.subagent.parentContext.projectionRunId,
+                parentNodeId: input.context.subagent.parentContext.itemParentNodeId,
+                rootNodeId: input.context.subagent.parentContext.rootNodeId,
+                kind: "subagent",
+                status: input.status,
+                countsForRun: false,
+                providerThreadId: input.context.providerThread.id,
+                providerTurnId: input.context.subagent.parentContext.providerTurnId,
+                nativeItemRef: input.context.subagent.task.nativeTaskRef,
+                runtimeRequestId: null,
+                checkpointScopeId: null,
+                startedAt: input.context.subagent.startedAt,
+                completedAt: input.completedAt,
+              },
+            });
+            yield* emitSubagentTaskUpdate({
+              subagent: input.context.subagent,
+              status: input.status,
+              completedAt: input.completedAt,
+            });
+          }
+          if (input.status === "interrupted" || input.status === "failed") {
+            yield* terminalizeRunningCommandItems(
+              input.context,
+              input.nativeTurnId,
+              input.status,
+              input.completedAt,
+            );
+            yield* terminalizeMcpAppCaptures(input.context, input.nativeTurnId);
+          }
+          const dynamicToolStatus: "cancelled" | "interrupted" | "failed" =
+            input.status === "interrupted" || input.status === "failed"
+              ? input.status
+              : "cancelled";
+          yield* terminalizeRunningDynamicTools(
+            input.context,
+            input.nativeTurnId,
+            dynamicToolStatus,
+            input.completedAt,
+            input.status === "interrupted" || input.status === "failed",
           );
+          if (input.context.subagent === null) {
+            yield* emitOrDeferRootTerminal({
+              ...input,
+              ...(providerRetry === undefined ? {} : { providerRetry }),
+              ...(holdsForGoal ? { goalHoldTurn: completedTurn } : {}),
+            });
+          }
+          const waiter = (yield* Ref.get(turnWaiters)).get(input.nativeTurnId);
+          if (waiter !== undefined) {
+            yield* Deferred.succeed(waiter, undefined);
+          }
+          const interruptInProgress = (yield* Ref.get(interruptingNativeTurns)).has(
+            input.nativeTurnId,
+          );
+          const retainSettledContext =
+            input.status === "completed" &&
+            (yield* turnHasRetainedBackgroundWork(input.nativeTurnId));
+          if (retainSettledContext) {
+            yield* Ref.update(settledTurns, (current) => {
+              const updated = new Map(current);
+              updated.set(input.nativeTurnId, input.context);
+              return updated;
+            });
+            // Background work that finished between the check above and
+            // the turn being recorded as settled saw no settled turn to
+            // release, so it is re-checked once recorded.
+            yield* releaseSettledTurnIfIdle(input.nativeTurnId);
+          }
+          yield* Ref.update(activeTurns, (current) => {
+            const updated = new Map(current);
+            updated.delete(input.nativeTurnId);
+            return updated;
+          });
+          if (input.context.nativeStartReady !== undefined) {
+            yield* Deferred.succeed(input.context.nativeStartReady, undefined);
+          }
+          yield* flushReadyRootTerminals();
+          if (!retainSettledContext && !interruptInProgress) {
+            yield* Ref.update(runningCommandItemsByTurn, (current) => {
+              if (!current.has(input.nativeTurnId)) {
+                return current;
+              }
+              const updated = new Map(current);
+              updated.delete(input.nativeTurnId);
+              return updated;
+            });
+            yield* Ref.update(runningDynamicToolsByTurn, (current) => {
+              if (!current.has(input.nativeTurnId)) {
+                return current;
+              }
+              const updated = new Map(current);
+              updated.delete(input.nativeTurnId);
+              return updated;
+            });
+          }
+          if (!retainSettledContext) {
+            yield* Ref.update(completedFinalAnswerTextsByTurn, (current) => {
+              if (!current.has(input.nativeTurnId)) {
+                return current;
+              }
+              const updated = new Map(current);
+              updated.delete(input.nativeTurnId);
+              return updated;
+            });
+            yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
+              if (!current.has(input.nativeTurnId)) {
+                return current;
+              }
+              const updated = new Map(current);
+              updated.delete(input.nativeTurnId);
+              return updated;
+            });
+          }
+          return true;
+        });
 
         yield* client.handleServerNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
-            if (context === undefined) {
+            if (context === undefined) return;
+            // A turn stopped for a stalled 429 retry is finalized by the fiber
+            // that interrupted it, with the rate-limit failure, unless that
+            // interrupt went unacknowledged and only this event confirms it.
+            // Once the unconfirmed wait was abandoned, that fiber owns the
+            // terminal and this late event is ignored.
+            if (context.rateLimitRetryExhausted !== undefined) {
+              if (context.rateLimitContainment !== "unconfirmed") {
+                if (context.rateLimitContainment === undefined) {
+                  context.rateLimitContainment = "ended";
+                }
+                return;
+              }
+              context.rateLimitContainment = "ended";
+              yield* finalizeCodexTurn({
+                context,
+                nativeTurnId: payload.turn.id,
+                status: "failed",
+                completedAt: codexTimestamp(payload.turn.completedAt),
+              });
+              if (context.rateLimitContainmentTimer !== undefined) {
+                yield* Fiber.interrupt(context.rateLimitContainmentTimer);
+              }
               return;
             }
             const nativeStatus = mapCodexTurnStatus(payload.turn.status);
@@ -7135,6 +7367,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                             turnId: context.nativeTurnId,
                           }),
                         ).pipe(
+                          Effect.tap(() =>
+                            Effect.sync(() => {
+                              context.rateLimitStopAcknowledged = true;
+                            }),
+                          ),
                           Effect.catch((cause) =>
                             Effect.logWarning(
                               "orchestration-v2.codex-remaining-lineage-interrupt-failed",
@@ -7241,6 +7478,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     threadId: yield* getNativeThreadId(context.providerThread),
                     turnId: context.nativeTurnId,
                   });
+                  context.rateLimitStopAcknowledged = true;
                 }
                 const containedTerminalKeys = new Set<string>();
                 const attemptedTerminalKeys = new Set<string>();

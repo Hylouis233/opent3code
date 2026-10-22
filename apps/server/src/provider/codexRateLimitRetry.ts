@@ -29,6 +29,17 @@ export const CODEX_RATE_LIMIT_RETRY_POLICY: CodexRateLimitRetryPolicy = {
   progressGraceMs: 60_000,
 };
 
+/**
+ * How long a stopped 429 turn may stay active after Codex failed to
+ * acknowledge its `turn/interrupt` (the request errored or timed out) and has
+ * not reported `turn/completed` either. Past this bound the adapter stops
+ * waiting: the turn fails with `rateLimitRetryExhausted` and the native thread
+ * is marked broken, so the next turn resumes it instead of reusing a loaded
+ * thread that may still be retrying. It matches `progressGraceMs`, the time
+ * the policy already allows Codex to show any sign of life after a retry.
+ */
+export const CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS = 60_000;
+
 export type CodexRateLimitRetryDecision =
   | {
       readonly type: "wait";
@@ -85,12 +96,25 @@ const UNIT_MS: Record<string, number> = {
   hours: 3_600_000,
 };
 
+// RFC 9110 lets Retry-After carry an IMF-fixdate instead of delay-seconds.
+const RETRY_AFTER_HTTP_DATE =
+  /retry[-_ ]?after["']?\s*[:=]?\s*["']?((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s*\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/iu;
+
 /**
  * Reads a retry delay from provider error text: a `Retry-After` header or
- * field (seconds), a `reset_seconds` field, or "try again in N <unit>".
+ * field (seconds, or an HTTP date measured from `nowMs` when the caller
+ * supplies it), a `reset_seconds` field, or "try again in N <unit>".
  */
-export function parseCodexRetryAfterMs(text: string | null | undefined): number | null {
+export function parseCodexRetryAfterMs(
+  text: string | null | undefined,
+  nowMs?: number,
+): number | null {
   if (text == null || text.length === 0) return null;
+  if (nowMs !== undefined) {
+    const httpDate = RETRY_AFTER_HTTP_DATE.exec(text)?.[1];
+    const retryAt = httpDate === undefined ? Number.NaN : Date.parse(httpDate);
+    if (Number.isFinite(retryAt)) return Math.max(0, retryAt - nowMs);
+  }
   const seconds =
     /retry[-_ ]?after["']?\s*[:=]?\s*["']?(\d+(?:\.\d+)?)/iu.exec(text)?.[1] ??
     /reset_seconds["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)/iu.exec(text)?.[1];
@@ -118,4 +142,15 @@ export function codexErrorHttpStatusCode(errorInfo: unknown): number | null {
     }
   }
   return null;
+}
+
+const TEXTUAL_HTTP_429 =
+  /\btoo many requests\b|\b(?:http|status(?:[ _]?code)?)["']?\s*[:=]?\s*["']?429\b|^\s*429\b/imu;
+
+/**
+ * Whether provider error text reports HTTP 429. Codex's structured status is
+ * optional, so the text is the fallback evidence when it is missing.
+ */
+export function codexErrorTextIndicatesHttp429(text: string | null | undefined): boolean {
+  return text != null && TEXTUAL_HTTP_429.test(text);
 }
