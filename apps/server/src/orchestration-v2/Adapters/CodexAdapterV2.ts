@@ -4883,12 +4883,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 stoppedDescendants.add(descendant);
                 yield* interruptRateLimitedDescendant(descendant);
               }
+              // A descendant can start after the deadline stopped the root, so
+              // it settles at the time its interrupt finished, not the
+              // deadline's, which would end it before it started.
+              const completedAt = yield* DateTime.now;
               for (const descendant of step.descendants) {
                 yield* finalizeCodexTurn({
                   context: descendant,
                   nativeTurnId: descendant.nativeTurnId,
                   status: "interrupted",
-                  completedAt: now,
+                  completedAt,
                 });
               }
             }
