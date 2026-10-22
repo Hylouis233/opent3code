@@ -4867,6 +4867,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "contextCompaction") {
+              // Compaction is a model request too, so it proves a retried
+              // request went through and must clear the retry deadline.
+              yield* completeProviderRetry(context, yield* DateTime.now);
               yield* emitCompactionItem(
                 context,
                 payload.item.id,
@@ -5027,6 +5030,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "contextCompaction") {
+              yield* completeProviderRetry(context, yield* DateTime.now);
               yield* emitCompactionItem(
                 context,
                 payload.item.id,
