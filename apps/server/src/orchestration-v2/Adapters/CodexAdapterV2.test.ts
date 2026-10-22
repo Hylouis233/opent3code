@@ -36,6 +36,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as FileSystem from "effect/FileSystem";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@t3tools/shared/mcpApp";
@@ -2177,6 +2178,215 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         ),
       ),
     ),
+  );
+
+  // regression: pingdotgg/t3code#17503 a post-tool HTTP 429 retry left the turn running for hours
+  it.effect.each([
+    {
+      name: "backoff",
+      details: "429 Too Many Requests",
+      retryDelayMs: 5_000,
+      quietMs: 64_000,
+      resetAfterMs: null,
+    },
+    {
+      name: "short-retry-after",
+      details: "429 Too Many Requests; Retry-After: 30",
+      retryDelayMs: 30_000,
+      quietMs: 89_000,
+      // The Retry-After already elapsed while waiting, so it is no reset time.
+      resetAfterMs: null,
+    },
+    {
+      name: "long-retry-after",
+      details: '429 Too Many Requests; Retry-After: 384882 {"error":{"code":"model_cooldown"}}',
+      retryDelayMs: null,
+      quietMs: null,
+      resetAfterMs: 384_882_000,
+    },
+  ] as const)(
+    "ends a stalled post-tool 429 retry with an explicit failure ($name)",
+    ({ name, details, retryDelayMs, quietMs, resetAfterMs }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = `codex-rate-limit-stall-${name}`;
+          const nativeThreadId = `native-${scenario}-thread`;
+          const nativeTurnId = `native-${scenario}-turn`;
+          const command = {
+            type: "commandExecution",
+            id: "command-before-rate-limit",
+            command: "pwd",
+            cwd: "/workspace",
+            processId: "42",
+            source: "unifiedExecStartup",
+            commandActions: [{ type: "unknown", command: "pwd" }],
+          };
+          const transcript = makeCodexReplayTranscript({
+            scenario,
+            entries: [
+              ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Run pwd." }),
+              {
+                type: "emit_inbound",
+                label: "item/started/tool",
+                frame: {
+                  method: "item/started",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    startedAtMs: 1782622445000,
+                    item: {
+                      ...command,
+                      status: "inProgress",
+                      aggregatedOutput: null,
+                      exitCode: null,
+                      durationMs: null,
+                    },
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "item/completed/tool",
+                frame: {
+                  method: "item/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    completedAtMs: 1782622445010,
+                    item: {
+                      ...command,
+                      status: "completed",
+                      aggregatedOutput: "/workspace\n",
+                      exitCode: 0,
+                      durationMs: 10,
+                    },
+                  },
+                },
+              },
+              // Codex then sleeps for its retry without any further notification.
+              {
+                type: "emit_inbound",
+                label: "error/rate-limit-retry",
+                frame: {
+                  method: "error",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    willRetry: true,
+                    error: {
+                      message: "Reconnecting... 1/5",
+                      additionalDetails: details,
+                      codexErrorInfo: {
+                        responseStreamDisconnected: { httpStatusCode: 429 },
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "turn/interrupt",
+                frame: {
+                  id: 4,
+                  method: "turn/interrupt",
+                  params: { threadId: nativeThreadId, turnId: nativeTurnId },
+                },
+              },
+              { type: "emit_inbound", label: "turn/interrupt", frame: { id: 4, result: {} } },
+              {
+                type: "emit_inbound",
+                label: "turn/completed/interrupted",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "interrupted" }),
+                  },
+                },
+              },
+            ],
+          });
+          let interruptSent = false;
+          const interrupted = yield* Deferred.make<void>();
+          const harness = yield* makeCodexReplayHarness(
+            transcript,
+            () => Effect.void,
+            (method) =>
+              method === "turn/interrupt"
+                ? Effect.sync(() => {
+                    interruptSent = true;
+                  }).pipe(Effect.andThen(Deferred.succeed(interrupted, undefined)))
+                : Effect.void,
+          );
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-${scenario}`),
+              text: "Run pwd.",
+            }),
+          );
+          const retryItems = () =>
+            harness.events.flatMap((event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "error" &&
+              event.turnItem.retry !== undefined
+                ? [event.turnItem]
+                : [],
+            );
+          yield* harness.until(
+            () => retryItems().length > 0 || harness.terminalEvents().length > 0,
+          );
+          const armedAt = yield* DateTime.now;
+          assert.equal(retryItems()[0]?.status, "running");
+
+          if (quietMs !== null) {
+            // The retry budget (backoff or Retry-After, plus grace) is honored first.
+            yield* TestClock.adjust(`${quietMs} millis`);
+            for (let attempt = 0; attempt < 100; attempt++) {
+              yield* Effect.yieldNow;
+            }
+            assert.lengthOf(harness.terminalEvents(), 0);
+            assert.isFalse(interruptSent);
+            yield* TestClock.adjust("2 seconds");
+          }
+
+          const settled = yield* TestClock.withLive(
+            harness.awaitTerminal(1).pipe(Effect.timeoutOption("3 seconds")),
+          );
+          assert.isTrue(
+            Option.isSome(settled),
+            "a stalled 429 retry must end the turn instead of leaving it running",
+          );
+          const terminal = harness.terminalEvents()[0];
+          assert.equal(terminal?.status, "failed");
+          if (terminal?.status !== "failed") return;
+          assert.equal(terminal.failure.class, "usage_limit");
+          assert.equal(terminal.failure.code, "rateLimitRetryExhausted");
+          assert.equal(terminal.failure.retryable, true);
+          assert.include(terminal.failure.message, "HTTP 429");
+          assert.deepEqual(terminal.retry, { attempt: 1, maxAttempts: 5, retryDelayMs });
+          assert.equal(
+            terminal.failure.resetAt ?? null,
+            resetAfterMs === null
+              ? null
+              : DateTime.formatIso(DateTime.add(armedAt, { milliseconds: resetAfterMs })),
+          );
+          yield* TestClock.withLive(
+            Deferred.await(interrupted).pipe(Effect.timeoutOption("3 seconds")),
+          );
+          assert.isTrue(interruptSent, "Codex's own retry sleep must be interrupted");
+          for (let attempt = 0; attempt < 100; attempt++) {
+            yield* Effect.yieldNow;
+          }
+          assert.lengthOf(harness.terminalEvents(), 1);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
   );
 
   it.effect("resolves retryable app-server errors on resumed provider activity", () =>
