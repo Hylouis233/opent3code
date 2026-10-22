@@ -4758,6 +4758,105 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect("keeps an exhausted 429 turn active when its interrupt request fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-rate-limit-interrupt-error";
+        const nativeThreadId = `native-${scenario}-thread`;
+        const nativeTurnId = `native-${scenario}-turn`;
+        const interruptSent = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(
+          unconfirmedRateLimitTranscript(scenario, [
+            {
+              type: "emit_inbound",
+              label: "turn/interrupt/deadline",
+              afterMs: 1_000,
+              frame: { id: 4, error: { code: -32_603, message: "Interrupt failed" } },
+            },
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/stop",
+              frame: {
+                id: 5,
+                method: "turn/interrupt",
+                params: { threadId: nativeThreadId, turnId: nativeTurnId },
+              },
+            },
+            { type: "emit_inbound", label: "turn/interrupt/stop", frame: { id: 5, result: {} } },
+            {
+              type: "emit_inbound",
+              label: "turn/completed/interrupted",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "interrupted" }),
+                },
+              },
+            },
+          ]),
+          () => Effect.void,
+          (method) =>
+            method === "turn/interrupt"
+              ? Deferred.succeed(interruptSent, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            text: "Run pwd.",
+          }),
+        );
+        yield* Deferred.await(interruptSent);
+        // adjust returns once the interrupt's error response has been handled.
+        yield* TestClock.adjust("1 second");
+        assert.lengthOf(
+          harness.terminalEvents(),
+          0,
+          "a failed interrupt must not make the thread idle",
+        );
+        assert.lengthOf(failedProviderTurns(harness.events), 0);
+
+        const providerTurnId = harness.events.find(
+          (
+            event,
+          ): event is Extract<
+            ProviderAdapter.ProviderAdapterV2Event,
+            { type: "provider_turn.updated" }
+          > => event.type === "provider_turn.updated",
+        )?.providerTurn.id;
+        assert.isDefined(providerTurnId);
+        yield* harness.runtime.interruptTurn({
+          providerThread: harness.providerThread,
+          providerTurnId,
+        });
+        yield* harness.awaitTerminal(1);
+
+        const terminal = harness.terminalEvents()[0];
+        assert.equal(terminal?.status, "failed");
+        if (terminal?.status !== "failed") return;
+        assert.equal(terminal.failure.code, "rateLimitRetryExhausted");
+        assert.equal(
+          terminal.threadDisposition,
+          "reusable",
+          "Codex confirmed the turn ended, so its thread stays reusable",
+        );
+
+        // The confirmed stop cancelled the fallback: passing its bound ends nothing.
+        yield* TestClock.adjust(`${CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS} millis`);
+        assert.lengthOf(harness.terminalEvents(), 1);
+        assert.lengthOf(failedProviderTurns(harness.events), 1);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps the 429 failure when a final error arrives during the interrupt", () =>
     Effect.scoped(
       Effect.gen(function* () {
