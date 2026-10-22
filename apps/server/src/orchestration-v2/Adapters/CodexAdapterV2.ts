@@ -4769,29 +4769,46 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               failure,
             };
             context.rateLimitRetryExhausted = failure;
+            // Native subagents run on their own threads and outlive a failed
+            // root, so the deadline stops the whole active lineage, like Stop.
+            const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
+              (candidate) => isDescendantCodexTurn(candidate, context),
+            );
             // Stop Codex's own retry sleep before publishing the terminal: once
             // the turn is terminal the thread is idle, and a queued follow-up
             // must not start while Codex still runs the rate-limited turn.
-            const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
-            if (nativeThreadId != null) {
+            for (const target of [context, ...descendants]) {
+              const nativeThreadId = target.providerThread.nativeThreadRef?.nativeId;
+              if (nativeThreadId == null) continue;
               const acknowledged = yield* client
                 .request("turn/interrupt", {
                   threadId: nativeThreadId,
-                  turnId: context.nativeTurnId,
+                  turnId: target.nativeTurnId,
                 })
                 .pipe(
                   Effect.timeoutOption("10 seconds"),
                   Effect.catch((cause) =>
                     Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-failed", {
+                      nativeTurnId: target.nativeTurnId,
                       cause,
                     }).pipe(Effect.as(Option.some(undefined))),
                   ),
                 );
               if (Option.isNone(acknowledged)) {
                 yield* Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-timeout", {
-                  nativeTurnId: context.nativeTurnId,
+                  nativeTurnId: target.nativeTurnId,
                 });
               }
+            }
+            // Descendants settle first, so the root terminal neither waits for
+            // them nor reports them as still running.
+            for (const descendant of descendants) {
+              yield* finalizeCodexTurn({
+                context: descendant,
+                nativeTurnId: descendant.nativeTurnId,
+                status: "interrupted",
+                completedAt: now,
+              });
             }
             yield* finalizeCodexTurn({
               context,
