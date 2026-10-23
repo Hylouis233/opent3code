@@ -6639,6 +6639,103 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect(
+    "keeps a 429 thread broken when Stop ends it before the deadline's stop is confirmed",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = "codex-rate-limit-stop-before-deadline-confirmed";
+          const nativeThreadId = `native-${scenario}-thread`;
+          const nativeTurnId = `native-${scenario}-turn`;
+          const stopInterruptSent = yield* Deferred.make<void>();
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({
+              scenario,
+              entries: [
+                ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Run pwd." }),
+                {
+                  type: "expect_outbound",
+                  label: "turn/interrupt/stop",
+                  frame: {
+                    id: 4,
+                    method: "turn/interrupt",
+                    params: { threadId: nativeThreadId, turnId: nativeTurnId },
+                  },
+                },
+                // Codex accepts Stop's interrupt but never reports the turn ended.
+                {
+                  type: "emit_inbound",
+                  label: "turn/interrupt/stop",
+                  frame: { id: 4, result: {} },
+                },
+                // The retry deadline fires while Stop still waits for turn/completed.
+                { ...rateLimitRetryNotice(nativeThreadId, nativeTurnId), afterMs: 3_000 },
+                // Codex never answers the deadline's interrupt either.
+                {
+                  type: "expect_outbound",
+                  label: "turn/interrupt/deadline",
+                  frame: {
+                    id: 5,
+                    method: "turn/interrupt",
+                    params: { threadId: nativeThreadId, turnId: nativeTurnId },
+                  },
+                },
+              ],
+            }),
+            () => Effect.void,
+            (method) =>
+              method === "turn/interrupt"
+                ? Deferred.succeed(stopInterruptSent, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+          );
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-${scenario}`),
+              text: "Run pwd.",
+            }),
+          );
+          const providerTurnId = () =>
+            harness.events.find(
+              (
+                event,
+              ): event is Extract<
+                ProviderAdapter.ProviderAdapterV2Event,
+                { type: "provider_turn.updated" }
+              > => event.type === "provider_turn.updated",
+            )?.providerTurn.id;
+          yield* harness.until(() => providerTurnId() !== undefined);
+          const stopFiber = yield* harness.runtime
+            .interruptTurn({
+              providerThread: harness.providerThread,
+              providerTurnId: providerTurnId()!,
+            })
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(stopInterruptSent);
+          // Stop's 10s wait ends before the deadline's own interrupt wait does.
+          for (let second = 0; second < 15 && stopFiber.pollUnsafe() === undefined; second++) {
+            yield* TestClock.adjust("1 seconds");
+          }
+          yield* Fiber.join(stopFiber);
+          yield* harness.awaitTerminal(1);
+
+          const terminal = harness.terminalEvents()[0];
+          assert.equal(terminal?.status, "interrupted");
+          assert.equal(
+            terminal?.threadDisposition,
+            "broken",
+            "neither interrupt was confirmed by turn/completed, so the loaded thread must not be reused",
+          );
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
   it.effect("keeps the 429 failure when a final error arrives during the interrupt", () =>
     Effect.scoped(
       Effect.gen(function* () {
