@@ -4932,6 +4932,58 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect(
+    "marks an unconfirmed 429 root thread errored so its session drops the loaded thread",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = "codex-rate-limit-unconfirmed-root-thread-error";
+          const interruptSent = yield* Deferred.make<void>();
+          const harness = yield* makeCodexReplayHarness(
+            unconfirmedRateLimitTranscript(scenario),
+            () => Effect.void,
+            (method) =>
+              method === "turn/interrupt"
+                ? Deferred.succeed(interruptSent, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+          );
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-${scenario}`),
+              text: "Run pwd.",
+            }),
+          );
+          yield* Deferred.await(interruptSent);
+          yield* TestClock.adjust("10 seconds");
+          yield* TestClock.adjust(`${CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS} millis`);
+          yield* harness.awaitTerminal(1);
+
+          const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
+          const rootThreadErrorIndex = harness.events.findIndex(
+            (event) =>
+              event.type === "provider_thread.updated" &&
+              event.providerThread.id === harness.providerThread.id &&
+              event.providerThread.appThreadId === harness.threadId &&
+              event.providerThread.status === "error",
+          );
+          // The session's loaded-thread cache only drops a thread on an errored
+          // provider_thread.updated; the broken disposition alone would let the
+          // next turn start on the native thread that may still be retrying.
+          assert.notEqual(rootThreadErrorIndex, -1, "the root thread must be published as errored");
+          assert.isBelow(rootThreadErrorIndex, terminalIndex);
+          const terminal = harness.terminalEvents()[0];
+          assert.equal(terminal?.threadDisposition, "broken");
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
   it.effect("ignores a turn/completed that arrives after the unconfirmed 429 bound", () =>
     Effect.scoped(
       Effect.gen(function* () {
