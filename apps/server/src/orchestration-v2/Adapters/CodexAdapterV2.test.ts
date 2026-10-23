@@ -6849,6 +6849,90 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  it.effect("keeps the latest goal when an unconfirmed 429 marks the thread errored", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-rate-limit-unconfirmed-goal";
+        const nativeThreadId = `native-${scenario}-thread`;
+        const interruptSent = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(
+          unconfirmedRateLimitTranscript(scenario, [
+            // Codex updates the thread's goal while the stopped turn waits.
+            {
+              type: "emit_inbound",
+              label: "thread/goal/updated",
+              afterMs: 12_000,
+              frame: {
+                method: "thread/goal/updated",
+                params: {
+                  threadId: nativeThreadId,
+                  goal: {
+                    threadId: nativeThreadId,
+                    objective: "Run pwd.",
+                    status: "complete",
+                    tokenBudget: null,
+                    tokensUsed: 1200,
+                    timeUsedSeconds: 3,
+                    createdAt: 1782622440,
+                    updatedAt: 1782622450,
+                  },
+                },
+              },
+            },
+          ]),
+          () => Effect.void,
+          (method) =>
+            method === "turn/interrupt"
+              ? Deferred.succeed(interruptSent, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            text: "Run pwd.",
+          }),
+        );
+        yield* Deferred.await(interruptSent);
+        const rootThreadUpdates = () =>
+          harness.events.filter(
+            (
+              event,
+            ): event is Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "provider_thread.updated" }
+            > =>
+              event.type === "provider_thread.updated" &&
+              event.providerThread.nativeThreadRef?.nativeId === nativeThreadId,
+          );
+        for (let second = 0; second < 15 && rootThreadUpdates().length === 0; second++) {
+          yield* TestClock.adjust("1 seconds");
+        }
+        const goalUpdate = rootThreadUpdates()[0];
+        assert.isDefined(goalUpdate);
+        assert.equal(goalUpdate?.providerThread.goal?.status, "complete");
+        yield* TestClock.adjust(`${CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS} millis`);
+        yield* harness.awaitTerminal(1);
+
+        const errored = rootThreadUpdates().findLast(
+          (event) => event.providerThread.status === "error",
+        );
+        assert.isDefined(errored);
+        assert.deepEqual(
+          errored?.providerThread.goal,
+          goalUpdate?.providerThread.goal,
+          "marking the thread errored must not rewind its goal",
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps the 429 failure when a final error arrives during the interrupt", () =>
     Effect.scoped(
       Effect.gen(function* () {
