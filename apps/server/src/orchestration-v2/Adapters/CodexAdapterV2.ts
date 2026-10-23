@@ -4785,13 +4785,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         });
 
         /**
-         * Interrupts a turn the 429 deadline stops and waits, within the
-         * interrupt bound, for the turn/completed that confirms it ended.
-         * Codex replies to turn/interrupt before the turn ends, so the reply
-         * alone does not confirm the stop. True only when Codex confirmed it.
+         * Interrupts a turn the 429 deadline stops and waits, within
+         * `timeoutMs`, for the turn/completed that confirms it ended. Codex
+         * replies to turn/interrupt before the turn ends, so the reply alone
+         * does not confirm the stop. True only when Codex confirmed it.
          */
         const interruptRateLimitedTurnUntilEnded = Effect.fnUntraced(function* (
           target: ActiveCodexTurnContext,
+          timeoutMs: number,
         ) {
           const confirmed = yield* Deferred.make<void>();
           target.rateLimitStopConfirmed = confirmed;
@@ -4807,7 +4808,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* Deferred.await(confirmed);
             return true;
           }).pipe(
-            Effect.timeoutOption(`${CODEX_RATE_LIMIT_INTERRUPT_TIMEOUT_MS} millis`),
+            Effect.timeoutOption(`${timeoutMs} millis`),
             Effect.map(Option.getOrElse(() => false)),
           );
         });
@@ -4816,15 +4817,42 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
          * Interrupts a descendant the 429 deadline stops with its root. A
          * descendant Codex did not confirm ended may still run natively, so
          * it is marked abandoned and its terminal publishes its thread as
-         * broken rather than idle.
+         * broken rather than idle. Once `timeoutMs` is spent, the interrupt
+         * is still sent but not waited on.
          */
         const interruptRateLimitedDescendant = Effect.fnUntraced(function* (
           descendant: ActiveCodexTurnContext,
+          timeoutMs: number,
         ) {
-          const interrupted = yield* interruptRateLimitedTurnUntilEnded(descendant);
-          if (!interrupted && descendant.rateLimitContainment !== "ended") {
+          if (timeoutMs <= 0) {
+            yield* interruptRateLimitedNativeTurn(descendant).pipe(Effect.forkIn(scope));
+          } else if (yield* interruptRateLimitedTurnUntilEnded(descendant, timeoutMs)) {
+            return;
+          }
+          if (descendant.rateLimitContainment !== "ended") {
             descendant.rateLimitContainment = "abandoned";
           }
+        });
+
+        /**
+         * Interrupts the descendants found by one lineage scan at once. All
+         * scans of a lineage share one interrupt bound that ends at
+         * `deadlineAtMs`, so silent descendants, and nested turns found by a
+         * re-scan, cannot each add a full bound before the root settles.
+         */
+        const interruptRateLimitedDescendants = Effect.fnUntraced(function* (
+          descendants: ReadonlyArray<ActiveCodexTurnContext>,
+          deadlineAtMs: number,
+        ) {
+          const remainingMs = Math.max(
+            0,
+            deadlineAtMs - DateTime.toEpochMillis(yield* DateTime.now),
+          );
+          yield* Effect.forEach(
+            descendants,
+            (descendant) => interruptRateLimitedDescendant(descendant, remainingMs),
+            { concurrency: "unbounded", discard: true },
+          );
         });
 
         /**
@@ -4895,6 +4923,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const rootStopConfirmed = yield* Deferred.make<void>();
             context.rateLimitStopConfirmed = rootStopConfirmed;
             const rootAcknowledged = yield* interruptRateLimitedNativeTurn(context);
+            let descendantsDeadlineAtMs: number | undefined;
             const rootHasNativeThread = context.providerThread.nativeThreadRef?.nativeId != null;
             let rootStopAwaited = false;
             // Native subagents run on their own threads and outlive a failed
@@ -4954,10 +4983,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 );
                 continue;
               }
-              for (const descendant of step.descendants) {
-                stoppedDescendants.add(descendant);
-                yield* interruptRateLimitedDescendant(descendant);
-              }
+              for (const descendant of step.descendants) stoppedDescendants.add(descendant);
+              descendantsDeadlineAtMs ??=
+                DateTime.toEpochMillis(yield* DateTime.now) + CODEX_RATE_LIMIT_INTERRUPT_TIMEOUT_MS;
+              yield* interruptRateLimitedDescendants(step.descendants, descendantsDeadlineAtMs);
               // A descendant can start after the deadline stopped the root, so
               // it settles at the time its interrupt finished, not the
               // deadline's, which would end it before it started.
@@ -5001,6 +5030,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly settle: Effect.Effect<void, E, R>;
         }) {
           const stoppedDescendants = new Set<ActiveCodexTurnContext>();
+          let descendantsDeadlineAtMs: number | undefined;
           while (true) {
             const descendants = yield* turnTerminalizationPermit.withPermits(1)(
               Effect.gen(function* () {
@@ -5015,10 +5045,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }),
             );
             if (descendants.length === 0) return;
-            for (const descendant of descendants) {
-              stoppedDescendants.add(descendant);
-              yield* interruptRateLimitedDescendant(descendant);
-            }
+            for (const descendant of descendants) stoppedDescendants.add(descendant);
+            descendantsDeadlineAtMs ??=
+              DateTime.toEpochMillis(yield* DateTime.now) + CODEX_RATE_LIMIT_INTERRUPT_TIMEOUT_MS;
+            yield* interruptRateLimitedDescendants(descendants, descendantsDeadlineAtMs);
             const completedAt = yield* DateTime.now;
             for (const descendant of descendants) {
               yield* finalizeCodexTurn({

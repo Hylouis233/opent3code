@@ -5662,6 +5662,119 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         event.providerThread.nativeThreadRef?.nativeId === INTERRUPT_CHILD_NATIVE_THREAD,
     )?.providerThread.status;
 
+  it.effect("starts the unconfirmed 429 bound one interrupt bound after silent descendants", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-rate-limit-unconfirmed-silent-descendants";
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...rateLimitSubagentEntries,
+            rateLimitRetryNotice(INTERRUPT_NATIVE_THREAD, INTERRUPT_NATIVE_TURN),
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/root",
+              frame: {
+                id: 4,
+                method: "turn/interrupt",
+                params: { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
+              },
+            },
+            // A second nested turn is active when the lineage is stopped.
+            {
+              type: "emit_inbound",
+              label: "turn/started/late-child",
+              frame: {
+                method: "turn/started",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turn: makeCodexReplayTurn({
+                    id: INTERRUPT_LATE_CHILD_NATIVE_TURN,
+                    status: "inProgress",
+                  }),
+                },
+              },
+            },
+            // Codex accepts the root's interrupt but never reports it ended.
+            { type: "emit_inbound", label: "turn/interrupt/root", frame: { id: 4, result: {} } },
+            // Codex never answers either nested turn's interrupt.
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/child",
+              frame: {
+                id: 5,
+                method: "turn/interrupt",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turnId: INTERRUPT_CHILD_NATIVE_TURN,
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt/late-child",
+              frame: {
+                id: 6,
+                method: "turn/interrupt",
+                params: {
+                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                  turnId: INTERRUPT_LATE_CHILD_NATIVE_TURN,
+                },
+              },
+            },
+          ],
+        });
+        const rootInterruptSent = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          () => Effect.void,
+          (method) =>
+            method === "turn/interrupt"
+              ? Deferred.succeed(rootInterruptSent, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            text: INTERRUPT_PROMPT,
+          }),
+        );
+        yield* Deferred.await(rootInterruptSent);
+        const rootInterruptAt = DateTime.toEpochMillis(yield* DateTime.now);
+        for (let second = 0; second < 120 && harness.terminalEvents().length === 0; second++) {
+          yield* TestClock.adjust("1 seconds");
+        }
+        yield* harness.awaitTerminal(1);
+
+        const terminal = harness.terminalEvents()[0];
+        assert.equal(terminal?.status, "failed");
+        assert.equal(terminal?.threadDisposition, "broken");
+        const rootFailed = failedProviderTurns(harness.events)[0];
+        if (rootFailed?.type !== "provider_turn.updated") return assert.fail("root not failed");
+        const rootCompletedAt = rootFailed.providerTurn.completedAt;
+        assert.isNotNull(rootCompletedAt);
+        if (rootCompletedAt === null) return;
+        // Silent descendants share one 10s interrupt bound instead of adding
+        // 10s each; the clock steps 1s at a time, so allow one step.
+        const settledAfterMs = DateTime.toEpochMillis(rootCompletedAt) - rootInterruptAt;
+        assert.isAtLeast(settledAfterMs, 10_000 + CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS);
+        assert.isAtMost(
+          settledAfterMs,
+          10_000 + CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS + 1_000,
+          "the unconfirmed bound must not wait on each silent descendant in turn",
+        );
+        assert.equal(lastChildThreadStatus(harness.events), "error");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("settles a 429 lineage at the unconfirmed bound when a nested turn stays silent", () =>
     Effect.scoped(
       Effect.gen(function* () {
