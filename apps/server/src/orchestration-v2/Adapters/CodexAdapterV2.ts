@@ -6490,6 +6490,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             input.completedAt,
             input.status === "interrupted" || input.status === "failed",
           );
+          if (input.context.subagent === null && isUncontainedRateLimitedTurn(input.context)) {
+            // The broken disposition only reaches the projection. A live
+            // session keeps the native thread loaded until it sees the thread
+            // errored, and would otherwise start the next turn on a thread
+            // that may still be retrying.
+            yield* emitProviderEvent({
+              type: "provider_thread.updated",
+              driver: CODEX_PROVIDER,
+              providerThread: {
+                ...input.context.providerThread,
+                status: "error",
+                updatedAt: input.completedAt,
+              },
+            });
+          }
           if (input.context.subagent === null) {
             yield* emitOrDeferRootTerminal({
               ...input,
