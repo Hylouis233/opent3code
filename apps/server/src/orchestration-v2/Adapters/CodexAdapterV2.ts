@@ -6616,15 +6616,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // The broken disposition only reaches the projection. A live
             // session keeps the native thread loaded until it sees the thread
             // errored, and would otherwise start the next turn on a thread
-            // that may still be retrying.
+            // that may still be retrying. The update replaces the whole
+            // thread, so it starts from the live thread, whose goal may have
+            // changed since the turn started.
+            const nativeThreadId = input.context.providerThread.nativeThreadRef?.nativeId;
+            const liveThread =
+              (nativeThreadId == null ? undefined : rootProviderThreads.get(nativeThreadId)) ??
+              input.context.providerThread;
             yield* emitProviderEvent({
               type: "provider_thread.updated",
               driver: CODEX_PROVIDER,
-              providerThread: {
-                ...input.context.providerThread,
-                status: "error",
-                updatedAt: input.completedAt,
-              },
+              providerThread: { ...liveThread, status: "error", updatedAt: input.completedAt },
             });
           }
           if (input.context.subagent === null) {
