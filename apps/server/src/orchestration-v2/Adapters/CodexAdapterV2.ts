@@ -1306,12 +1306,16 @@ const approvalOwnerCodexTurn = (
 /**
  * A 429 turn the adapter ended without Codex confirming it stopped may still
  * run natively, so its thread must be resumed rather than reused. That holds
- * whether the bound abandoned it or Stop ended it first. A turn/interrupt
- * reply only accepts the request; only turn/completed moves the turn to
- * "ended".
+ * whether the bound abandoned it or Stop ended it first, including while the
+ * deadline is still stopping it. A turn/interrupt reply only accepts the
+ * request; only turn/completed moves the turn to "ended".
  */
 const isUncontainedRateLimitedTurn = (context: ActiveCodexTurnContext): boolean =>
-  context.rateLimitContainment === "abandoned" || context.rateLimitContainment === "unconfirmed";
+  context.rateLimitContainment === "abandoned" ||
+  context.rateLimitContainment === "unconfirmed" ||
+  (context.rateLimitRetryExhausted !== undefined &&
+    context.rateLimitContainment !== "ended" &&
+    context.providerThread.nativeThreadRef?.nativeId != null);
 
 const isDescendantCodexTurn = (
   candidate: ActiveCodexTurnContext,
