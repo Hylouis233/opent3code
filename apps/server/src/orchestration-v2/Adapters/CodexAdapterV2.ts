@@ -1194,13 +1194,6 @@ interface ActiveCodexTurnContext {
   rateLimitStopConfirmed?: Deferred.Deferred<void>;
   /** Fails an "unconfirmed" turn once its bound passes. */
   rateLimitContainmentTimer?: Fiber.Fiber<void>;
-  /**
-   * Whether Codex acknowledged a later turn/interrupt for this turn, from
-   * Stop or from an ancestor's 429 lineage stop. Either can end an
-   * "unconfirmed" turn before its bound; without this acknowledgement the
-   * turn was never confirmed stopped either.
-   */
-  rateLimitStopAcknowledged?: boolean;
   readonly nativeStartReady?: Deferred.Deferred<void>;
   readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly projectionAppThread: OrchestrationV2AppThread;
@@ -1301,12 +1294,12 @@ const approvalOwnerCodexTurn = (
 /**
  * A 429 turn the adapter ended without Codex confirming it stopped may still
  * run natively, so its thread must be resumed rather than reused. That holds
- * whether the bound abandoned it or a Stop Codex never acknowledged ended it
- * first.
+ * whether the bound abandoned it or Stop ended it first. A turn/interrupt
+ * reply only accepts the request; only turn/completed moves the turn to
+ * "ended".
  */
 const isUncontainedRateLimitedTurn = (context: ActiveCodexTurnContext): boolean =>
-  context.rateLimitContainment === "abandoned" ||
-  (context.rateLimitContainment === "unconfirmed" && context.rateLimitStopAcknowledged !== true);
+  context.rateLimitContainment === "abandoned" || context.rateLimitContainment === "unconfirmed";
 
 const isDescendantCodexTurn = (
   candidate: ActiveCodexTurnContext,
@@ -4826,11 +4819,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           descendant: ActiveCodexTurnContext,
         ) {
           const interrupted = yield* interruptRateLimitedTurnUntilEnded(descendant);
-          if (interrupted) {
-            // Codex confirmed this stop, so an earlier unconfirmed interrupt
-            // no longer leaves the descendant's thread broken.
-            descendant.rateLimitStopAcknowledged = true;
-          } else if (descendant.rateLimitContainment !== "ended") {
+          if (!interrupted && descendant.rateLimitContainment !== "ended") {
             descendant.rateLimitContainment = "abandoned";
           }
         });
@@ -7551,11 +7540,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                             turnId: context.nativeTurnId,
                           }),
                         ).pipe(
-                          Effect.tap(() =>
-                            Effect.sync(() => {
-                              context.rateLimitStopAcknowledged = true;
-                            }),
-                          ),
                           Effect.catch((cause) =>
                             Effect.logWarning(
                               "orchestration-v2.codex-remaining-lineage-interrupt-failed",
@@ -7626,14 +7610,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         threadId,
                         turnId: context.nativeTurnId,
                       }),
-                    ).pipe(
-                      // Codex confirmed this stop, so a 429 stop it left
-                      // unconfirmed no longer marks the thread broken.
-                      Effect.tap(() =>
-                        Effect.sync(() => {
-                          context.rateLimitStopAcknowledged = true;
-                        }),
-                      ),
                     ),
                   { concurrency: "unbounded", discard: true },
                 ).pipe(Effect.timeoutOption("10 seconds"));
@@ -7670,7 +7646,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     threadId: yield* getNativeThreadId(context.providerThread),
                     turnId: context.nativeTurnId,
                   });
-                  context.rateLimitStopAcknowledged = true;
                 }
                 const containedTerminalKeys = new Set<string>();
                 const attemptedTerminalKeys = new Set<string>();
