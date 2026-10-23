@@ -2053,6 +2053,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           context: ActiveCodexTurnContext,
           updatedAt: DateTime.Utc,
         ) {
+          // Once the deadline stopped the turn, the retry failed rather than
+          // recovered, and the turn's failure keeps its retry metadata.
+          if (context.rateLimitRetryExhausted !== undefined) return;
           const providerRetry = yield* Ref.modify(providerRetries, (current) => {
             const retry = current.get(context.providerTurnId);
             if (retry === undefined) {

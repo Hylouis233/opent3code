@@ -6849,6 +6849,84 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  it.effect("keeps the 429 retry metadata when compaction starts after the deadline", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-rate-limit-unconfirmed-compaction";
+        const nativeThreadId = `native-${scenario}-thread`;
+        const nativeTurnId = `native-${scenario}-turn`;
+        const interruptSent = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(
+          unconfirmedRateLimitTranscript(scenario, [
+            // Compaction starts while the stopped turn waits, unconfirmed.
+            {
+              type: "emit_inbound",
+              label: "item/started/compaction",
+              afterMs: 12_000,
+              frame: {
+                method: "item/started",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  startedAtMs: 1782622445000,
+                  item: { type: "contextCompaction", id: `${scenario}-compaction` },
+                },
+              },
+            },
+          ]),
+          () => Effect.void,
+          (method) =>
+            method === "turn/interrupt"
+              ? Deferred.succeed(interruptSent, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            text: "Run pwd.",
+          }),
+        );
+        yield* Deferred.await(interruptSent);
+        const compactionStarted = () =>
+          harness.events.some(
+            (event) => event.type === "turn_item.updated" && event.turnItem.type === "compaction",
+          );
+        for (let second = 0; second < 15 && !compactionStarted(); second++) {
+          yield* TestClock.adjust("1 seconds");
+        }
+        assert.isTrue(compactionStarted());
+        assert.lengthOf(harness.terminalEvents(), 0);
+        yield* TestClock.adjust(`${CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS} millis`);
+        yield* harness.awaitTerminal(1);
+
+        const terminal = harness.terminalEvents()[0];
+        assert.equal(terminal?.status, "failed");
+        if (terminal?.status !== "failed") return;
+        assert.equal(terminal.failure.code, "rateLimitRetryExhausted");
+        assert.deepEqual(
+          terminal.retry,
+          { attempt: 1, maxAttempts: 5, retryDelayMs: null },
+          "the exhausted retry keeps its metadata on the failure",
+        );
+        const retryStatuses = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "error" &&
+          event.turnItem.retry !== undefined
+            ? [event.turnItem.status]
+            : [],
+        );
+        assert.notInclude(retryStatuses, "completed", "an exhausted retry never completes");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect("keeps the latest goal when an unconfirmed 429 marks the thread errored", () =>
     Effect.scoped(
       Effect.gen(function* () {
