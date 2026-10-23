@@ -219,6 +219,11 @@ const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
 // Each plan flush stores the whole plan three times (node, plan, turn item), so
 // flush at the cadence clients already see for assistant text.
 const CODEX_PLAN_DELTA_FLUSH_INTERVAL_MS = 400;
+/**
+ * Bounds how long a turn the 429 deadline stops waits for Codex to confirm
+ * the stop, from sending turn/interrupt to its turn/completed.
+ */
+const CODEX_RATE_LIMIT_INTERRUPT_TIMEOUT_MS = 10_000;
 const CodexBackgroundTerminalTerminateResponse = Schema.Struct({
   terminated: Schema.Boolean,
 });
@@ -1188,10 +1193,17 @@ interface ActiveCodexTurnContext {
    * an unconfirmed turn; "unconfirmed" keeps the turn active until Codex
    * reports it ended, for at most CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS;
    * "abandoned" means that bound passed and the adapter failed the turn
-   * itself, or that a descendant the deadline stopped with its root never
-   * acknowledged its interrupt, so its native thread is treated as broken.
+   * itself, or that Codex never confirmed with turn/completed that a
+   * descendant the deadline stopped with its root ended, so its native thread
+   * is treated as broken.
    */
   rateLimitContainment?: "ended" | "unconfirmed" | "abandoned";
+  /**
+   * Completed once Codex's turn/completed confirms a turn the 429 deadline
+   * interrupted ended. A turn/interrupt reply only accepts the request; the
+   * completion is the authoritative stop.
+   */
+  rateLimitStopConfirmed?: Deferred.Deferred<void>;
   /** Fails an "unconfirmed" turn once its bound passes. */
   rateLimitContainmentTimer?: Fiber.Fiber<void>;
   /**
@@ -4758,7 +4770,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             })
             .pipe(
               Effect.as(true),
-              Effect.timeoutOption("10 seconds"),
+              Effect.timeoutOption(`${CODEX_RATE_LIMIT_INTERRUPT_TIMEOUT_MS} millis`),
               Effect.catch((cause) =>
                 Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-failed", {
                   nativeTurnId: target.nativeTurnId,
@@ -4776,15 +4788,43 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         });
 
         /**
+         * Interrupts a turn the 429 deadline stops and waits, within the
+         * interrupt bound, for the turn/completed that confirms it ended.
+         * Codex replies to turn/interrupt before the turn ends, so the reply
+         * alone does not confirm the stop. True only when Codex confirmed it.
+         */
+        const interruptRateLimitedTurnUntilEnded = Effect.fnUntraced(function* (
+          target: ActiveCodexTurnContext,
+        ) {
+          const confirmed = yield* Deferred.make<void>();
+          target.rateLimitStopConfirmed = confirmed;
+          return yield* Effect.gen(function* () {
+            if (!(yield* interruptRateLimitedNativeTurn(target))) return false;
+            if (
+              target.providerThread.nativeThreadRef?.nativeId == null ||
+              target.rateLimitContainment === "ended" ||
+              (yield* Ref.get(activeTurns)).get(target.nativeTurnId) !== target
+            ) {
+              return true;
+            }
+            yield* Deferred.await(confirmed);
+            return true;
+          }).pipe(
+            Effect.timeoutOption(`${CODEX_RATE_LIMIT_INTERRUPT_TIMEOUT_MS} millis`),
+            Effect.map(Option.getOrElse(() => false)),
+          );
+        });
+
+        /**
          * Interrupts a descendant the 429 deadline stops with its root. A
-         * descendant Codex did not confirm stopped may still run natively, so
+         * descendant Codex did not confirm ended may still run natively, so
          * it is marked abandoned and its terminal publishes its thread as
          * broken rather than idle.
          */
         const interruptRateLimitedDescendant = Effect.fnUntraced(function* (
           descendant: ActiveCodexTurnContext,
         ) {
-          const interrupted = yield* interruptRateLimitedNativeTurn(descendant);
+          const interrupted = yield* interruptRateLimitedTurnUntilEnded(descendant);
           if (interrupted) {
             // Codex confirmed this stop, so an earlier unconfirmed interrupt
             // no longer leaves the descendant's thread broken.
@@ -4855,7 +4895,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // Stop Codex's own retry sleep before publishing the terminal: once
             // the turn is terminal the thread is idle, and a queued follow-up
             // must not start while Codex still runs the rate-limited turn.
-            const rootInterrupted = yield* interruptRateLimitedNativeTurn(context);
+            // Codex replies to turn/interrupt before the turn ends; only its
+            // turn/completed confirms the stop, so the root waits for it
+            // within the interrupt bound once its lineage is stopped.
+            const rootInterruptSentAt = yield* DateTime.now;
+            const rootStopConfirmed = yield* Deferred.make<void>();
+            context.rateLimitStopConfirmed = rootStopConfirmed;
+            const rootAcknowledged = yield* interruptRateLimitedNativeTurn(context);
+            const rootHasNativeThread = context.providerThread.nativeThreadRef?.nativeId != null;
+            let rootStopAwaited = false;
             // Native subagents run on their own threads and outlive a failed
             // root, so the deadline stops the whole active lineage, like Stop.
             // A subagent can start a nested turn while an interrupt is in
@@ -4878,10 +4926,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   if (descendants.length > 0) {
                     return { type: "descendants", descendants } as const;
                   }
-                  // An unacknowledged interrupt does not stop Codex's retry,
-                  // so the turn stays active until its turn/completed
-                  // confirms it ended.
-                  if (!rootInterrupted && context.rateLimitContainment !== "ended") {
+                  // An interrupt Codex did not confirm with turn/completed
+                  // may not have stopped Codex's retry, so the turn stays
+                  // active until its turn/completed confirms it ended.
+                  if (rootHasNativeThread && context.rateLimitContainment !== "ended") {
+                    if (rootAcknowledged && !rootStopAwaited) {
+                      return { type: "awaitRootStop" } as const;
+                    }
                     context.rateLimitContainment = "unconfirmed";
                     return { type: "unconfirmed" } as const;
                   }
@@ -4896,6 +4947,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               );
               if (step.type === "finalized") return;
               if (step.type === "unconfirmed") break;
+              if (step.type === "awaitRootStop") {
+                // The wait is outside the permit, so turn/completed can end
+                // the root; the lineage is then scanned again.
+                rootStopAwaited = true;
+                const elapsedMs =
+                  DateTime.toEpochMillis(yield* DateTime.now) -
+                  DateTime.toEpochMillis(rootInterruptSentAt);
+                yield* Deferred.await(rootStopConfirmed).pipe(
+                  Effect.timeoutOption(
+                    `${Math.max(0, CODEX_RATE_LIMIT_INTERRUPT_TIMEOUT_MS - elapsedMs)} millis`,
+                  ),
+                );
+                continue;
+              }
               for (const descendant of step.descendants) {
                 stoppedDescendants.add(descendant);
                 yield* interruptRateLimitedDescendant(descendant);
@@ -6533,6 +6598,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           if (waiter !== undefined) {
             yield* Deferred.succeed(waiter, undefined);
           }
+          if (input.context.rateLimitStopConfirmed !== undefined) {
+            yield* Deferred.succeed(input.context.rateLimitStopConfirmed, undefined);
+          }
           const interruptInProgress = (yield* Ref.get(interruptingNativeTurns)).has(
             input.nativeTurnId,
           );
@@ -6611,6 +6679,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (context.rateLimitContainment !== "unconfirmed") {
                 if (context.rateLimitContainment === undefined) {
                   context.rateLimitContainment = "ended";
+                  if (context.rateLimitStopConfirmed !== undefined) {
+                    yield* Deferred.succeed(context.rateLimitStopConfirmed, undefined);
+                  }
                 }
                 return;
               }
