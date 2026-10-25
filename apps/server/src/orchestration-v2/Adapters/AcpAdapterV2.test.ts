@@ -1371,8 +1371,7 @@ describe("AcpAdapterV2", () => {
       );
       type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let handler: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
-      // Devin streams a file write as it generates it: each update resends the
-      // whole file so far, a few characters longer, with no status.
+      // Devin resends the growing file without status on each update.
       const file = `${"x = 1\n".repeat(800)}END_OF_FILE\n`;
       const chunks = 200;
       const streamedWrite = (
@@ -3381,7 +3380,7 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  // Oracle: #13457. Grok expands only a leading `/name`, so a picked leading `$name`
+  // Grok expands only a leading `/name`, so a picked leading `$name`
   // must reach it in that form; anything else keeps the user's text.
   it.live.each([
     { text: "$deploy ship it", sent: "/deploy ship it", native: true },
@@ -3464,8 +3463,8 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  // Oracle: #15888 KillTask reports. Command completion must release the turn even
-  // when the CLI keeps the prompt RPC and process alive. Kill calls stay visible.
+  // Command completion must release the turn even when the CLI keeps the prompt RPC and process
+  // alive. Kill calls stay visible.
   it.live.each([
     { shape: "output_only", expectedCommand: { type: "command_execution", status: "completed" } },
     { shape: "variant_only", expectedCommand: { type: "command_execution", status: "completed" } },
@@ -3961,11 +3960,9 @@ describe("AcpAdapterV2", () => {
             now: yield* DateTime.now,
           }),
         );
-        // The approval card and its runtime request have to reach the ingestor
-        // together. An artifact that arrives before its request is buffered and
-        // committed in the same write, so answering the request can never race
-        // the card away. An artifact that arrives after its request is a second
-        // write, and the ingestor drops it once the request has been answered.
+        // The approval card and its request must reach the ingestor together: an artifact before
+        // its request is committed in the same write, so answering cannot race the card away.
+        // An artifact after its request is a second write, dropped once the request is answered.
         const beforeRequest = yield* runtime.events.pipe(
           Stream.takeWhile(
             (event) =>
@@ -4999,8 +4996,7 @@ describe("AcpAdapterV2", () => {
       assert.isTrue(yield* hasPendingBackgroundWork);
       assert.isDefined(sessionUpdateHandler, "session update handler must be wired");
 
-      // A production Grok spawn ACK has raw tool status completed but extracts
-      // as a running subagent with its original non-empty prompt.
+      // Grok reports spawn ACKs as completed tools with running subagents and non-empty prompts.
       yield* sessionUpdateHandler!({
         sessionId: "mock-session-1",
         update: {

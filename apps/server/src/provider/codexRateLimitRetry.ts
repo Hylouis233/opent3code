@@ -1,16 +1,7 @@
 /**
- * Bounds how long a Codex turn may sit in a provider HTTP 429 retry.
- *
- * The Codex CLI retries rate-limited model requests itself and only tells the
- * app server "Reconnecting... n/m" (`error` with `willRetry: true`). When the
- * upstream sends a long `Retry-After`, Codex sleeps for the full value without
- * any cap and emits nothing until it wakes, which leaves a turn (and any
- * delegated task waiting on it) "running" for hours. The adapter cannot
- * intercept the HTTP retry, so it applies this policy around it: every retry
- * notice gets an exponential-backoff (or Retry-After) budget, and when that
- * budget, the attempt cap, or the maximum delay is exceeded the turn ends as
- * an explicit usage-limit failure instead of hanging.
- */
+ * Bounds Codex turns in provider HTTP 429 retries: Codex sleeps for any Retry-After without a cap,
+ * leaving turns "running" for hours. Each retry notice gets a backoff (or Retry-After) budget;
+ * exceeding it, the attempt cap, or the max delay ends the turn as a usage-limit failure. */
 export interface CodexRateLimitRetryPolicy {
   /** Highest retry attempt the adapter waits for. Later notices end the turn. */
   readonly maxAttempts: number;
@@ -30,14 +21,9 @@ export const CODEX_RATE_LIMIT_RETRY_POLICY: CodexRateLimitRetryPolicy = {
 };
 
 /**
- * How long a stopped 429 turn may stay active after Codex failed to
- * acknowledge its `turn/interrupt` (the request errored or timed out) and has
- * not reported `turn/completed` either. Past this bound the adapter stops
- * waiting: the turn fails with `rateLimitRetryExhausted` and the native thread
- * is marked broken, so the next turn resumes it instead of reusing a loaded
- * thread that may still be retrying. It matches `progressGraceMs`, the time
- * the policy already allows Codex to show any sign of life after a retry.
- */
+ * How long a stopped 429 turn may stay active when Codex neither acknowledged `turn/interrupt` nor
+ * reported `turn/completed`. Then the turn fails with `rateLimitRetryExhausted` and its native
+ * thread is marked broken so the next turn resumes it. Matches `progressGraceMs`. */
 export const CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS = 60_000;
 
 export type CodexRateLimitRetryDecision =

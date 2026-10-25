@@ -15,6 +15,7 @@ import { messageSearchTokens } from "@t3tools/shared/paletteSearch";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
+  OrchestrationV2GetTurnItemResult,
   ProjectContentMatch,
   ProjectEntry,
   ProjectEntryKind,
@@ -133,7 +134,6 @@ const EMPTY_VCS_REF_PAGES_ATOM = Atom.make<
   ReadonlyArray<Atom.Type<ReturnType<typeof vcsRefPageAtom>>>
 >([]).pipe(Atom.withLabel("web:vcs-ref-pages:empty"));
 
-// Keyed by target and cursors so every render of the same pages reads the same atom.
 const vcsRefPagesAtom = Atom.family((pagesKey: string) => {
   const [targetKey, cursors] = JSON.parse(pagesKey) as [string, Array<number | null>];
   const pageAtoms = cursors.map((cursor) => vcsRefPageAtom(targetKey, cursor ?? undefined));
@@ -143,8 +143,7 @@ const vcsRefPagesAtom = Atom.family((pagesKey: string) => {
 });
 
 export function usePaginatedBranches(target: VcsRefTarget) {
-  // Starts unkeyed: a key mismatch already resolves to the initial cursors, and seeding
-  // the key here would make every derivation below straddle this hook call.
+  // Leave unkeyed; mismatches already reset cursors, and a seeded key would break caching across the hook.
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
     readonly cursors: ReadonlyArray<number | undefined>;
@@ -316,8 +315,7 @@ export function useProjectContentSearch(target: ProjectContentSearchTarget) {
   const fileAccess = useFilesystemReadAccess(target.environmentId);
   const canReadFiles = hasTarget && fileAccess.canReadFiles;
   const isCheckingAccess = hasTarget && fileAccess.isPending;
-  // Whitespace is significant in content queries; trimming is only used to
-  // decide whether the input is blank.
+  // Preserve query whitespace; trim only to detect blank input.
   const query = target.query;
   const hasQuery = query.trim().length > 0;
   const debouncedQuery = useDebouncedValue(query, PROJECT_CONTENT_SEARCH_DEBOUNCE_MS);
@@ -402,6 +400,13 @@ export function useCheckpointDiff(
   return fullThreadTarget === null ? turn : fullThread;
 }
 
+/** Reads one item's detail from somewhere other than the environment, as the guest page does. */
+export type TurnItemDetailSource = (input: {
+  readonly threadId: ThreadId;
+  readonly itemId: TurnItemId;
+  readonly revision: string;
+}) => Atom.Atom<AsyncResult.AsyncResult<OrchestrationV2GetTurnItemResult, unknown>>;
+
 export function useTurnItemDetail(
   target: {
     readonly environmentId: EnvironmentId;
@@ -409,13 +414,17 @@ export function useTurnItemDetail(
     readonly itemId: TurnItemId;
     readonly revision: string;
   } | null,
+  source?: TurnItemDetailSource,
 ) {
-  return useEnvironmentQuery(
+  const input =
     target === null
       ? null
-      : orchestrationEnvironment.turnItem({
-          environmentId: target.environmentId,
-          input: { threadId: target.threadId, itemId: target.itemId, revision: target.revision },
-        }),
+      : { threadId: target.threadId, itemId: target.itemId, revision: target.revision };
+  return useEnvironmentQuery<OrchestrationV2GetTurnItemResult, unknown>(
+    target === null || input === null
+      ? null
+      : source
+        ? source(input)
+        : orchestrationEnvironment.turnItem({ environmentId: target.environmentId, input }),
   );
 }

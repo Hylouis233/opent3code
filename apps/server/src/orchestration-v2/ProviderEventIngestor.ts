@@ -438,12 +438,7 @@ export const layer: Layer.Layer<
       },
     );
 
-    /**
-     * A native subagent's thread starts on the parent's model when the provider
-     * names the real one later (a Claude agent file's model arrives with the
-     * subagent's first reply). Thread commands rewrite the whole thread row
-     * under the thread's lock, so this read and write take it too.
-     */
+    /** Providers may reveal native subagent models late; lock full-row updates against concurrent thread commands. */
     const syncSubagentThreadModel = Effect.fn("ProviderEventIngestor.syncSubagentThreadModel")(
       function* (input: ProviderEventIngestInput, subagent: OrchestrationV2Subagent) {
         const { childThreadId, model } = subagent;
@@ -488,12 +483,7 @@ export const layer: Layer.Layer<
       },
     );
 
-    /**
-     * Retire the runs that fell off its active branch with the same run,
-     * root-node, and checkpoint updates CheckpointRollbackService writes for a
-     * T3 revert. The run reporting the rewind performed it and stays, so it
-     * keeps lastRunOrdinal.
-     */
+    /** Retire rewound runs like CheckpointRollbackService; retain the reporting run and its lastRunOrdinal. */
     const rollBackRewoundRuns = Effect.fn("ProviderEventIngestor.rollBackRewoundRuns")(function* (
       input: ProviderEventIngestInput,
       rewind: {
@@ -1175,14 +1165,10 @@ export const layer: Layer.Layer<
               capability: capability!,
               itemIds: [...itemIds],
             });
-            // The sibling buffer commits the request ahead of its node event so the
-            // node's runtimeRequestId never lands before the row it points at. That
-            // ordering also put the approval/user-input turn item behind the request,
-            // which renders as "the request is waiting on something that has not
-            // appeared yet". Upstream requires the item to reach `waiting` first, so
-            // hoist those artifacts ahead of the request while leaving the request
-            // ahead of the node. Turn items are a plain projection upsert and carry
-            // no dependency on the request row, so nothing downstream weakens.
+            // The sibling buffer commits the request before its node event so runtimeRequestId never
+            // dangles, which also queued the approval/user-input item behind the request. Upstream
+            // needs the item `waiting` first, so hoist those artifacts ahead of the request (still
+            // ahead of the node). Turn items are plain upserts with no dependency on the request.
             const artifactItems = events.filter(
               (event) =>
                 event.type === "turn-item.updated" &&

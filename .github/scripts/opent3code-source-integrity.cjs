@@ -1,11 +1,7 @@
 // Fail when a tracked source file becomes a placeholder or shrinks by more than 80%.
-//
 // Usage: node .github/scripts/opent3code-source-integrity.cjs [--placeholder-only] [BASE] [HEAD]
-// BASE defaults to HEAD~1 and HEAD defaults to HEAD. Every source file added, modified, or
-// renamed between BASE and HEAD is compared; deleted files are ignored. An intentional large
-// shrink can be allowed with a commit message trailer in the range:
-//   Source-Integrity-Allow: path/to/file.ts
-// --placeholder-only skips the shrink rule (CI uses it for upstream sync and integration PRs).
+// BASE defaults to HEAD~1, HEAD to HEAD; deleted files are ignored. Allow an intended shrink with
+// a `Source-Integrity-Allow: path` trailer. --placeholder-only (sync/integration PRs) skips shrink.
 const { execFileSync } = require("node:child_process");
 
 const SOURCE_SUFFIXES = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".sh", ".ps1", ".rs"];

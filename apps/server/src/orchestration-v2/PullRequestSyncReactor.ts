@@ -1,5 +1,6 @@
 import {
   CommandId,
+  isOrchestrationV2WorkActive,
   type PullRequestSummary,
   type ThreadId,
   type ThreadPullRequestKey,
@@ -182,15 +183,12 @@ export class PullRequestSyncReactor extends Context.Service<
   {
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
     readonly drain: Effect.Effect<void>;
-    /**
-     * Force the next sweep to re-read this pull request, even when its snapshot is terminal.
-     * While its host is rate limited, the read waits for the first sweep after the pause.
-     */
+    /** Forces reread on the next sweep, including terminal snapshots; rate-limited hosts wait until the pause ends. */
     readonly requestSync: (key: ThreadPullRequestKey) => Effect.Effect<void>;
   }
 >()("t3/orchestration-v2/PullRequestSyncReactor") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -206,17 +204,14 @@ export const make = Effect.gen(function* () {
   // linking dozens of pull requests) is read together and shares the summary batches.
   let requestedSweepQueued = false;
   const retryStacks = new Set<string>();
-  // Rate limit pauses by project and host, since each project reads with its own credential.
-  // A paused host refuses every read without asking it, so the sweep leaves its pull requests
-  // due until the pause ends rather than failing each of them every minute.
+  // Pause per project and host because credentials are project-specific; leave paused PRs due until reset.
   const pausedUntil = new Map<string, number>();
 
   const isDue = (key: string, entries: ReadonlyArray<LinkEntry>, nowMs: number): boolean => {
     if (requested.has(key) || retryStacks.has(key)) return true;
     if (entries.some((entry) => entry.link.snapshot === null)) return true;
     const active = entries.filter((entry) => isUnsettled(entry.thread));
-    // A merged snapshot without its merge time cannot settle the thread, so it keeps the slow
-    // cadence until the host supplies one (Bitbucket snapshots saved before it was read).
+    // Merged snapshots without mergedAt cannot settle threads; reread slowly until supplied.
     if (
       active.every(
         (entry) => entry.link.snapshot?.state === "merged" && entry.link.snapshot.mergedAt != null,
@@ -286,9 +281,7 @@ export const make = Effect.gen(function* () {
         link.snapshot === null ||
         !snapshotFieldsEqual(link.snapshot, fields) ||
         !stacksEqual(link.stack, nextStack);
-      // Persist discovered siblings before a terminal snapshot can trigger settlement. A settled
-      // thread that shares this pull request with an active one takes the fresh snapshot, but
-      // gains no links.
+      // Persist siblings before terminal snapshots trigger settlement; settled threads get snapshots without new links.
       for (const layer of isUnsettled(thread) ? (fetchedStack?.stack?.layers ?? []) : []) {
         const layerKey = {
           host: normalizeThreadPullRequestKey(link).host,
@@ -402,11 +395,8 @@ export const make = Effect.gen(function* () {
         }
         const fetched = fetchedStack.stack;
         stacksReadThisSweep.set(key, fetched);
-        // A layer pushed above an older member changes none of that member's own fields, so it
-        // would keep its shorter layer list. Members of this stack whose layer list differs read
-        // their stack once, in this sweep if still pending or the next; agreeing ones read none.
-        // Only groups of the same project: another project reads with its own credential and
-        // may see a different layer list, so flagging across projects would never settle.
+        // New upper layers leave older members' fields unchanged; differing layer lists need a stack read.
+        // Only flag siblings in the same project: different credentials can yield lists that never agree.
         if (fetched !== null) {
           const fetchedKey = nativeStackKeyOf(first.link, fetched);
           for (const [siblingKey, siblingEntries] of groups) {
@@ -468,8 +458,7 @@ export const make = Effect.gen(function* () {
         }
         const first = entries[0]!;
         const pauseKey = `${first.thread.projectId}\0${normalizeThreadPullRequestKey(first.link).host}`;
-        // Checked against the clock as each read starts, so a pause found earlier in this sweep
-        // holds the rest, and one that ends during the sweep lets the rest through.
+        // Check pauses at each read so changes during the sweep apply immediately.
         return Clock.currentTimeMillis.pipe(
           Effect.flatMap((startedAtMs) =>
             (pausedUntil.get(pauseKey) ?? 0) > startedAtMs
@@ -478,8 +467,7 @@ export const make = Effect.gen(function* () {
           ),
         );
       },
-      // As wide as one batched summary read, so the sweep's reads on a host arrive together and
-      // GitHub answers them in one request rather than one `gh pr view` apiece.
+      // Match summary batch width so GitHub reads coalesce into one request.
       { concurrency: 25, discard: true },
     );
     for (const [reason, { count, key }] of skips) {
@@ -494,7 +482,8 @@ export const make = Effect.gen(function* () {
     }).pipe(Effect.catchCause(logSkipped("pull request sync sweep failed", {}))),
   );
 
-  const closeCommandThreads = new Set<ThreadId>();
+  // Threads that ran a close command this run, with the commands already read for.
+  const closeCommands = new Map<ThreadId, Set<string>>();
   const refreshOpenLinks = (threadId: ThreadId) =>
     projections.getThreadsWithPullRequests(threadId).pipe(
       Effect.flatMap((threads) =>
@@ -538,20 +527,22 @@ export const make = Effect.gen(function* () {
               { discard: true },
             );
           // An agent can merge or close its pull request from a shell with its host's CLI, which
-          // sends no merge notification. When a run that ran such a command ends, read the
-          // thread's open links fresh, so settlement does not wait for the next sweep and the
-          // cached summary. Other runs add no host reads.
-          case "turn-item.updated":
-            if (
-              event.payload.type === "command_execution" &&
-              isChangeRequestCloseCommand(event.payload.input)
-            ) {
-              closeCommandThreads.add(event.threadId);
+          // sends no merge notification. Read the thread's open links fresh once that command
+          // ends, while the agent usually still replies, so settlement can land before the run
+          // ends. Read again when the run ends, since `merge --auto` returns before it merges.
+          case "turn-item.updated": {
+            const item = event.payload;
+            if (item.type !== "command_execution" || !isChangeRequestCloseCommand(item.input)) {
+              return Effect.void;
             }
-            return Effect.void;
+            const ended = closeCommands.get(event.threadId) ?? new Set<string>();
+            closeCommands.set(event.threadId, ended);
+            if (isOrchestrationV2WorkActive(item.status) || ended.has(item.id)) return Effect.void;
+            ended.add(item.id);
+            return refreshOpenLinks(event.threadId);
+          }
           case "run.updated":
-            return isTerminalRunStatus(event.payload.status) &&
-              closeCommandThreads.delete(event.threadId)
+            return isTerminalRunStatus(event.payload.status) && closeCommands.delete(event.threadId)
               ? refreshOpenLinks(event.threadId)
               : Effect.void;
           default:
