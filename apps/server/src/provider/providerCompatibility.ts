@@ -65,11 +65,9 @@ export function resolveProviderCompatibility(
   // These fork-only previews are independently managed and have no reviewed compatibility range.
   // Upstream manifests must not classify them or recommend upstream-managed versions.
   if (driver === "mcode" || driver === "dsh") return undefined;
-  // The source package version does not identify the protocol this fork runs.
-  // OpenCode and Pi changed adapter generations at that boundary. Require an
-  // explicit matching protocol policy for the running code; an untagged remote
-  // policy falls back to the tagged bundle instead of selecting V1 by version.
-  // Explicit historical release lookups remain semver-only.
+  // The package version does not identify this fork's protocol; OpenCode and Pi changed adapter
+  // generations there. Require an explicit matching protocol policy: an untagged remote policy
+  // falls back to the tagged bundle instead of V1. Historical release lookups stay semver-only.
   const protocolScoped = t3CodeVersion === undefined && (driver === "opencode" || driver === "pi");
   const policy = policies?.find(
     (entry) =>

@@ -5148,12 +5148,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             driver,
             node,
           });
-          // The request artifact has to reach the ingestor before the request it
-          // belongs to. The ingestor buffers an artifact that arrives first and
-          // commits both in one write, so answering the request cannot race the
-          // artifact away. An artifact that arrives after its request is a
-          // second write, and the ingestor drops that write once the request has
-          // been answered, so the artifact never reaches the user.
+          // The request artifact must reach the ingestor before its request: an earlier artifact is
+          // committed with the request in one write, so answering cannot race it away. A later
+          // artifact is a second write, dropped once the request is answered.
           yield* emitProviderEvent({
             type: "turn_item.updated",
             driver,
@@ -5279,12 +5276,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             driver,
             node,
           });
-          // The request artifact has to reach the ingestor before the request it
-          // belongs to. The ingestor buffers an artifact that arrives first and
-          // commits both in one write, so answering the request cannot race the
-          // artifact away. An artifact that arrives after its request is a
-          // second write, and the ingestor drops that write once the request has
-          // been answered, so the artifact never reaches the user.
+          // The request artifact must reach the ingestor before its request: an earlier artifact is
+          // committed with the request in one write, so answering cannot race it away. A later
+          // artifact is a second write, dropped once the request is answered.
           yield* emitProviderEvent({
             type: "turn_item.updated",
             driver,

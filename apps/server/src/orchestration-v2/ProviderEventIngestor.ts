@@ -1165,14 +1165,10 @@ export const layer: Layer.Layer<
               capability: capability!,
               itemIds: [...itemIds],
             });
-            // The sibling buffer commits the request ahead of its node event so the
-            // node's runtimeRequestId never lands before the row it points at. That
-            // ordering also put the approval/user-input turn item behind the request,
-            // which renders as "the request is waiting on something that has not
-            // appeared yet". Upstream requires the item to reach `waiting` first, so
-            // hoist those artifacts ahead of the request while leaving the request
-            // ahead of the node. Turn items are a plain projection upsert and carry
-            // no dependency on the request row, so nothing downstream weakens.
+            // The sibling buffer commits the request before its node event so runtimeRequestId never
+            // dangles, which also queued the approval/user-input item behind the request. Upstream
+            // needs the item `waiting` first, so hoist those artifacts ahead of the request (still
+            // ahead of the node). Turn items are plain upserts with no dependency on the request.
             const artifactItems = events.filter(
               (event) =>
                 event.type === "turn-item.updated" &&

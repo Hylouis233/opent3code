@@ -2665,11 +2665,9 @@ export const layerWithOptions = (
                   entry.loadedProviderThreadKeyByThread,
                 );
                 loadedProviderThreadKeyByThread.delete(input.threadId);
-                // For a plain (workspace-change) detach, the credential id stays
-                // recorded: the thread may re-attach and reuse it, and
-                // releaseEntry revokes it when the provider process finally goes
-                // away. A terminal detach (archive/delete) prunes the record so
-                // nothing vetoes the revocation below.
+                // A plain (workspace-change) detach keeps the credential id: the thread may re-attach,
+                // and releaseEntry revokes it when the provider process goes away. A terminal detach
+                // (archive/delete) prunes the record so nothing vetoes the revocation below.
                 const mcpCredentialIdByThread =
                   input.revokeMcpCredential === true
                     ? (() => {

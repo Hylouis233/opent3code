@@ -3960,11 +3960,9 @@ describe("AcpAdapterV2", () => {
             now: yield* DateTime.now,
           }),
         );
-        // The approval card and its runtime request have to reach the ingestor
-        // together. An artifact that arrives before its request is buffered and
-        // committed in the same write, so answering the request can never race
-        // the card away. An artifact that arrives after its request is a second
-        // write, and the ingestor drops it once the request has been answered.
+        // The approval card and its request must reach the ingestor together: an artifact before
+        // its request is committed in the same write, so answering cannot race the card away.
+        // An artifact after its request is a second write, dropped once the request is answered.
         const beforeRequest = yield* runtime.events.pipe(
           Stream.takeWhile(
             (event) =>
