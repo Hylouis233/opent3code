@@ -9,6 +9,7 @@ import {
   TrimmedNonEmptyString,
   type PullRequestActor,
   type PullRequestCheck,
+  type PullRequestChecksState,
   type PullRequestComment,
   type PullRequestReaction,
   type PullRequestReactionContent,
@@ -37,6 +38,7 @@ const Actor = Schema.Union([
     actorId: Schema.String,
     login: TrimmedNonEmptyString,
     avatarUrl: Schema.NullOr(Schema.String),
+    accountType: Schema.optional(Schema.NullOr(Schema.String)),
     linkedProfile: Schema.optional(
       Schema.NullOr(
         Schema.Struct({ handle: TrimmedNonEmptyString, actorId: Schema.optional(Schema.String) }),
@@ -257,6 +259,9 @@ export const GitCafeDiff = Schema.Struct({
 export const GitCafeChecks = Schema.Struct({
   items: Schema.Array(
     Schema.Struct({
+      id: Schema.optional(Schema.NullOr(Schema.String)),
+      provider: Schema.optional(Schema.NullOr(Schema.String)),
+      githubApp: Schema.optional(Schema.NullOr(Schema.String)),
       name: TrimmedNonEmptyString,
       status: Schema.Literals(["queued", "in_progress", "completed"]),
       conclusion: Schema.NullOr(Schema.String),
@@ -300,7 +305,11 @@ function toActor(actor: Actor, host: string): PullRequestActor | null {
   return {
     login: actor.kind === "local" ? actor.handle : actor.login,
     name: actor.kind === "local" ? actor.displayName : null,
-    ...(actor.kind === "local" && actor.bot === true ? { isBot: true } : {}),
+    // A mirrored GitHub account says it is a bot by its account type, not its login.
+    ...((actor.kind === "local" && actor.bot === true) ||
+    (actor.kind === "github" && actor.accountType === "bot")
+      ? { isBot: true }
+      : {}),
     // GitCafe serves its own avatars by path, so a relative one is read against the host.
     avatarUrl: actor.avatarUrl === null ? null : new URL(actor.avatarUrl, `https://${host}`).href,
   };
@@ -633,13 +642,53 @@ function checkStatus(check: (typeof GitCafeChecks.Type.items)[number]): PullRequ
   }
 }
 
+type GitCafeCheck = (typeof GitCafeChecks.Type.items)[number];
+
+/** A check run's id, which grows with each run. Commit statuses (`status:…`) carry no such order. */
+function runOrder(check: GitCafeCheck): bigint | null {
+  return check.id != null && /^\d+$/u.test(check.id) ? BigInt(check.id) : null;
+}
+
+/**
+ * GitCafe lists every run of a commit's checks, so a re-run arrives beside the run it replaced.
+ * The newest run is the check's state; an older failure is history, not a failing check. Runs whose
+ * order cannot be told apart are all kept, so no failure is hidden. Two reporters may share a check
+ * name, so a run only replaces runs from the same provider and GitHub app.
+ */
 export function toChecks(checks: typeof GitCafeChecks.Type): ReadonlyArray<PullRequestCheck> {
+  const kept: Array<GitCafeCheck> = [];
+  const newestByKey = new Map<string, { index: number; order: bigint }>();
+  for (const check of checks.items) {
+    const order = runOrder(check);
+    if (order === null) {
+      kept.push(check);
+      continue;
+    }
+    const key = JSON.stringify([check.provider ?? null, check.githubApp ?? null, check.name]);
+    const newest = newestByKey.get(key);
+    if (newest === undefined) {
+      newestByKey.set(key, { index: kept.length, order });
+      kept.push(check);
+    } else if (order > newest.order) {
+      kept[newest.index] = check;
+      newest.order = order;
+    }
+  }
   return sortChecks(
-    checks.items.map((check) => ({
+    kept.map((check) => ({
       name: check.name,
       status: checkStatus(check),
       description: check.summary,
       url: check.detailsUrl,
     })),
   );
+}
+
+export function checksStateOf(
+  checks: ReadonlyArray<PullRequestCheck>,
+): PullRequestChecksState | null {
+  const statuses = new Set(checks.map((check) => check.status));
+  if (statuses.has("failure") || statuses.has("cancelled")) return "failing";
+  if (statuses.has("pending") || statuses.has("action-required")) return "pending";
+  return statuses.has("success") ? "passing" : null;
 }

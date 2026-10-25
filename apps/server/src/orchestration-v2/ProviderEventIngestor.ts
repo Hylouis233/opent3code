@@ -9,6 +9,8 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type ModelSelection,
+  type OrchestrationV2Actor,
+  type OrchestrationV2CreationSource,
   type RuntimeMode,
   type ProviderInteractionMode,
   ProviderInstanceId,
@@ -27,6 +29,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
@@ -70,6 +73,14 @@ export class ProviderEventPublishError extends Schema.TaggedError<ProviderEventP
   }
 }
 
+// A write that outlasts busy_timeout at BEGIN IMMEDIATE fails before anything
+// commits, and the sink publishes only after a commit, so repeating the whole
+// write is safe. Failing it would fail the run over a brief lock.
+const isLockTimeout = (error: EventSink.EventSinkV2Error) =>
+  SqlError.isSqlError(error.cause) && error.cause.reason._tag === "LockTimeoutError";
+const retryLockTimeout = <A, R>(write: Effect.Effect<A, EventSink.EventSinkV2Error, R>) =>
+  Effect.retry(write, { while: isLockTimeout, times: 2 });
+
 export const ProviderEventIngestorV2Error = Schema.Union([
   ProviderEventNormalizeError,
   ProviderEventPublishError,
@@ -80,6 +91,19 @@ export interface ProviderTurnAnalyticsContext {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly origin?: ProviderTurnOrigin;
+}
+
+/**
+ * Where the run's starting message came from. Most turns start without a
+ * person (provider continuations, agent sends, delegated subagents), so
+ * reports need this to tell user turns apart.
+ */
+export interface ProviderTurnOrigin {
+  readonly createdBy: OrchestrationV2Actor;
+  readonly creationSource: OrchestrationV2CreationSource;
+  readonly scheduled: boolean;
+  readonly subagent: boolean;
 }
 
 export class ProviderTurnAnalytics extends Context.Reference<{
@@ -129,6 +153,7 @@ function providerTurnAnalyticsProperties(input: {
     ...(effort ? { effort } : {}),
     ...(input.context?.runtimeMode ? { runtimeMode: input.context.runtimeMode } : {}),
     ...(input.context?.interactionMode ? { interactionMode: input.context.interactionMode } : {}),
+    ...input.context?.origin,
     ...(input.providerTurn.startedAt && input.providerTurn.completedAt
       ? {
           durationMs: Math.max(
@@ -457,7 +482,7 @@ export const layer: Layer.Layer<
               },
               occurredAt: now,
             });
-            return yield* eventSink.write({ events: [event] });
+            return yield* eventSink.write({ events: [event] }).pipe(retryLockTimeout);
           }),
         );
       },
@@ -759,27 +784,33 @@ export const layer: Layer.Layer<
       ) {
         if (events.length === 0) return [];
         if (input.writeIfProviderThreadOwner !== undefined) {
-          return (yield* eventSink.writeIfProviderThreadOwner({
-            guardPendingUserInputCancellations,
-            ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
-            ...input.writeIfProviderThreadOwner,
-            events,
-          })).storedEvents;
+          return (yield* eventSink
+            .writeIfProviderThreadOwner({
+              guardPendingUserInputCancellations,
+              ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+              ...input.writeIfProviderThreadOwner,
+              events,
+            })
+            .pipe(retryLockTimeout)).storedEvents;
         }
         if (input.writeIfRunCurrent !== undefined) {
-          return (yield* eventSink.writeIfRunCurrent({
+          return (yield* eventSink
+            .writeIfRunCurrent({
+              guardPendingUserInputCancellations,
+              ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+              threadId: input.threadId,
+              ...input.writeIfRunCurrent,
+              events,
+            })
+            .pipe(retryLockTimeout)).storedEvents;
+        }
+        return yield* eventSink
+          .write({
             guardPendingUserInputCancellations,
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
-            threadId: input.threadId,
-            ...input.writeIfRunCurrent,
             events,
-          })).storedEvents;
-        }
-        return yield* eventSink.write({
-          guardPendingUserInputCancellations,
-          ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
-          events,
-        });
+          })
+          .pipe(retryLockTimeout);
       });
 
     const linkedRequestId = (
