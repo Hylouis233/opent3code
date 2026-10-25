@@ -28,7 +28,6 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
@@ -353,7 +352,7 @@ it.effect.each(["live", "no-session", "unsupported-runtime"] as const)(
                   return { matched: input.taskIds.filter((taskId) => taskId === "tests") };
                 }),
             }),
-      } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime;
+      } as unknown as ProviderSessionManager.ManagedProviderSessionRuntime;
       const layerTest = ThreadManagementService.layer.pipe(
         Layer.provide(
           Layer.mergeAll(

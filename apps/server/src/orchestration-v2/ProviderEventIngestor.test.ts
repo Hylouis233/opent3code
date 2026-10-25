@@ -2927,7 +2927,7 @@ const ingestCompletedProviderTurn = (
     const now = yield* DateTime.now;
     const eventSink = yield* EventSink.EventSinkV2;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-    const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+    const ingestor = yield* testIngestor;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const threadEvent = yield* threadCreatedEvent(now);
     yield* eventSink.write({ events: [threadEvent] });
