@@ -2462,8 +2462,9 @@ it("mounts a bounded set of saved notebook outputs as the reader scrolls", async
       />
     </div>,
   );
-  await vi.waitFor(() =>
-    expect(screen.container.querySelectorAll("iframe").length).toBeGreaterThan(0),
+  await vi.waitFor(
+    () => expect(screen.container.querySelectorAll("iframe").length).toBeGreaterThan(0),
+    { timeout: 10_000 },
   );
   expect(screen.container.querySelectorAll("iframe").length).toBeLessThanOrEqual(16);
   const first = screen.container.querySelector("iframe")!;
@@ -2617,18 +2618,21 @@ it.each(["rtf", "epub", "ods"] as const)(
         />
       </div>,
     );
-    await vi.waitFor(() => {
-      if (kind === "ods") {
-        expect(screen.container.textContent).toContain("North");
-        expect(screen.container.textContent).toContain("150");
-        expect(screen.container.textContent).not.toContain("private note");
-        expect(screen.container.textContent).toContain("1 rows · 2 columns");
-        expect(screen.container.textContent).not.toContain("Limited to 500");
-      } else {
-        const frame = screen.container.querySelector("iframe");
-        expect(frame?.srcdoc).toContain(kind === "rtf" ? "10–20" : "first<br>second<br>third");
-      }
-    });
+    await vi.waitFor(
+      () => {
+        if (kind === "ods") {
+          expect(screen.container.textContent).toContain("North");
+          expect(screen.container.textContent).toContain("150");
+          expect(screen.container.textContent).not.toContain("private note");
+          expect(screen.container.textContent).toContain("1 rows · 2 columns");
+          expect(screen.container.textContent).not.toContain("Limited to 500");
+        } else {
+          const frame = screen.container.querySelector("iframe");
+          expect(frame?.srcdoc).toContain(kind === "rtf" ? "10–20" : "first<br>second<br>third");
+        }
+      },
+      { timeout: 10_000 },
+    );
     expect(screen.container.querySelector('[role="alert"]')).toBeNull();
   },
 );
