@@ -2237,6 +2237,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       resetAt: null,
     },
     {
+      name: "late-background-terminal",
+      errorInfo: { responseStreamDisconnected: { httpStatusCode: 429 } },
+      details: "429 Too Many Requests",
+      retryDelayMs: 5_000,
+      deadlineMs: 65_000,
+      resetAfterMs: null,
+      resetAt: null,
+    },
+    {
       name: "background-terminal",
       errorInfo: { responseStreamDisconnected: { httpStatusCode: 429 } },
       details: "429 Too Many Requests",
@@ -2374,8 +2383,32 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   params: { threadId: nativeThreadId, turnId: nativeTurnId },
                 },
               },
+              ...(name === "late-background-terminal"
+                ? [
+                    {
+                      type: "emit_inbound" as const,
+                      label: "late-command",
+                      frame: {
+                        method: "item/started",
+                        params: {
+                          threadId: nativeThreadId,
+                          turnId: nativeTurnId,
+                          startedAtMs: 1782622445020,
+                          item: {
+                            ...command,
+                            id: "late-command",
+                            status: "inProgress",
+                            aggregatedOutput: null,
+                            exitCode: null,
+                            durationMs: null,
+                          },
+                        },
+                      },
+                    },
+                  ]
+                : []),
               { type: "emit_inbound", label: "turn/interrupt", frame: { id: 4, result: {} } },
-              ...(name.startsWith("background-terminal")
+              ...(name.includes("background-terminal")
                 ? [
                     {
                       type: "expect_outbound" as const,
@@ -4378,104 +4411,152 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
-  it.effect("interrupts the whole active lineage when a root 429 retry is exhausted", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const transcript = makeCodexReplayTranscript({
-          scenario: "codex-rate-limit-root-lineage",
-          entries: [
-            ...rateLimitSubagentEntries,
-            rateLimitRetryNotice(INTERRUPT_NATIVE_THREAD, INTERRUPT_NATIVE_TURN),
-            {
-              type: "expect_outbound",
-              label: "turn/interrupt/root",
-              frame: {
-                id: 4,
-                method: "turn/interrupt",
-                params: { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
-              },
-            },
-            { type: "emit_inbound", label: "turn/interrupt/root", frame: { id: 4, result: {} } },
-            {
-              type: "expect_outbound",
-              label: "turn/interrupt/child",
-              frame: {
-                id: 5,
-                method: "turn/interrupt",
-                params: {
-                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
-                  turnId: INTERRUPT_CHILD_NATIVE_TURN,
+  it.effect.each([false, true])(
+    "interrupts the whole active lineage when a root 429 retry is exhausted (terminal cleanup failure: %s)",
+    (cleanupFails) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const transcript = makeCodexReplayTranscript({
+            scenario: "codex-rate-limit-root-lineage",
+            entries: [
+              ...rateLimitSubagentEntries,
+              ...(cleanupFails
+                ? [
+                    interruptSubagentCommandTranscript.entries.find(
+                      (entry) => "label" in entry && entry.label === "item/started/child-command",
+                    )!,
+                  ]
+                : []),
+              rateLimitRetryNotice(INTERRUPT_NATIVE_THREAD, INTERRUPT_NATIVE_TURN),
+              {
+                type: "expect_outbound",
+                label: "turn/interrupt/root",
+                frame: {
+                  id: 4,
+                  method: "turn/interrupt",
+                  params: { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
                 },
               },
-            },
-            { type: "emit_inbound", label: "turn/interrupt/child", frame: { id: 5, result: {} } },
-            {
-              type: "emit_inbound",
-              label: "turn/completed/root",
-              frame: {
-                method: "turn/completed",
-                params: {
-                  threadId: INTERRUPT_NATIVE_THREAD,
-                  turn: makeCodexReplayTurn({ id: INTERRUPT_NATIVE_TURN, status: "interrupted" }),
+              { type: "emit_inbound", label: "turn/interrupt/root", frame: { id: 4, result: {} } },
+              {
+                type: "expect_outbound",
+                label: "turn/interrupt/child",
+                frame: {
+                  id: 5,
+                  method: "turn/interrupt",
+                  params: {
+                    threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                    turnId: INTERRUPT_CHILD_NATIVE_TURN,
+                  },
                 },
               },
-            },
-            {
-              type: "emit_inbound",
-              label: "turn/completed/child",
-              frame: {
-                method: "turn/completed",
-                params: {
-                  threadId: INTERRUPT_CHILD_NATIVE_THREAD,
-                  turn: makeCodexReplayTurn({
-                    id: INTERRUPT_CHILD_NATIVE_TURN,
-                    status: "interrupted",
-                  }),
+              { type: "emit_inbound", label: "turn/interrupt/child", frame: { id: 5, result: {} } },
+              {
+                type: "emit_inbound",
+                label: "turn/completed/root",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: INTERRUPT_NATIVE_THREAD,
+                    turn: makeCodexReplayTurn({ id: INTERRUPT_NATIVE_TURN, status: "interrupted" }),
+                  },
                 },
               },
-            },
-          ],
-        });
-        const interrupts: Array<unknown> = [];
-        const harness = yield* makeCodexReplayHarness(
-          transcript,
-          () => Effect.void,
-          (method, params) =>
-            Effect.sync(() => {
-              if (method === "turn/interrupt") interrupts.push(params);
+              {
+                type: "emit_inbound",
+                label: "turn/completed/child",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                    turn: makeCodexReplayTurn({
+                      id: INTERRUPT_CHILD_NATIVE_TURN,
+                      status: "interrupted",
+                    }),
+                  },
+                },
+              },
+              ...(cleanupFails
+                ? [
+                    {
+                      type: "expect_outbound" as const,
+                      label: "terminate-child-terminal",
+                      frame: {
+                        id: 6,
+                        method: "thread/backgroundTerminals/terminate",
+                        params: {
+                          threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+                          processId: "57682",
+                        },
+                      },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      label: "terminate-child-terminal",
+                      frame: { id: 6, error: { code: -32603, message: "termination failed" } },
+                    },
+                  ]
+                : []),
+            ],
+          });
+          const interrupts: Array<unknown> = [];
+          const harness = yield* makeCodexReplayHarness(
+            transcript,
+            () => Effect.void,
+            (method, params) =>
+              Effect.sync(() => {
+                if (method === "turn/interrupt") interrupts.push(params);
+              }),
+          );
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-codex-rate-limit-root-lineage"),
+              text: INTERRUPT_PROMPT,
             }),
-        );
-        yield* harness.runtime.startTurn(
-          makeCodexTestTurnInput({
-            threadId: harness.threadId,
-            providerThread: harness.providerThread,
-            now: yield* DateTime.now,
-            attemptId: RunAttemptId.make("attempt-codex-rate-limit-root-lineage"),
-            text: INTERRUPT_PROMPT,
-          }),
-        );
-        yield* harness.awaitTerminal(1);
+          );
+          yield* harness.awaitTerminal(1);
 
-        const terminal = harness.terminalEvents()[0];
-        assert.equal(terminal?.status, "failed");
-        if (terminal?.status !== "failed") return;
-        assert.equal(terminal.failure.code, "rateLimitRetryExhausted");
-        assert.isUndefined(
-          terminal.childTurnsContinue,
-          "no descendant may keep the run active past the retry deadline",
-        );
-        assert.deepEqual(interrupts, [
-          { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
-          { threadId: INTERRUPT_CHILD_NATIVE_THREAD, turnId: INTERRUPT_CHILD_NATIVE_TURN },
-        ]);
-        assert.equal(harness.subagentUpdates().at(-1)?.subagent.status, "interrupted");
-        assertChildProviderTerminalBeforeRoot(harness.events, harness.threadId);
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          const terminal = harness.terminalEvents()[0];
+          assert.equal(terminal?.status, "failed");
+          if (terminal?.status !== "failed") return;
+          assert.equal(terminal.failure.code, "rateLimitRetryExhausted");
+          assert.isUndefined(
+            terminal.childTurnsContinue,
+            "no descendant may keep the run active past the retry deadline",
+          );
+          assert.deepEqual(interrupts, [
+            { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
+            { threadId: INTERRUPT_CHILD_NATIVE_THREAD, turnId: INTERRUPT_CHILD_NATIVE_TURN },
+          ]);
+          assert.equal(harness.subagentUpdates().at(-1)?.subagent.status, "interrupted");
+          if (cleanupFails) {
+            const retryIndex = harness.events.findIndex(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "error" &&
+                event.turnItem.retry !== undefined,
+            );
+            const childThreads = harness.events
+              .slice(retryIndex)
+              .flatMap((event) =>
+                event.type === "provider_thread.updated" &&
+                event.providerThread.nativeThreadRef?.nativeId === INTERRUPT_CHILD_NATIVE_THREAD
+                  ? [event.providerThread]
+                  : [],
+              );
+            assert.equal(childThreads.at(-1)?.status, "error");
+            assert.isFalse(childThreads.some((thread) => thread.status === "idle"));
+          }
+          assertChildProviderTerminalBeforeRoot(harness.events, harness.threadId);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
         ),
       ),
-    ),
   );
 
   it.effect("interrupts a nested turn that starts while the 429 lineage is being stopped", () =>

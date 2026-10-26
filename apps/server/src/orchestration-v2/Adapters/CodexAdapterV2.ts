@@ -1133,6 +1133,11 @@ interface ActiveCodexTurnContext {
   // Only turn/completed confirms the native turn stopped; abandoned turns require recovery.
   rateLimitContainment?: "ended" | "unconfirmed" | "abandoned";
   rateLimitTerminalCleanupFailed?: boolean;
+  rateLimitTerminalCleanup?: {
+    readonly attempted: Set<string>;
+    readonly deadlineAtMs: number;
+    pending?: Deferred.Deferred<void>;
+  };
   // Completed once Codex's turn/completed confirms a turn the 429 deadline interrupted ended.
   rateLimitStopConfirmed?: Deferred.Deferred<void>;
   /** Fails an "unconfirmed" turn once its bound passes. */
@@ -4590,6 +4595,129 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
+        // Rescan under the notification permit, but let the reader deliver termination replies unlocked.
+        const withRateLimitTerminalCleanup = Effect.fn(
+          "CodexAdapterV2.withRateLimitTerminalCleanup",
+        )(function* <A, E, R>(
+          root: ActiveCodexTurnContext,
+          settle: Effect.Effect<A, E, R>,
+          includeDescendants = false,
+        ): Effect.fn.Return<A, E, R> {
+          while (true) {
+            const step = yield* turnTerminalizationPermit.withPermits(1)(
+              Effect.gen(function* () {
+                if (
+                  root.rateLimitRetryExhausted === undefined &&
+                  root.rateLimitStopConfirmed === undefined &&
+                  root.rateLimitContainment !== "abandoned"
+                ) {
+                  return { type: "settled", value: yield* settle } as const;
+                }
+                const contexts = [
+                  root,
+                  ...(includeDescendants
+                    ? Array.from((yield* Ref.get(activeTurns)).values()).filter((candidate) =>
+                        isDescendantCodexTurn(candidate, root),
+                      )
+                    : []),
+                ];
+                const jobs: Array<{
+                  context: ActiveCodexTurnContext;
+                  nativeThreadId: string;
+                  processIds: Array<string>;
+                  state: NonNullable<ActiveCodexTurnContext["rateLimitTerminalCleanup"]>;
+                  pending: Deferred.Deferred<void>;
+                }> = [];
+                const waiting: Array<Deferred.Deferred<void>> = [];
+                const commands = yield* Ref.get(runningCommandItemsByTurn);
+                const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+                for (const context of contexts) {
+                  if ((yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context) continue;
+                  context.rateLimitStopConfirmed ??= yield* Deferred.make<void>();
+                  const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
+                  if (nativeThreadId == null || context.rateLimitTerminalCleanupFailed) continue;
+                  if (context.rateLimitTerminalCleanup?.pending !== undefined) {
+                    waiting.push(context.rateLimitTerminalCleanup.pending);
+                    continue;
+                  }
+                  const processIds = [
+                    ...new Set(
+                      Array.from(commands.get(context.nativeTurnId)?.values() ?? []).flatMap(
+                        (item) =>
+                          item.processId === undefined ||
+                          context.rateLimitTerminalCleanup?.attempted.has(item.processId)
+                            ? []
+                            : [item.processId],
+                      ),
+                    ),
+                  ];
+                  if (processIds.length === 0) continue;
+                  const state = (context.rateLimitTerminalCleanup ??= {
+                    attempted: new Set<string>(),
+                    deadlineAtMs: nowMs + CODEX_RATE_LIMIT_INTERRUPT_TIMEOUT_MS,
+                  });
+                  if (nowMs >= state.deadlineAtMs) {
+                    context.rateLimitTerminalCleanupFailed = true;
+                    continue;
+                  }
+                  const pending = yield* Deferred.make<void>();
+                  state.pending = pending;
+                  for (const processId of processIds) state.attempted.add(processId);
+                  jobs.push({ context, nativeThreadId, processIds, state, pending });
+                }
+                if (jobs.length === 0 && waiting.length === 0)
+                  return { type: "settled", value: yield* settle } as const;
+                return { type: "cleanup", jobs, waiting } as const;
+              }),
+            );
+            if (step.type === "settled") return step.value;
+            yield* Effect.all(
+              [
+                Effect.forEach(step.waiting, (pending) => Deferred.await(pending), {
+                  concurrency: "unbounded",
+                  discard: true,
+                }),
+                Effect.forEach(
+                  step.jobs,
+                  (job) =>
+                    Effect.gen(function* () {
+                      const remainingMs = Math.max(
+                        0,
+                        job.state.deadlineAtMs - DateTime.toEpochMillis(yield* DateTime.now),
+                      );
+                      yield* Effect.forEach(
+                        job.processIds,
+                        (processId) => terminateBackgroundTerminal(job.nativeThreadId, processId),
+                        { concurrency: "unbounded", discard: true },
+                      ).pipe(Effect.timeout(remainingMs));
+                    }).pipe(
+                      Effect.catch((cause) => {
+                        job.context.rateLimitTerminalCleanupFailed = true;
+                        return Effect.logWarning(
+                          "orchestration-v2.codex-rate-limit-terminal-cleanup-failed",
+                          { cause },
+                        );
+                      }),
+                      Effect.onInterrupt(() =>
+                        Effect.sync(() => {
+                          job.context.rateLimitTerminalCleanupFailed = true;
+                        }),
+                      ),
+                      Effect.ensuring(
+                        Effect.gen(function* () {
+                          delete job.state.pending;
+                          yield* Deferred.succeed(job.pending, undefined);
+                        }),
+                      ),
+                    ),
+                  { concurrency: "unbounded", discard: true },
+                ),
+              ],
+              { concurrency: "unbounded" },
+            );
+          }
+        });
+
         /**
          * Sends turn/interrupt for a turn stopped by the 429 retry deadline.
          * True only when Codex acknowledged it within the bound.
@@ -4599,26 +4727,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         ) {
           const nativeThreadId = target.providerThread.nativeThreadRef?.nativeId;
           if (nativeThreadId == null) return true;
-          const commands = (yield* Ref.get(runningCommandItemsByTurn)).get(target.nativeTurnId);
-          const processIds = new Set(
-            Array.from(commands?.values() ?? []).flatMap((item) =>
-              item.processId === undefined ? [] : [item.processId],
-            ),
-          );
-          // Background terminals survive turn/interrupt and must stop before tracking is dropped.
-          const cleanup = Effect.forEach(
-            processIds,
-            (processId) => terminateBackgroundTerminal(nativeThreadId, processId),
-            { concurrency: "unbounded", discard: true },
-          ).pipe(
-            Effect.catch((cause) => {
-              target.rateLimitTerminalCleanupFailed = true;
-              return Effect.logWarning(
-                "orchestration-v2.codex-rate-limit-terminal-cleanup-failed",
-                { cause },
-              );
-            }),
-          );
           const interrupt = client
             .request("turn/interrupt", {
               threadId: nativeThreadId,
@@ -4635,7 +4743,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ),
             );
           const acknowledged = yield* interrupt;
-          yield* cleanup;
           if (Option.isNone(acknowledged)) {
             yield* Effect.logWarning("orchestration-v2.codex-rate-limit-interrupt-timeout", {
               nativeTurnId: target.nativeTurnId,
@@ -4675,6 +4782,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           timeoutMs: number,
         ) {
           if (timeoutMs <= 0) {
+            descendant.rateLimitStopConfirmed ??= yield* Deferred.make<void>();
             yield* interruptRateLimitedNativeTurn(descendant).pipe(Effect.forkIn(scope));
           } else if (yield* interruptRateLimitedTurnUntilEnded(descendant, timeoutMs)) {
             return;
@@ -4765,7 +4873,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // The final lineage scan and settlement share the turn/started permit; later children take the late-subagent path.
             const stoppedDescendants = new Set<ActiveCodexTurnContext>();
             while (true) {
-              const step = yield* turnTerminalizationPermit.withPermits(1)(
+              const step = yield* withRateLimitTerminalCleanup(
+                context,
                 Effect.gen(function* () {
                   const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
                     (candidate) =>
@@ -4851,7 +4960,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const stoppedDescendants = new Set<ActiveCodexTurnContext>();
           let descendantsDeadlineAtMs: number | undefined;
           while (true) {
-            const descendants = yield* turnTerminalizationPermit.withPermits(1)(
+            const descendants = yield* withRateLimitTerminalCleanup(
+              input.context,
               Effect.gen(function* () {
                 if (!(yield* input.isPending)) return [];
                 const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
@@ -4886,7 +4996,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         )(function* (context: ActiveCodexTurnContext) {
           yield* Effect.sleep(`${CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS} millis`);
           // At the containment bound, send descendant interrupts without waiting so silent children cannot extend it.
-          yield* turnTerminalizationPermit.withPermits(1)(
+          yield* withRateLimitTerminalCleanup(
+            context,
             Effect.gen(function* () {
               if (
                 context.rateLimitContainment !== "unconfirmed" ||
@@ -4922,6 +5033,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 completedAt,
               });
             }),
+            true,
           );
         });
 
@@ -6217,7 +6329,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly failureErrorInfo?: CodexErrorInfo;
         }
         const finalizeCodexTurn = (input: FinalizeCodexTurnInput) =>
-          turnTerminalizationPermit.withPermits(1)(finalizeCodexTurnHoldingPermit(input));
+          withRateLimitTerminalCleanup(input.context, finalizeCodexTurnHoldingPermit(input));
         /** The body of finalizeCodexTurn, for callers that hold the permit. */
         const finalizeCodexTurnHoldingPermit = Effect.fn(
           "CodexAdapterV2.finalizeCodexTurnHoldingPermit",
@@ -6533,6 +6645,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           Effect.gen(function* () {
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context === undefined) return;
+            if (
+              context.rateLimitRetryExhausted === undefined &&
+              context.rateLimitStopConfirmed !== undefined
+            ) {
+              if (context.rateLimitContainment !== "abandoned")
+                context.rateLimitContainment = "ended";
+              yield* Deferred.succeed(context.rateLimitStopConfirmed, undefined);
+              return;
+            }
             // A turn stopped for a stalled 429 retry is finalized by the fiber that interrupted it, with the rate-limit failure, unless that interrupt went unacknowledged and only this event confirms it.
             if (context.rateLimitRetryExhausted !== undefined) {
               if (context.rateLimitContainment !== "unconfirmed") {
