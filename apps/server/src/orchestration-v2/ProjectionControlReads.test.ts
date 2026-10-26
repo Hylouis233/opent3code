@@ -18,7 +18,6 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -339,7 +338,7 @@ it.effect.each(storageCases)(
         forkThread: () => Effect.die("unused forkThread"),
       };
       const layerSessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-        get: () => Effect.succeed(Option.some(runtime)),
+        get: () => Effect.succeedSome(runtime),
       });
       yield* Effect.gen(function* () {
         const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;

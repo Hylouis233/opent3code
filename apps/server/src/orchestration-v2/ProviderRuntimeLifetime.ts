@@ -125,7 +125,7 @@ export const make = Effect.gen(function* () {
     withSessionWrite: (token, effect) =>
       lanes.withLock(
         state(token).providerSessionId,
-        Effect.suspend(() => (state(token).ownsProjection ? effect : Effect.succeed(undefined))),
+        Effect.suspend(() => (state(token).ownsProjection ? effect : Effect.undefined)),
       ),
     withLifetimeWrite: (token, effect) => lanes.withLock(state(token).providerSessionId, effect),
     ownsRequest: (token, threadId, requestId) =>

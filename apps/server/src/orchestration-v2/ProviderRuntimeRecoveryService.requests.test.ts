@@ -458,8 +458,8 @@ it.effect("selects isolated terminal leftovers without reopening message or reso
         });
       }
     }
-    const preserved = yield* Effect.all(
-      [resolved, message, completed].map((threadId) => projections.getThreadProjection(threadId)),
+    const preserved = yield* Effect.forEach([resolved, message, completed], (threadId) =>
+      projections.getThreadProjection(threadId),
     );
     assert.deepEqual(
       new Set(yield* projections.getRecoveryThreadIds("runtime")),
@@ -472,8 +472,8 @@ it.effect("selects isolated terminal leftovers without reopening message or reso
       "cancelled",
     );
     assert.deepEqual(
-      yield* Effect.all(
-        [resolved, message, completed].map((threadId) => projections.getThreadProjection(threadId)),
+      yield* Effect.forEach([resolved, message, completed], (threadId) =>
+        projections.getThreadProjection(threadId),
       ),
       preserved,
     );

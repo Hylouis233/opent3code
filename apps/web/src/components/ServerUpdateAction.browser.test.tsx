@@ -59,7 +59,7 @@ vi.mock(import("./ui/toast"), async (original) => {
 import {
   completeConfirmDialogClose,
   readConfirmDialogState,
-  registerConfirmDialogHost,
+  subscribeConfirmDialogHost,
   resetConfirmDialogForTests,
   respondToConfirmDialog,
 } from "~/confirmDialog";
@@ -254,7 +254,7 @@ describe("OutdatedServerUpdateAction", () => {
 
   it("warns about remote relaunch and starts no update when canceled", async () => {
     using _state = setup();
-    registerConfirmDialogHost();
+    subscribeConfirmDialogHost(() => {});
     await using screen = await renderOutdatedAction();
     await click(screen, "Update");
     expect(readConfirmDialogState()).toMatchObject({
@@ -279,7 +279,7 @@ describe("OutdatedServerUpdateAction", () => {
 
   it("holds double clicks behind one confirmation and one update", async () => {
     using _state = setup();
-    registerConfirmDialogHost();
+    subscribeConfirmDialogHost(() => {});
     testState.updateServer.mockResolvedValue(outdatedSuccess);
     await using screen = await renderOutdatedAction();
     await click(screen, "Update");
@@ -297,7 +297,7 @@ describe("OutdatedServerUpdateAction", () => {
 
   it("cancels if the confirmation host disappears before the answer", async () => {
     using _state = setup();
-    const unregister = registerConfirmDialogHost();
+    const unregister = subscribeConfirmDialogHost(() => {});
     await using screen = await renderOutdatedAction();
     await click(screen, "Update");
     await act(async () => unregister());

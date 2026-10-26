@@ -298,6 +298,9 @@ export const make = Effect.gen(function* () {
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  // A shell merge or close sends no event, and the branch lookup caches an open pull request for
+  // a minute, so these threads' next lookup reads the host fresh.
+  const shellClosedThreads = new Set<ThreadId>();
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   // Repeated thread.settled retains settledAt; run the action only once per settlement.
@@ -347,13 +350,13 @@ export const make = Effect.gen(function* () {
       },
       (effect, thread) =>
         effect.pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause)
-              : Effect.logWarning("automatic thread settlement skipped", {
-                  threadId: thread.id,
-                  cause: Cause.pretty(cause),
-                }).pipe(Effect.as(null)),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logWarning("automatic thread settlement skipped", {
+                threadId: thread.id,
+                cause: Cause.pretty(cause),
+              }).pipe(Effect.as(null)),
           ),
         ),
     );
@@ -490,7 +493,8 @@ export const make = Effect.gen(function* () {
       if (cwd === undefined) {
         return yield* Effect.die(new Error("thread project not found"));
       }
-      return yield* git.branchPullRequest({ cwd, branch: thread.branch });
+      const refresh = group.filter((member) => shellClosedThreads.delete(member.id)).length > 0;
+      return yield* git.branchPullRequest({ cwd, branch: thread.branch }, { refresh });
     });
 
     yield* Effect.forEach(
@@ -503,13 +507,13 @@ export const make = Effect.gen(function* () {
             discard: true,
           });
         }).pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause)
-              : Effect.logWarning("automatic thread settlement skipped", {
-                  threadIds: group.map((thread) => thread.id),
-                  cause: Cause.pretty(cause),
-                }),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logWarning("automatic thread settlement skipped", {
+                threadIds: group.map((thread) => thread.id),
+                cause: Cause.pretty(cause),
+              }),
           ),
         ),
       { concurrency: 8, discard: true },
@@ -521,12 +525,12 @@ export const make = Effect.gen(function* () {
     threadId?: ThreadId,
   ) =>
     sweep(mergedPullRequest, threadId).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("automatic thread settlement sweep failed", {
-              cause: Cause.pretty(cause),
-            }),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("automatic thread settlement sweep failed", {
+            cause: Cause.pretty(cause),
+          }),
       ),
     );
   // A thread that just stopped must not wait behind a full sweep or another thread's host
@@ -586,13 +590,13 @@ export const make = Effect.gen(function* () {
     },
     (effect, threadId) =>
       effect.pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning("cleaning up a settled thread failed", {
-                threadId,
-                cause: Cause.pretty(cause),
-              }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("cleaning up a settled thread failed", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
         ),
       ),
   );
@@ -615,10 +619,21 @@ export const make = Effect.gen(function* () {
         return backgroundWorkHoldsCompletion(event.payload.pendingBackgroundTasks ?? [])
           ? Effect.void
           : enqueueThread(event.threadId);
-      case "turn-item.updated":
-        return turnItemUpdateCanEndBackgroundWork(event.payload)
+      case "turn-item.updated": {
+        const item = event.payload;
+        if (
+          item.type === "command_execution" &&
+          !isOrchestrationV2WorkActive(item.status) &&
+          sourceControlDefinitions.definitions.some(
+            (definition) => definition.changeRequestCloseCommand?.test(item.input) === true,
+          )
+        ) {
+          shellClosedThreads.add(event.threadId);
+        }
+        return turnItemUpdateCanEndBackgroundWork(item)
           ? enqueueThread(event.threadId)
           : Effect.void;
+      }
       case "provider-session.updated":
         return event.payload.status !== "starting" && event.payload.status !== "running"
           ? enqueueThread(event.threadId)
