@@ -2552,6 +2552,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               fileChangeKindsByItem: new Map(),
               runningCompactionItemIds: new Set(),
             };
+            ancestor = subagent.parentContext;
+            while (ancestor !== undefined) {
+              if (ancestor.rateLimitRetryExhausted !== undefined) {
+                activeContext.rateLimitStopConfirmed = yield* Deferred.make<void>();
+                break;
+              }
+              ancestor = ancestor.subagent?.parentContext;
+            }
             beginTurnTokenUsage(activeContext);
             endSessionApprovalsOnModeChange(activeContext);
             yield* Ref.update(activeTurns, (current) => {
@@ -4866,6 +4874,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const rootInterruptSentAt = yield* DateTime.now;
             const rootStopConfirmed = yield* Deferred.make<void>();
             context.rateLimitStopConfirmed = rootStopConfirmed;
+            for (const descendant of (yield* Ref.get(activeTurns)).values()) {
+              if (isDescendantCodexTurn(descendant, context))
+                descendant.rateLimitStopConfirmed ??= yield* Deferred.make<void>();
+            }
             const rootAcknowledged = yield* interruptRateLimitedNativeTurn(context);
             let descendantsDeadlineAtMs: number | undefined;
             const rootHasNativeThread = context.providerThread.nativeThreadRef?.nativeId != null;

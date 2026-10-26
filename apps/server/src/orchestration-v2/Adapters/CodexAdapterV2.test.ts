@@ -4411,9 +4411,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
-  it.effect.each([false, true])(
-    "interrupts the whole active lineage when a root 429 retry is exhausted (terminal cleanup failure: %s)",
-    (cleanupFails) =>
+  it.effect.each([
+    { cleanupFails: false, earlyCompletion: false },
+    { cleanupFails: true, earlyCompletion: false },
+    { cleanupFails: true, earlyCompletion: true },
+  ])(
+    "interrupts the whole active lineage when a root 429 retry is exhausted (%j)",
+    ({ cleanupFails, earlyCompletion }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const transcript = makeCodexReplayTranscript({
@@ -4437,6 +4441,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   params: { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
                 },
               },
+              ...(earlyCompletion
+                ? [
+                    rateLimitTurnInterrupted(
+                      "turn/completed/early-child",
+                      INTERRUPT_CHILD_NATIVE_THREAD,
+                      INTERRUPT_CHILD_NATIVE_TURN,
+                    ),
+                  ]
+                : []),
               { type: "emit_inbound", label: "turn/interrupt/root", frame: { id: 4, result: {} } },
               {
                 type: "expect_outbound",
