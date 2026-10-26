@@ -1,16 +1,4 @@
-/**
- * Bounds how long a Codex turn may sit in a provider HTTP 429 retry.
- *
- * The Codex CLI retries rate-limited model requests itself and only tells the
- * app server "Reconnecting... n/m" (`error` with `willRetry: true`). When the
- * upstream sends a long `Retry-After`, Codex sleeps for the full value without
- * any cap and emits nothing until it wakes, which leaves a turn (and any
- * delegated task waiting on it) "running" for hours. The adapter cannot
- * intercept the HTTP retry, so it applies this policy around it: every retry
- * notice gets an exponential-backoff (or Retry-After) budget, and when that
- * budget, the attempt cap, or the maximum delay is exceeded the turn ends as
- * an explicit usage-limit failure instead of hanging.
- */
+// Codex sleeps silently for Retry-After; the adapter bounds that wait and reports a usage-limit failure.
 export interface CodexRateLimitRetryPolicy {
   /** Highest retry attempt the adapter waits for. Later notices end the turn. */
   readonly maxAttempts: number;
@@ -29,15 +17,7 @@ export const CODEX_RATE_LIMIT_RETRY_POLICY: CodexRateLimitRetryPolicy = {
   progressGraceMs: 60_000,
 };
 
-/**
- * How long a stopped 429 turn may stay active after Codex failed to
- * acknowledge its `turn/interrupt` (the request errored or timed out) and has
- * not reported `turn/completed` either. Past this bound the adapter stops
- * waiting: the turn fails with `rateLimitRetryExhausted` and the native thread
- * is marked broken, so the next turn resumes it instead of reusing a loaded
- * thread that may still be retrying. It matches `progressGraceMs`, the time
- * the policy already allows Codex to show any sign of life after a retry.
- */
+// How long a stopped 429 turn may stay active after Codex failed to acknowledge its `turn/interrupt` (the request errored or timed out) and has not reported `turn/completed` either.
 export const CODEX_RATE_LIMIT_UNCONFIRMED_STOP_TIMEOUT_MS = 60_000;
 
 export type CodexRateLimitRetryDecision =
@@ -117,12 +97,7 @@ const toDelayMs = (amount: string, unitMs: number | undefined): number | null =>
 const RETRY_AFTER_HTTP_DATE =
   /retry[-_ ]?after["']?\s*[:=]?\s*["']?((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s*\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/iu;
 
-/**
- * Reads a retry delay from provider error text: a `Retry-After` header or
- * field (seconds unless it names a unit, or an HTTP date measured from
- * `nowMs` when the caller supplies it), a `retry-after-ms` header, a
- * `reset_seconds` field, or "try again in N <unit>".
- */
+// Reads a retry delay from provider error text: a `Retry-After` header or field (seconds unless it names a unit, or an HTTP date measured from `nowMs` when the caller supplies it), a `retry-after-ms` header, a `reset_seconds` field, or "try again in N <unit>".
 export function parseCodexRetryAfterMs(
   text: string | null | undefined,
   nowMs?: number,

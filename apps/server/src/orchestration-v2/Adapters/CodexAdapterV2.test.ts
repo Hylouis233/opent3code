@@ -2228,6 +2228,24 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       resetAt: null,
     },
     {
+      name: "background-terminal-failed",
+      errorInfo: { responseStreamDisconnected: { httpStatusCode: 429 } },
+      details: "429 Too Many Requests",
+      retryDelayMs: 5_000,
+      deadlineMs: 65_000,
+      resetAfterMs: null,
+      resetAt: null,
+    },
+    {
+      name: "background-terminal",
+      errorInfo: { responseStreamDisconnected: { httpStatusCode: 429 } },
+      details: "429 Too Many Requests",
+      retryDelayMs: 5_000,
+      deadlineMs: 65_000,
+      resetAfterMs: null,
+      resetAt: null,
+    },
+    {
       name: "short-retry-after",
       errorInfo: { responseStreamDisconnected: { httpStatusCode: 429 } },
       details: "429 Too Many Requests; Retry-After: 30",
@@ -2306,25 +2324,29 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   },
                 },
               },
-              {
-                type: "emit_inbound",
-                label: "item/completed/tool",
-                frame: {
-                  method: "item/completed",
-                  params: {
-                    threadId: nativeThreadId,
-                    turnId: nativeTurnId,
-                    completedAtMs: 1782622445010,
-                    item: {
-                      ...command,
-                      status: "completed",
-                      aggregatedOutput: "/workspace\n",
-                      exitCode: 0,
-                      durationMs: 10,
+              ...(name.startsWith("background-terminal")
+                ? []
+                : [
+                    {
+                      type: "emit_inbound" as const,
+                      label: "item/completed/tool",
+                      frame: {
+                        method: "item/completed",
+                        params: {
+                          threadId: nativeThreadId,
+                          turnId: nativeTurnId,
+                          completedAtMs: 1782622445010,
+                          item: {
+                            ...command,
+                            status: "completed",
+                            aggregatedOutput: "/workspace\n",
+                            exitCode: 0,
+                            durationMs: 10,
+                          },
+                        },
+                      },
                     },
-                  },
-                },
-              },
+                  ]),
               // Codex then sleeps for its retry without any further notification.
               {
                 type: "emit_inbound",
@@ -2353,6 +2375,27 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 },
               },
               { type: "emit_inbound", label: "turn/interrupt", frame: { id: 4, result: {} } },
+              ...(name.startsWith("background-terminal")
+                ? [
+                    {
+                      type: "expect_outbound" as const,
+                      label: "terminate-background",
+                      frame: {
+                        id: 5,
+                        method: "thread/backgroundTerminals/terminate",
+                        params: { threadId: nativeThreadId, processId: "42" },
+                      },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      label: "terminate-background",
+                      frame:
+                        name === "background-terminal-failed"
+                          ? { id: 5, error: { code: -32603, message: "termination failed" } }
+                          : { id: 5, result: { terminated: true } },
+                    },
+                  ]
+                : []),
               {
                 type: "emit_inbound",
                 label: "turn/completed/interrupted",
@@ -2456,6 +2499,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           const terminal = harness.terminalEvents()[0];
           assert.equal(terminal?.status, "failed");
           if (terminal?.status !== "failed") return;
+          assert.equal(
+            terminal.threadDisposition,
+            name === "background-terminal-failed" ? "broken" : "reusable",
+          );
           assert.equal(terminal.failure.class, "usage_limit");
           assert.equal(terminal.failure.code, "rateLimitRetryExhausted");
           assert.equal(terminal.failure.retryable, true);
