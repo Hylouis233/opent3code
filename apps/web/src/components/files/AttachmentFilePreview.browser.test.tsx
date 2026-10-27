@@ -1812,49 +1812,45 @@ it("keeps spreadsheet dates on their calendar day west of UTC", async () => {
   }
 });
 
-it.each([60, 100])(
-  "renders all %i pages of a table-heavy Word report",
-  async (pages) => {
-    const { default: JSZip } = await import("jszip");
-    const archive = new JSZip();
-    const paragraph = (text: string) =>
-      `<w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
-    archive.file(
-      "word/document.xml",
-      `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${Array.from({ length: pages }, (_, page) => paragraph(`page ${page + 1}`) + `<w:tbl>${Array.from({ length: 10 }, () => `<w:tr>${Array.from({ length: 5 }, () => `<w:tc><w:tcPr><w:tcW w:w="1800"/></w:tcPr>${paragraph("report entry")}</w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>`).join("")}</w:body></w:document>`,
-    );
-    archive.file(
-      "_rels/.rels",
-      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
-    );
-    archive.file(
-      "[Content_Types].xml",
-      '<Types><Default Extension="png" ContentType="image/png"/></Types>',
-    );
-    // Binary media must not consume the document's markup budget.
-    archive.file("word/media/image.png", new Uint8Array(2_500_000));
-    const file = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
-    await using screen = await render(
-      <AttachmentFilePreview
-        name="report.docx"
-        mimeType="application/octet-stream"
-        file={file}
-        sizeBytes={file.size}
-      />,
-    );
-    await vi.waitFor(() => expect(screen.container.textContent).toMatch(/\d+ pages/), {
-      timeout: 30_000,
-    });
-    expect(screen.container.textContent).not.toContain("Preview limited");
-    expect(screen.container.querySelector('[role="alert"]')).toBeNull();
-    const scroll = screen.container.querySelector<HTMLElement>("[data-office-pages]")!;
-    await act(() => scroll.scrollTo({ top: scroll.scrollHeight }));
-    await vi.waitFor(() => expect(screen.container.textContent).toContain("page " + pages), {
-      timeout: 30_000,
-    });
-  },
-  75_000,
-);
+it.each([60, 100])("renders all %i pages of a table-heavy Word report", async (pages) => {
+  const { default: JSZip } = await import("jszip");
+  const archive = new JSZip();
+  const paragraph = (text: string) =>
+    `<w:p><w:pPr><w:spacing w:after="120"/><w:jc w:val="left"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="22"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
+  archive.file(
+    "word/document.xml",
+    `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${Array.from({ length: pages }, (_, page) => paragraph(`page ${page + 1}`) + `<w:tbl>${Array.from({ length: 10 }, () => `<w:tr>${Array.from({ length: 5 }, () => `<w:tc><w:tcPr><w:tcW w:w="1800"/></w:tcPr>${paragraph("report entry")}</w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>`).join("")}</w:body></w:document>`,
+  );
+  archive.file(
+    "_rels/.rels",
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+  );
+  archive.file(
+    "[Content_Types].xml",
+    '<Types><Default Extension="png" ContentType="image/png"/></Types>',
+  );
+  // Binary media must not consume the document's markup budget.
+  archive.file("word/media/image.png", new Uint8Array(2_500_000));
+  const file = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
+  await using screen = await render(
+    <AttachmentFilePreview
+      name="report.docx"
+      mimeType="application/octet-stream"
+      file={file}
+      sizeBytes={file.size}
+    />,
+  );
+  await vi.waitFor(() => expect(screen.container.textContent).toMatch(/\d+ pages/), {
+    timeout: 30_000,
+  });
+  expect(screen.container.textContent).not.toContain("Preview limited");
+  expect(screen.container.querySelector('[role="alert"]')).toBeNull();
+  const scroll = screen.container.querySelector<HTMLElement>("[data-office-pages]")!;
+  await act(() => scroll.scrollTo({ top: scroll.scrollHeight }));
+  await vi.waitFor(() => expect(screen.container.textContent).toContain("page " + pages), {
+    timeout: 30_000,
+  });
+});
 
 describe("standalone Mermaid previews", () => {
   it.each([
@@ -1932,7 +1928,7 @@ it("reloads a workspace Word file after a preview remount", async () => {
     timeout: 10_000,
   });
   expect(screen.container.textContent).not.toContain("Original outlook");
-}, 30_000);
+});
 
 it("clears an Office metadata error when the same URL becomes previewable", async () => {
   const src = "data:application/octet-stream,invalid-office-file";

@@ -125,8 +125,9 @@ const browserTestProject = {
   test: {
     name: "browser",
     include: ["src/**/*.browser.test.{ts,tsx}"],
-    hookTimeout: 15_000,
-    testTimeout: 15_000,
+    // Office/worker previews wait up to 30s on a cold CI browser; keep the ceiling above that.
+    hookTimeout: 60_000,
+    testTimeout: 60_000,
     setupFiles: ["./test/browserSetup.ts"],
     api: { port: browserTestApiPort, strictPort: false },
     browser: {
