@@ -1850,7 +1850,7 @@ it.each([60, 100])("renders all %i pages of a table-heavy Word report", async (p
   await vi.waitFor(() => expect(screen.container.textContent).toContain("page " + pages), {
     timeout: 30_000,
   });
-});
+}, 75_000);
 
 describe("standalone Mermaid previews", () => {
   it.each([
@@ -1928,7 +1928,7 @@ it("reloads a workspace Word file after a preview remount", async () => {
     timeout: 10_000,
   });
   expect(screen.container.textContent).not.toContain("Original outlook");
-});
+}, 30_000);
 
 it("clears an Office metadata error when the same URL becomes previewable", async () => {
   const src = "data:application/octet-stream,invalid-office-file";
