@@ -6527,7 +6527,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               driver: CODEX_PROVIDER,
               providerThread: {
                 ...input.context.providerThread,
-                status: "idle",
+                status: isUncontainedRateLimitedTurn(input.context) ? "error" : "idle",
                 updatedAt: input.completedAt,
               },
             });
