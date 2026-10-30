@@ -2605,7 +2605,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             };
             ancestor = subagent.parentContext;
             while (ancestor !== undefined) {
-              if (ancestor.rateLimitRetryExhausted !== undefined) {
+              if (
+                (continuedRuns.get(ancestor.providerTurnId) ?? [ancestor]).some(
+                  (turn) => turn.rateLimitRetryExhausted !== undefined,
+                )
+              ) {
                 activeContext.rateLimitStopConfirmed = yield* Deferred.make<void>();
                 break;
               }
@@ -4674,7 +4678,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   root,
                   ...(includeDescendants
                     ? Array.from((yield* Ref.get(activeTurns)).values()).filter((candidate) =>
-                        isDescendantCodexTurn(candidate, root),
+                        isContinuedRunDescendant(candidate, root),
                       )
                     : []),
                 ];
@@ -4924,7 +4928,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const rootStopConfirmed = yield* Deferred.make<void>();
             context.rateLimitStopConfirmed = rootStopConfirmed;
             for (const descendant of (yield* Ref.get(activeTurns)).values()) {
-              if (isDescendantCodexTurn(descendant, context))
+              if (isContinuedRunDescendant(descendant, context))
                 descendant.rateLimitStopConfirmed ??= yield* Deferred.make<void>();
             }
             const rootAcknowledged = yield* interruptRateLimitedNativeTurn(context);
@@ -4940,7 +4944,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
                     (candidate) =>
                       !stoppedDescendants.has(candidate) &&
-                      isDescendantCodexTurn(candidate, context),
+                      isContinuedRunDescendant(candidate, context),
                   );
                   if (descendants.length > 0) {
                     return { type: "descendants", descendants } as const;
@@ -5028,7 +5032,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
                   (candidate) =>
                     !stoppedDescendants.has(candidate) &&
-                    isDescendantCodexTurn(candidate, input.context),
+                    isContinuedRunDescendant(candidate, input.context),
                 );
                 if (descendants.length === 0) yield* input.settle;
                 return descendants;
@@ -5073,7 +5077,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               const completedAt = yield* DateTime.now;
               const descendants = Array.from((yield* Ref.get(activeTurns)).values()).filter(
-                (candidate) => isDescendantCodexTurn(candidate, context),
+                (candidate) => isContinuedRunDescendant(candidate, context),
               );
               for (const descendant of descendants) {
                 if (descendant.rateLimitContainment !== "ended") {

@@ -5015,14 +5015,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   );
 
   it.effect.each([
-    { cleanupFails: false, earlyCompletion: false },
-    { cleanupFails: true, earlyCompletion: false },
-    { cleanupFails: true, earlyCompletion: true },
+    { cleanupFails: false, earlyCompletion: false, capacity: false },
+    { cleanupFails: true, earlyCompletion: false, capacity: false },
+    { cleanupFails: true, earlyCompletion: true, capacity: false },
+    { cleanupFails: true, earlyCompletion: false, capacity: true },
   ])(
     "interrupts the whole active lineage when a root 429 retry is exhausted (%j)",
-    ({ cleanupFails, earlyCompletion }) =>
+    ({ cleanupFails, earlyCompletion, capacity }) =>
       Effect.scoped(
         Effect.gen(function* () {
+          const nativeTurnId = capacity ? "native-capacity-continued-429" : INTERRUPT_NATIVE_TURN;
+          const capacityError = {
+            message: "Selected model is at capacity. Please try a different model.",
+            codexErrorInfo: "serverOverloaded",
+          };
           const transcript = makeCodexReplayTranscript({
             scenario: "codex-rate-limit-root-lineage",
             entries: [
@@ -5034,14 +5040,76 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     )!,
                   ]
                 : []),
-              rateLimitRetryNotice(INTERRUPT_NATIVE_THREAD, INTERRUPT_NATIVE_TURN),
+              ...(capacity
+                ? [
+                    {
+                      type: "emit_inbound" as const,
+                      frame: {
+                        method: "error",
+                        params: {
+                          threadId: INTERRUPT_NATIVE_THREAD,
+                          turnId: INTERRUPT_NATIVE_TURN,
+                          willRetry: false,
+                          error: capacityError,
+                        },
+                      },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      frame: {
+                        method: "turn/completed",
+                        params: {
+                          threadId: INTERRUPT_NATIVE_THREAD,
+                          turn: {
+                            ...makeCodexReplayTurn({ id: INTERRUPT_NATIVE_TURN, status: "failed" }),
+                            error: capacityError,
+                          },
+                        },
+                      },
+                    },
+                    ...codexReplayPreamble({
+                      nativeThreadId: INTERRUPT_NATIVE_THREAD,
+                      nativeTurnId,
+                      prompt: INTERRUPT_PROMPT,
+                    })
+                      .slice(-3)
+                      .map((entry) => {
+                        if (entry.type === "expect_outbound")
+                          return {
+                            ...entry,
+                            frame: {
+                              id: 4,
+                              method: "turn/start",
+                              params: {
+                                threadId: INTERRUPT_NATIVE_THREAD,
+                                input: [],
+                                cwd: "/workspace",
+                                model: "gpt-5.4",
+                                approvalPolicy: "never",
+                                approvalsReviewer: "user",
+                                sandboxPolicy: { type: "dangerFullAccess" },
+                                summary: "detailed",
+                                collaborationMode: {
+                                  mode: "default",
+                                  settings: { model: "gpt-5.4" },
+                                },
+                              },
+                            },
+                          };
+                        return entry.type === "emit_inbound" && entry.label === "turn/start"
+                          ? withReplayRequestId(entry, 4)
+                          : entry;
+                      }),
+                  ]
+                : []),
+              rateLimitRetryNotice(INTERRUPT_NATIVE_THREAD, nativeTurnId),
               {
                 type: "expect_outbound",
                 label: "turn/interrupt/root",
                 frame: {
-                  id: 4,
+                  id: capacity ? 5 : 4,
                   method: "turn/interrupt",
-                  params: { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
+                  params: { threadId: INTERRUPT_NATIVE_THREAD, turnId: nativeTurnId },
                 },
               },
               ...(earlyCompletion
@@ -5053,12 +5121,25 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     ),
                   ]
                 : []),
-              { type: "emit_inbound", label: "turn/interrupt/root", frame: { id: 4, result: {} } },
+              {
+                type: "emit_inbound",
+                label: "turn/interrupt/root",
+                frame: { id: capacity ? 5 : 4, result: {} },
+              },
+              ...(capacity
+                ? [
+                    rateLimitTurnInterrupted(
+                      "turn/completed/continued-root",
+                      INTERRUPT_NATIVE_THREAD,
+                      nativeTurnId,
+                    ),
+                  ]
+                : []),
               {
                 type: "expect_outbound",
                 label: "turn/interrupt/child",
                 frame: {
-                  id: 5,
+                  id: capacity ? 6 : 5,
                   method: "turn/interrupt",
                   params: {
                     threadId: INTERRUPT_CHILD_NATIVE_THREAD,
@@ -5066,7 +5147,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   },
                 },
               },
-              { type: "emit_inbound", label: "turn/interrupt/child", frame: { id: 5, result: {} } },
+              {
+                type: "emit_inbound",
+                label: "turn/interrupt/child",
+                frame: { id: capacity ? 6 : 5, result: {} },
+              },
               {
                 type: "emit_inbound",
                 label: "turn/completed/root",
@@ -5074,7 +5159,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   method: "turn/completed",
                   params: {
                     threadId: INTERRUPT_NATIVE_THREAD,
-                    turn: makeCodexReplayTurn({ id: INTERRUPT_NATIVE_TURN, status: "interrupted" }),
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "interrupted" }),
                   },
                 },
               },
@@ -5098,7 +5183,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                       type: "expect_outbound" as const,
                       label: "terminate-child-terminal",
                       frame: {
-                        id: 6,
+                        id: capacity ? 7 : 6,
                         method: "thread/backgroundTerminals/terminate",
                         params: {
                           threadId: INTERRUPT_CHILD_NATIVE_THREAD,
@@ -5109,7 +5194,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     {
                       type: "emit_inbound" as const,
                       label: "terminate-child-terminal",
-                      frame: { id: 6, error: { code: -32603, message: "termination failed" } },
+                      frame: {
+                        id: capacity ? 7 : 6,
+                        error: { code: -32603, message: "termination failed" },
+                      },
                     },
                   ]
                 : []),
@@ -5133,6 +5221,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               text: INTERRUPT_PROMPT,
             }),
           );
+          if (capacity) {
+            yield* harness.until(() =>
+              harness.events.some(
+                (event) =>
+                  event.type === "turn_item.updated" &&
+                  event.turnItem.type === "error" &&
+                  event.turnItem.status === "running",
+              ),
+            );
+            yield* TestClock.adjust("2 seconds");
+          }
           yield* harness.awaitTerminal(1);
 
           const terminal = harness.terminalEvents()[0];
@@ -5144,7 +5243,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "no descendant may keep the run active past the retry deadline",
           );
           assert.deepEqual(interrupts, [
-            { threadId: INTERRUPT_NATIVE_THREAD, turnId: INTERRUPT_NATIVE_TURN },
+            { threadId: INTERRUPT_NATIVE_THREAD, turnId: nativeTurnId },
             { threadId: INTERRUPT_CHILD_NATIVE_THREAD, turnId: INTERRUPT_CHILD_NATIVE_TURN },
           ]);
           assert.equal(harness.subagentUpdates().at(-1)?.subagent.status, "interrupted");
