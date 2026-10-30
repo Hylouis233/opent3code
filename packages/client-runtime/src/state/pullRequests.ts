@@ -14,6 +14,8 @@ import {
   type PullRequestActor,
   type PullRequestActionInput,
   type PullRequestListInput,
+  type PullRequestListStatsInput,
+  type PullRequestListStatsResult,
   type PullRequestDetail,
   type PullRequestDiffInput,
   type PullRequestRef,
@@ -144,6 +146,7 @@ export function createLinkedPullRequestSummaryAtomFamily<R, E>(
 /** Lets a client record what each answer says where it lands, rather than watching the data. */
 export interface PullRequestAnswerHandlers {
   readonly list?: QueryAnswerHandler<PullRequestListInput, PullRequestListResult>;
+  readonly listStats?: QueryAnswerHandler<PullRequestListStatsInput, PullRequestListStatsResult>;
   readonly detail?: QueryAnswerHandler<PullRequestRef, PullRequestDetail>;
   readonly checks?: QueryAnswerHandler<PullRequestRef, PullRequestChecks | null>;
   readonly reviewGuide?: QueryAnswerHandler<PullRequestRef, PullRequestReviewGuideResult>;
@@ -357,6 +360,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       tag: WS_METHODS.pullRequestsListStats,
       staleTimeMs: 60_000,
       refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
+      ...(onAnswer.listStats === undefined ? {} : { onAnswer: onAnswer.listStats }),
     }),
     filterOptions: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:filter-options",
@@ -516,7 +520,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
         Effect.sync(() => {
           const { reviewers, requested } = target.input;
           const candidatesAtom = reviewerCandidates(target);
-          const candidates = Option.getOrNull(AsyncResult.value(registry.get(candidatesAtom)));
+          const candidates = AsyncResult.getOrElse(registry.get(candidatesAtom), () => null);
           const selected =
             candidates?.candidates.filter((candidate) =>
               reviewers.some(
@@ -602,7 +606,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
         Effect.sync(() => {
           const { labels, applied } = target.input;
           const candidatesAtom = labelCandidates(target);
-          const candidates = Option.getOrNull(AsyncResult.value(registry.get(candidatesAtom)));
+          const candidates = AsyncResult.getOrElse(registry.get(candidatesAtom), () => null);
           const names = new Set(labels);
           updateCached(registry, candidatesAtom, (value) => ({
             ...value,
