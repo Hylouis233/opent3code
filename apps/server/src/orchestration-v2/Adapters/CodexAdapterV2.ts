@@ -1889,6 +1889,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         };
         /** Retain settled contexts while background commands run so late item events still project. */
         const settledTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
+        const uncontainedNativeThreads = new Set<string>();
         const runningCommandItemsByTurn = yield* Ref.make(
           new Map<string, Map<string, TrackedRunningCommandItem>>(),
         );
@@ -6257,8 +6258,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       retry: input.providerRetry.retry,
                       retryStartedAt: input.providerRetry.startedAt,
                     }),
-                // A 429 turn Codex never confirmed stopped must not reuse the
-                // loaded thread: "broken" makes the next turn resume it.
+                // Evict the loaded thread; resume rejects it until the provider restarts.
                 threadDisposition: isUncontainedRateLimitedTurn(input.context)
                   ? "broken"
                   : "reusable",
@@ -6603,6 +6603,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
           }
           const nativeThreadId = input.context.providerThread.nativeThreadRef?.nativeId;
+          if (nativeThreadId != null && isUncontainedRateLimitedTurn(input.context)) {
+            uncontainedNativeThreads.add(nativeThreadId);
+          }
           const activation =
             nativeThreadId == null ? undefined : goalActivations.get(nativeThreadId);
           const holdsForGoal =
@@ -7570,6 +7573,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           resumeThread: Effect.fn("CodexAdapterV2.resumeThread")(
             function* (threadInput) {
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
+              // Codex rejoins running threads on resume, so an unconfirmed stop requires a new runtime.
+              if (uncontainedNativeThreads.has(nativeThreadId)) {
+                return yield* new ProviderSetupError({
+                  instanceId: adapterOptions.instanceId,
+                  operation: "runtime",
+                  detail:
+                    "Codex did not confirm the rate-limited turn stopped. Restart the Codex provider before retrying this thread.",
+                });
+              }
               const resume = client.raw.request("thread/resume", {
                 threadId: nativeThreadId,
                 excludeTurns: true,

@@ -6528,7 +6528,27 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           const scenario = "codex-rate-limit-unconfirmed-root-thread-error";
           const interruptSent = yield* Deferred.make<void>();
           const harness = yield* makeCodexReplayHarness(
-            unconfirmedRateLimitTranscript(scenario),
+            unconfirmedRateLimitTranscript(scenario, [
+              {
+                type: "expect_outbound",
+                frame: {
+                  id: 5,
+                  method: "thread/resume",
+                  params: {
+                    threadId: `native-${scenario}-thread`,
+                    excludeTurns: true,
+                    config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  id: 5,
+                  result: { thread: { id: `native-${scenario}-thread`, updatedAt: 1782622450 } },
+                },
+              },
+            ]),
             () => Effect.void,
             (method) =>
               method === "turn/interrupt"
@@ -6564,6 +6584,18 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           assert.isBelow(rootThreadErrorIndex, terminalIndex);
           const terminal = harness.terminalEvents()[0];
           assert.equal(terminal?.threadDisposition, "broken");
+          const resumeError = yield* Effect.flip(
+            harness.runtime.resumeThread({
+              providerThread: harness.providerThread,
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+            }),
+          );
+          assert.nestedPropertyVal(
+            resumeError,
+            "cause.detail",
+            "Codex did not confirm the rate-limited turn stopped. Restart the Codex provider before retrying this thread.",
+          );
         }).pipe(
           Effect.provide(
             Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
